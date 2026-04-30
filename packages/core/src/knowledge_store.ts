@@ -46,6 +46,10 @@ export class KnowledgeStore implements IKnowledgeGraph {
     });
   }
 
+  get nodeId(): string {
+    return this.identity.nodeId;
+  }
+
   async ready(): Promise<void> {
     if (this._ready) return;
     await this.base.ready();

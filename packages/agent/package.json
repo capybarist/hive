@@ -8,6 +8,7 @@
     "extract": "npx tsx src/extractor_agent.ts"
   },
   "dependencies": {
+    "@hive/core": "*",
     "fast-xml-parser": "^4.3.0"
   },
   "devDependencies": {

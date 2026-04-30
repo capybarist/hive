@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "HIVE P2P knowledge store — Hypercore + Hyperbee + Autobase",
   "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "test": "npx tsx src/test_module3.ts"
   },
