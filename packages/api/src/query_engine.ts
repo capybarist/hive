@@ -2,9 +2,12 @@ const EMBEDDER = 'http://127.0.0.1:7700';
 
 // Minimum score to include a fragment in the UI result list
 const SHOW_THRESHOLD = 0.05;
-// Minimum TOP score to consider HIVE has genuinely relevant data
-// Below this → hybrid mode (LLM answers from general knowledge)
-const RELEVANT_THRESHOLD = 0.12;
+// A query is considered "in HIVE" if at least MIN_RELEVANT_COUNT fragments
+// score above RELEVANT_SCORE. This is more robust than a single top-score
+// cutoff — an irrelevant query rarely gets multiple fragments above 0.09,
+// while a genuinely on-topic query gets several.
+const RELEVANT_SCORE = 0.09;
+const MIN_RELEVANT_COUNT = 3;
 
 export interface SearchResult {
   id: string;
@@ -62,7 +65,7 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
       arxiv_id: r.arxiv_id,
     }));
 
-  const has_hive_data = fragments.length > 0 && fragments[0].score >= RELEVANT_THRESHOLD;
+  const has_hive_data = fragments.filter(f => f.score >= RELEVANT_SCORE).length >= MIN_RELEVANT_COUNT;
   return { fragments, has_hive_data, embedder_online: true };
 }
 

@@ -376,7 +376,7 @@
       <div class="answer-text" id="answer-text"></div>
     </div>
     <div>
-      <div class="card-title" style="margin-bottom:12px">Verified Sources (<span id="frag-count">0</span>)</div>
+      <div class="card-title" style="margin-bottom:12px" id="sources-title">HIVE Index Results (<span id="frag-count">0</span>)</div>
       <div class="fragments-list" id="fragments-list"></div>
     </div>
   </div>
@@ -436,7 +436,15 @@
     return '#8b949e';
   }
 
-  function renderFragments(fragments) {
+  function renderFragments(fragments, hasHiveData) {
+    const title = document.getElementById('sources-title');
+    if (hasHiveData) {
+      title.innerHTML = 'Verified Sources used by H.I.V.E (<span id="frag-count">0</span>)';
+    } else if (fragments.length > 0) {
+      title.innerHTML = 'HIVE found these — but not relevant enough to use (<span id="frag-count">0</span>)';
+    } else {
+      title.innerHTML = 'HIVE Index Results (<span id="frag-count">0</span>)';
+    }
     document.getElementById('frag-count').textContent = fragments.length;
     const list = document.getElementById('fragments-list');
     list.innerHTML = '';
@@ -505,7 +513,7 @@
       const data = await res.json();
       renderMode(data.mode);
       renderAnswer(data.answer ?? '(no answer from LLM)');
-      renderFragments(data.fragments ?? []);
+      renderFragments(data.fragments ?? [], data.has_hive_data);
       document.getElementById('results').classList.remove('hidden');
     } catch (err) {
       showError(err.message);
