@@ -20,7 +20,7 @@ env/
 
 # HIVE data — never commit vector indexes or graph data
 data/vectors/
-data/graph/
+data/corestore/
 data/cache/
 data/identity/
 
@@ -38,9 +38,10 @@ data/identity/
 .DS_Store
 Thumbs.db
 
-# Editor
+# Editor & Claude Code local config
 .vscode/settings.json
 .idea/
+.claude/
 
 # Logs
 *.log
