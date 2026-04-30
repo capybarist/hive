@@ -1,0 +1,21 @@
+{
+  "name": "@hive/core",
+  "version": "0.1.0",
+  "description": "HIVE P2P knowledge store — Hypercore + Hyperbee + Autobase",
+  "type": "module",
+  "scripts": {
+    "test": "npx tsx src/test_module3.ts"
+  },
+  "dependencies": {
+    "autobase": "^7",
+    "corestore": "^7",
+    "hyperbee": "^2",
+    "hypercore": "^11",
+    "hyperswarm": "^4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
