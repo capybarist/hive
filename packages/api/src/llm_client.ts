@@ -42,7 +42,7 @@ export async function synthesize(
 
   const userPrompt = hasData
     ? buildPrompt(question, fragments)
-    : `No verified H.I.V.E fragments found for this question. Answer from your general knowledge but make clear this is NOT verified by H.I.V.E.\n\nQUESTION: ${question}`;
+    : `No verified H.I.V.E fragments were found for this question. You MUST still answer using your general knowledge, but you MUST start your response with: "⚠ Not verified by H.I.V.E — answering from general knowledge:"\n\nQUESTION: ${question}`;
 
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },

@@ -43,7 +43,7 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
   const data = (await res.json()) as { results: any[]; count: number };
 
   const fragments: SearchResult[] = data.results
-    .filter((r) => r.score > 0.15)
+    .filter((r) => r.score > 0.05)
     .map((r) => ({
       id: r.id,
       text: r.text,

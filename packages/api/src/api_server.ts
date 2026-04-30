@@ -42,6 +42,24 @@ app.post<{
   }
 });
 
+// ── GET /api/fragments ───────────────────────────────────────────────────────
+app.get<{ Querystring: { limit?: string; offset?: string } }>(
+  '/api/fragments',
+  async (req) => {
+    const limit = req.query.limit ?? '50';
+    const offset = req.query.offset ?? '0';
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:7700/fragments?limit=${limit}&offset=${offset}`,
+        { signal: AbortSignal.timeout(3000) },
+      );
+      return res.ok ? res.json() : { total: 0, fragments: [] };
+    } catch {
+      return { total: 0, fragments: [] };
+    }
+  },
+);
+
 // ── GET /api/status ──────────────────────────────────────────────────────────
 app.get('/api/status', async () => {
   const embedder = await getEmbedderStatus();

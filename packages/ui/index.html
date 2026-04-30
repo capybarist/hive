@@ -263,6 +263,51 @@
       overflow: hidden;
     }
 
+    .browse-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: var(--radius);
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .browse-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .browse-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .browse-header {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .browse-list {
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .browse-row {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: start;
+      font-size: 13px;
+    }
+    .browse-row:last-child { border-bottom: none; }
+    .browse-title { color: var(--text); font-weight: 500; }
+    .browse-source { color: var(--accent); font-size: 12px; }
+    .browse-score { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
     .error-msg {
       background: rgba(248,81,73,.1);
       border: 1px solid rgba(248,81,73,.3);
@@ -306,6 +351,20 @@
         <div class="spinner" id="spinner"></div>
         <button class="ask-btn" id="ask-btn">Ask H.I.V.E</button>
       </div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end">
+    <button class="browse-btn" id="browse-btn">Browse index ▾</button>
+  </div>
+
+  <div class="browse-panel hidden" id="browse-panel">
+    <div class="browse-header">
+      <span>Indexed fragments</span>
+      <span id="browse-total" style="color:var(--muted);font-weight:400"></span>
+    </div>
+    <div class="browse-list" id="browse-list">
+      <div style="padding:16px;color:var(--muted);font-size:13px">Loading...</div>
     </div>
   </div>
 
@@ -454,6 +513,47 @@
     } finally {
       setLoading(false);
       checkStatus();
+    }
+  });
+
+  // ── Browse panel ───────────────────────────────────────────
+  let browseLoaded = false;
+  document.getElementById('browse-btn').addEventListener('click', async () => {
+    const panel = document.getElementById('browse-panel');
+    const isHidden = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden');
+    document.getElementById('browse-btn').textContent = isHidden ? 'Browse index ▴' : 'Browse index ▾';
+    if (!isHidden || browseLoaded) return;
+
+    browseLoaded = true;
+    try {
+      const r = await fetch(`${API}/api/fragments?limit=100`);
+      const d = await r.json();
+      document.getElementById('browse-total').textContent = `${d.total} total`;
+      const list = document.getElementById('browse-list');
+      if (!d.fragments?.length) {
+        list.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No fragments indexed yet. Run the extractor first.</div>';
+        return;
+      }
+      const seen = new Set();
+      list.innerHTML = '';
+      for (const f of d.fragments) {
+        const key = f.title || f.source;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const conf = f.confidence ? `conf ${f.confidence}` : '';
+        list.insertAdjacentHTML('beforeend', `
+          <div class="browse-row">
+            <div>
+              ${f.title ? `<div class="browse-title">${f.title}</div>` : ''}
+              <div class="browse-source">${f.source ?? f.arxiv_id ?? '—'}</div>
+            </div>
+            <div class="browse-score">${conf}</div>
+          </div>`);
+      }
+    } catch (e) {
+      document.getElementById('browse-list').innerHTML =
+        '<div style="padding:16px;color:var(--red);font-size:13px">Could not load fragments.</div>';
     }
   });
 
