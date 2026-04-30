@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>H.I.V.E — Verified Knowledge</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #21262d;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent2: #388bfd;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --radius: 8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: var(--accent);
+    }
+
+    .tagline {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-dot {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+    }
+    .dot.online { background: var(--green); }
+
+    main {
+      flex: 1;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 40px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .query-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    textarea {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 16px;
+      resize: none;
+      line-height: 1.6;
+      min-height: 80px;
+      width: 100%;
+      font-family: inherit;
+    }
+
+    textarea::placeholder { color: var(--muted); }
+
+    .query-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .top-k-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input[type=range] {
+      accent-color: var(--accent);
+      width: 80px;
+    }
+
+    .ask-btn {
+      background: var(--accent2);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .ask-btn:hover { opacity: .85; }
+    .ask-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .results { display: flex; flex-direction: column; gap: 24px; }
+    .results.hidden { display: none; }
+
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      width: fit-content;
+    }
+    .mode-badge.verified { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+    .mode-badge.hybrid   { background: rgba(210,153,34,.15); color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
+    .mode-badge.no_data  { background: rgba(248,81,73,.15);  color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+
+    .answer-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .answer-text {
+      line-height: 1.7;
+      color: var(--text);
+      font-size: 15px;
+      white-space: pre-wrap;
+    }
+
+    /* basic markdown rendering */
+    .answer-text strong { font-weight: 600; }
+    .answer-text em { font-style: italic; color: var(--muted); }
+
+    .fragments-list { display: flex; flex-direction: column; gap: 12px; }
+
+    .fragment-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color .15s;
+    }
+    .fragment-card:hover { border-color: var(--accent); }
+
+    .fragment-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .frag-id { font-size: 12px; color: var(--muted); font-family: monospace; }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 12px;
+    }
+    .badge-verified { background: rgba(63,185,80,.15); color: var(--green); }
+    .badge-unverified { background: rgba(210,153,34,.15); color: var(--yellow); }
+
+    .score-bar-wrap {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .score-bar {
+      width: 60px; height: 4px;
+      background: var(--surface2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .score-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+    .fragment-source {
+      font-size: 13px;
+      color: var(--accent);
+    }
+
+    .fragment-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .fragment-text {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .error-msg {
+      background: rgba(248,81,73,.1);
+      border: 1px solid rgba(248,81,73,.3);
+      color: var(--red);
+      padding: 16px;
+      border-radius: var(--radius);
+      font-size: 14px;
+    }
+
+    footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">H.I.V.E</div>
+  <div class="tagline">Heuristic Intelligent Vector Extraction</div>
+  <div class="status-dot">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">checking...</span>
+  </div>
+</header>
+
+<main>
+  <div class="query-box">
+    <textarea id="question" placeholder="Ask anything — H.I.V.E will search verified scientific sources..." rows="3"></textarea>
+    <div class="query-footer">
+      <div class="top-k-control">
+        <label for="topk">Sources:</label>
+        <input type="range" id="topk" min="1" max="20" value="5" />
+        <span id="topk-val">5</span>
+      </div>
+      <div style="display:flex;align-items:center">
+        <div class="spinner" id="spinner"></div>
+        <button class="ask-btn" id="ask-btn">Ask H.I.V.E</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="results hidden" id="results">
+    <div id="mode-badge-wrap"></div>
+    <div class="answer-card" id="answer-card">
+      <div class="card-title">Response</div>
+      <div class="answer-text" id="answer-text"></div>
+    </div>
+    <div>
+      <div class="card-title" style="margin-bottom:12px">Verified Sources (<span id="frag-count">0</span>)</div>
+      <div class="fragments-list" id="fragments-list"></div>
+    </div>
+  </div>
+</main>
+
+<footer>H.I.V.E v0.1 — Knowledge verified, sources traceable</footer>
+
+<script>
+  const API = ''; // same origin — served by Fastify
+
+  // ── Status check ───────────────────────────────────────────
+  async function checkStatus() {
+    try {
+      const r = await fetch(`${API}/api/status`);
+      const d = await r.json();
+      const dot = document.getElementById('status-dot');
+      const txt = document.getElementById('status-text');
+      if (d.embedder_online) {
+        dot.classList.add('online');
+        txt.textContent = `${d.indexed} fragments indexed`;
+      } else {
+        txt.textContent = 'embedder offline';
+      }
+    } catch {
+      document.getElementById('status-text').textContent = 'API offline';
+    }
+  }
+
+  // ── UI helpers ─────────────────────────────────────────────
+  const topkSlider = document.getElementById('topk');
+  const topkVal    = document.getElementById('topk-val');
+  topkSlider.addEventListener('input', () => { topkVal.textContent = topkSlider.value; });
+
+  function setLoading(on) {
+    document.getElementById('spinner').style.display = on ? 'block' : 'none';
+    document.getElementById('ask-btn').disabled = on;
+  }
+
+  function renderMode(mode) {
+    const labels = { verified: '✓ Verified by H.I.V.E', hybrid: '⚠ Not in H.I.V.E — LLM fallback', no_data: '✗ No data' };
+    const wrap = document.getElementById('mode-badge-wrap');
+    wrap.innerHTML = `<div class="mode-badge ${mode}">${labels[mode] ?? mode}</div>`;
+  }
+
+  function renderAnswer(text) {
+    // minimal markdown: **bold**, *italic*, newlines
+    const html = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
+    document.getElementById('answer-text').innerHTML = html;
+  }
+
+  function scoreColor(score) {
+    if (score >= 0.5) return '#3fb950';
+    if (score >= 0.3) return '#d29922';
+    return '#8b949e';
+  }
+
+  function renderFragments(fragments) {
+    document.getElementById('frag-count').textContent = fragments.length;
+    const list = document.getElementById('fragments-list');
+    list.innerHTML = '';
+    if (!fragments.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:14px">No relevant fragments found in H.I.V.E.</div>';
+      return;
+    }
+    for (const f of fragments) {
+      const verified = f.doi_valid || !f.doi;
+      const pct = Math.round(f.score * 100);
+      list.insertAdjacentHTML('beforeend', `
+        <div class="fragment-card">
+          <div class="fragment-header">
+            <span class="frag-id">${f.id}</span>
+            <span class="badge ${verified ? 'badge-verified' : 'badge-unverified'}">${verified ? 'verified' : 'unverified'}</span>
+            <div class="score-bar-wrap">
+              <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${scoreColor(f.score)}"></div></div>
+              <span>${pct}%</span>
+            </div>
+          </div>
+          ${f.title ? `<div class="fragment-title">${f.title}</div>` : ''}
+          <div class="fragment-source">${f.source}${f.confidence ? ` · conf ${f.confidence}` : ''}</div>
+          <div class="fragment-text">${f.text}</div>
+        </div>
+      `);
+    }
+  }
+
+  // ── Main query ─────────────────────────────────────────────
+  document.getElementById('ask-btn').addEventListener('click', async () => {
+    const question = document.getElementById('question').value.trim();
+    if (!question) return;
+
+    setLoading(true);
+    document.getElementById('results').classList.add('hidden');
+
+    try {
+      const res = await fetch(`${API}/api/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, top_k: Number(topkSlider.value), use_llm: true }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      renderMode(data.mode);
+      if (data.answer) renderAnswer(data.answer);
+      else document.getElementById('answer-text').textContent = '(no answer)';
+      renderFragments(data.fragments ?? []);
+      document.getElementById('results').classList.remove('hidden');
+    } catch (err) {
+      document.getElementById('results').classList.remove('hidden');
+      document.getElementById('mode-badge-wrap').innerHTML = '';
+      document.getElementById('answer-card').innerHTML =
+        `<div class="error-msg">Error: ${err.message}</div>`;
+      document.getElementById('fragments-list').innerHTML = '';
+    } finally {
+      setLoading(false);
+      checkStatus();
+    }
+  });
+
+  // Enter to submit (Shift+Enter for newline)
+  document.getElementById('question').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('ask-btn').click(); }
+  });
+
+  checkStatus();
+</script>
+</body>
+</html>
