@@ -38,9 +38,10 @@ data/identity/
 .DS_Store
 Thumbs.db
 
-# Editor
+# Editor & Claude Code local config
 .vscode/settings.json
 .idea/
+.claude/
 
 # Logs
 *.log
