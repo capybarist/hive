@@ -1,5 +1,11 @@
 const EMBEDDER = 'http://127.0.0.1:7700';
 
+// Minimum score to include a fragment in the UI result list
+const SHOW_THRESHOLD = 0.05;
+// Minimum TOP score to consider HIVE has genuinely relevant data
+// Below this → hybrid mode (LLM answers from general knowledge)
+const RELEVANT_THRESHOLD = 0.12;
+
 export interface SearchResult {
   id: string;
   text: string;
@@ -43,7 +49,7 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
   const data = (await res.json()) as { results: any[]; count: number };
 
   const fragments: SearchResult[] = data.results
-    .filter((r) => r.score > 0.05)
+    .filter((r) => r.score > SHOW_THRESHOLD)
     .map((r) => ({
       id: r.id,
       text: r.text,
@@ -56,7 +62,8 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
       arxiv_id: r.arxiv_id,
     }));
 
-  return { fragments, has_hive_data: fragments.length > 0, embedder_online: true };
+  const has_hive_data = fragments.length > 0 && fragments[0].score >= RELEVANT_THRESHOLD;
+  return { fragments, has_hive_data, embedder_online: true };
 }
 
 export async function getEmbedderStatus(): Promise<{ indexed: number; model: string } | null> {

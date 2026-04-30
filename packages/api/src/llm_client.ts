@@ -34,13 +34,15 @@ export async function synthesize(
   question: string,
   fragments: SearchResult[],
   apiKey: string,
+  hasRelevantData: boolean,
 ): Promise<LLMResponse> {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
-  const hasData = fragments.length > 0;
-  const mode: LLMMode = hasData ? 'verified' : 'hybrid';
+  const mode: LLMMode = hasRelevantData ? 'verified' : 'hybrid';
 
-  const userPrompt = hasData
+  // Only send relevant fragments to the LLM — low-score noise fragments are shown
+  // in the UI for transparency but excluded from the LLM prompt
+  const userPrompt = hasRelevantData
     ? buildPrompt(question, fragments)
     : `No verified H.I.V.E fragments were found for this question. You MUST still answer using your general knowledge, but you MUST start your response with: "⚠ Not verified by H.I.V.E — answering from general knowledge:"\n\nQUESTION: ${question}`;
 
@@ -65,5 +67,5 @@ export async function synthesize(
   const data = (await res.json()) as any;
   const answer = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '(no response)';
 
-  return { answer, mode: hasData ? 'verified' : 'hybrid' };
+  return { answer, mode };
 }

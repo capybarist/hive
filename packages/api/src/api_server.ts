@@ -35,7 +35,7 @@ app.post<{
   }
 
   try {
-    const { answer, mode } = await synthesize(question, fragments, GEMINI_KEY);
+    const { answer, mode } = await synthesize(question, fragments, GEMINI_KEY, has_hive_data);
     return { answer, mode, fragments, has_hive_data, embedder_online };
   } catch (err: any) {
     return reply.code(502).send({ error: err.message });
