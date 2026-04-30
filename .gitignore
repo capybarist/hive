@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.js.map
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+
+# HIVE data — never commit vector indexes or graph data
+data/vectors/
+data/graph/
+data/cache/
+data/identity/
+
+# Model cache (downloaded by sentence-transformers / HuggingFace)
+.cache/
+
+# Environment & secrets
+.env
+.env.local
+.env.*
+*.key
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
