@@ -271,6 +271,7 @@
       border-radius: var(--radius);
       font-size: 14px;
     }
+    .hidden { display: none !important; }
 
     footer {
       text-align: center;
@@ -310,6 +311,7 @@
 
   <div class="results hidden" id="results">
     <div id="mode-badge-wrap"></div>
+    <div class="error-msg hidden" id="error-area"></div>
     <div class="answer-card" id="answer-card">
       <div class="card-title">Response</div>
       <div class="answer-text" id="answer-text"></div>
@@ -404,12 +406,29 @@
     }
   }
 
+  function showError(msg) {
+    const area = document.getElementById('error-area');
+    area.textContent = 'Error: ' + msg;
+    area.classList.remove('hidden');
+    document.getElementById('answer-card').classList.add('hidden');
+    document.getElementById('mode-badge-wrap').innerHTML = '';
+    document.getElementById('fragments-list').innerHTML = '';
+    document.getElementById('frag-count').textContent = '0';
+  }
+
+  function clearError() {
+    document.getElementById('error-area').classList.add('hidden');
+    document.getElementById('error-area').textContent = '';
+    document.getElementById('answer-card').classList.remove('hidden');
+  }
+
   // ── Main query ─────────────────────────────────────────────
   document.getElementById('ask-btn').addEventListener('click', async () => {
     const question = document.getElementById('question').value.trim();
     if (!question) return;
 
     setLoading(true);
+    clearError();
     document.getElementById('results').classList.add('hidden');
 
     try {
@@ -420,22 +439,18 @@
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
 
       const data = await res.json();
       renderMode(data.mode);
-      if (data.answer) renderAnswer(data.answer);
-      else document.getElementById('answer-text').textContent = '(no answer)';
+      renderAnswer(data.answer ?? '(no answer from LLM)');
       renderFragments(data.fragments ?? []);
       document.getElementById('results').classList.remove('hidden');
     } catch (err) {
+      showError(err.message);
       document.getElementById('results').classList.remove('hidden');
-      document.getElementById('mode-badge-wrap').innerHTML = '';
-      document.getElementById('answer-card').innerHTML =
-        `<div class="error-msg">Error: ${err.message}</div>`;
-      document.getElementById('fragments-list').innerHTML = '';
     } finally {
       setLoading(false);
       checkStatus();
