@@ -118,6 +118,25 @@ app.get('/api/peers', async () => ({
   peerApis,
 }));
 
+// ── GET /api/topics ──────────────────────────────────────────────────────────
+// Returns knowledge summary grouped by node_id — reads from HNSW (has titles)
+app.get('/api/topics', async () => {
+  const byNode: Record<string, { nodeId: string; titles: string[]; count: number }> = {};
+  const seenTitles = new Set<string>();
+  try {
+    const res = await fetch(`${embedderUrl}/fragments?limit=1000`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return { nodes: [] };
+    const data = (await res.json()) as { fragments: any[] };
+    for (const f of data.fragments ?? []) {
+      const nid: string = f.node_id ?? 'unknown';
+      if (!byNode[nid]) byNode[nid] = { nodeId: nid, titles: [], count: 0 };
+      byNode[nid].count++;
+      if (f.title && !seenTitles.has(f.title)) { seenTitles.add(f.title); byNode[nid].titles.push(f.title); }
+    }
+  } catch {}
+  return { nodes: Object.values(byNode) };
+});
+
 // ── GET /api/status ──────────────────────────────────────────────────────────
 app.get('/api/status', async () => {
   const embedder = await getEmbedderStatus();

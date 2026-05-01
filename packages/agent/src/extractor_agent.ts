@@ -115,6 +115,8 @@ export async function extractAndIndex(
             source: paper.source,
             doi: paper.doi,
             confidence,
+            title: paper.title,
+            arxiv_id: paper.arxiv_id,
             extracted_at: extractedAt,
             node_id: store.nodeId,
           });

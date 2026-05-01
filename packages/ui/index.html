@@ -3,617 +3,394 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>H.I.V.E — Verified Knowledge</title>
+  <title>HIVE — Verified Knowledge</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --surface2: #21262d;
-      --border: #30363d;
-      --accent: #58a6ff;
-      --accent2: #388bfd;
-      --green: #3fb950;
-      --yellow: #d29922;
-      --red: #f85149;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --radius: 8px;
+      --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+      --border: #30363d; --accent: #58a6ff; --accent2: #388bfd;
+      --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #a371f7;
+      --text: #e6edf3; --muted: #8b949e; --radius: 8px;
     }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
+    /* ── Header ── */
     header {
       border-bottom: 1px solid var(--border);
-      padding: 16px 32px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
+      padding: 14px 28px;
+      display: flex; align-items: center; gap: 20px;
+    }
+    .logo { font-size: 20px; font-weight: 800; letter-spacing: 4px; color: var(--accent); flex-shrink: 0; }
+    .node-info { display: flex; flex-direction: column; gap: 1px; }
+    .node-id { font-size: 11px; color: var(--muted); font-family: monospace; }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    .pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border: 1px solid var(--border);
+      border-radius: 20px; font-size: 12px; color: var(--muted);
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+    .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.peer { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
+
+    /* ── Layout ── */
+    .layout { flex: 1; display: grid; grid-template-columns: 340px 1fr; gap: 0; }
+
+    /* ── Sidebar ── */
+    sidebar {
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 0; overflow-y: auto;
+    }
+    .sidebar-section { padding: 16px; border-bottom: 1px solid var(--border); }
+    .sidebar-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--muted); margin-bottom: 12px;
     }
 
-    .logo {
-      font-size: 22px;
-      font-weight: 700;
-      letter-spacing: 3px;
-      color: var(--accent);
-    }
-
-    .tagline {
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .status-dot {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .peer-count {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 10px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      font-size: 12px;
-    }
-    .peer-dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: var(--muted);
-    }
-    .peer-dot.connected { background: var(--green); }
-
-    .dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--red);
-    }
-    .dot.online { background: var(--green); }
-
-    main {
-      flex: 1;
-      max-width: 860px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 40px 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 32px;
-    }
-
-    .query-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
+    /* Query box */
     textarea {
-      background: transparent;
-      border: none;
-      outline: none;
-      color: var(--text);
-      font-size: 16px;
-      resize: none;
-      line-height: 1.6;
-      min-height: 80px;
-      width: 100%;
-      font-family: inherit;
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius); color: var(--text); font-size: 14px;
+      padding: 12px; resize: none; outline: none; font-family: inherit;
+      line-height: 1.5; min-height: 90px;
     }
-
+    textarea:focus { border-color: var(--accent); }
     textarea::placeholder { color: var(--muted); }
-
-    .query-footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      border-top: 1px solid var(--border);
-      padding-top: 12px;
-    }
-
-    .top-k-control {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    input[type=range] {
-      accent-color: var(--accent);
-      width: 80px;
-    }
-
+    .query-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .top-k-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    input[type=range] { flex: 1; accent-color: var(--accent); }
     .ask-btn {
-      background: var(--accent2);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius);
-      padding: 10px 24px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
+      background: var(--accent2); color: #fff; border: none;
+      border-radius: var(--radius); padding: 9px 20px; font-size: 14px;
+      font-weight: 600; cursor: pointer; white-space: nowrap;
       transition: opacity .15s;
     }
     .ask-btn:hover { opacity: .85; }
     .ask-btn:disabled { opacity: .4; cursor: not-allowed; }
-
     .spinner {
-      display: none;
-      width: 18px; height: 18px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .7s linear infinite;
-      margin-right: 8px;
+      display: none; width: 16px; height: 16px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .results { display: flex; flex-direction: column; gap: 24px; }
-    .results.hidden { display: none; }
-
-    .mode-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 600;
-      width: fit-content;
+    /* Network panel */
+    .network-node {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px; margin-bottom: 8px;
     }
-    .mode-badge.verified { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
-    .mode-badge.hybrid   { background: rgba(210,153,34,.15); color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
-    .mode-badge.no_data  { background: rgba(248,81,73,.15);  color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+    .network-node:last-child { margin-bottom: 0; }
+    .net-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .net-badge {
+      font-size: 11px; font-weight: 700; padding: 2px 8px;
+      border-radius: 10px; white-space: nowrap;
+    }
+    .net-local { background: rgba(88,166,255,.15); color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
+    .net-remote { background: rgba(163,113,247,.15); color: var(--purple); border: 1px solid rgba(163,113,247,.3); }
+    .net-id { font-size: 11px; font-family: monospace; color: var(--muted); }
+    .net-count { margin-left: auto; font-size: 11px; color: var(--muted); }
+    .net-topics { display: flex; flex-direction: column; gap: 3px; }
+    .net-topic {
+      font-size: 12px; color: var(--muted); padding: 3px 0;
+      border-top: 1px solid var(--border); line-height: 1.3;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .net-empty { font-size: 12px; color: var(--muted); font-style: italic; }
+
+    /* ── Main ── */
+    main { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 20px; }
+
+    .placeholder {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px;
+      color: var(--muted); text-align: center; padding: 40px;
+    }
+    .placeholder-icon { font-size: 48px; opacity: .3; }
+    .placeholder-text { font-size: 15px; }
+    .placeholder-hint { font-size: 13px; opacity: .7; }
+
+    /* Results */
+    .mode-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 14px; border-radius: 20px; font-size: 12px;
+      font-weight: 700; width: fit-content;
+    }
+    .mode-badge.verified { background: rgba(63,185,80,.12); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+    .mode-badge.hybrid   { background: rgba(210,153,34,.12); color: var(--yellow); border: 1px solid rgba(210,153,34,.3); }
 
     .answer-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 24px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
     }
-
-    .card-title {
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--muted);
-      margin-bottom: 16px;
-    }
-
-    .answer-text {
-      line-height: 1.7;
-      color: var(--text);
-      font-size: 15px;
-      white-space: pre-wrap;
-    }
-
-    /* basic markdown rendering */
+    .card-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+    .answer-text { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
     .answer-text strong { font-weight: 600; }
     .answer-text em { font-style: italic; color: var(--muted); }
 
-    .fragments-list { display: flex; flex-direction: column; gap: 12px; }
+    .error-area { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.3); color: var(--red); padding: 14px; border-radius: var(--radius); font-size: 14px; }
 
-    .fragment-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      transition: border-color .15s;
+    /* Fragment cards */
+    .frag-grid { display: flex; flex-direction: column; gap: 8px; }
+    .frag-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px;
+      cursor: pointer; transition: border-color .15s;
     }
-    .fragment-card:hover { border-color: var(--accent); }
+    .frag-card:hover { border-color: var(--accent); }
+    .frag-card.expanded .frag-body { display: block; }
+    .frag-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .frag-title { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 5px; }
+    .frag-source { font-size: 12px; color: var(--accent); }
+    .frag-body { display: none; margin-top: 10px; font-size: 13px; color: var(--muted); line-height: 1.6; border-top: 1px solid var(--border); padding-top: 10px; }
 
-    .fragment-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
+    .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .b-verified   { background: rgba(63,185,80,.12);  color: var(--green); }
+    .b-unverified { background: rgba(210,153,34,.12); color: var(--yellow); }
+    .b-local      { background: rgba(88,166,255,.12); color: var(--accent); }
+    .b-remote     { background: rgba(163,113,247,.12); color: var(--purple); }
 
-    .frag-id { font-size: 12px; color: var(--muted); font-family: monospace; }
+    .score-wrap { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    .score-bar { width: 50px; height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+    .score-fill { height: 100%; border-radius: 2px; }
 
-    .badge {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 12px;
-    }
-    .badge-verified   { background: rgba(63,185,80,.15);  color: var(--green); }
-    .badge-unverified { background: rgba(210,153,34,.15); color: var(--yellow); }
-    .badge-local      { background: rgba(88,166,255,.12); color: var(--accent); }
-    .badge-remote     { background: rgba(163,113,247,.15); color: #a371f7; }
+    .sources-header { display: flex; align-items: center; justify-content: space-between; }
+    .sources-count { font-size: 12px; color: var(--muted); }
 
-    .score-bar-wrap {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .score-bar {
-      width: 60px; height: 4px;
-      background: var(--surface2);
-      border-radius: 2px;
-      overflow: hidden;
-    }
-    .score-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
-
-    .fragment-source {
-      font-size: 13px;
-      color: var(--accent);
-    }
-
-    .fragment-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .fragment-text {
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.6;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    .browse-btn {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      border-radius: var(--radius);
-      padding: 8px 16px;
-      font-size: 13px;
-      cursor: pointer;
-      transition: border-color .15s, color .15s;
-    }
-    .browse-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-    .browse-panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-    .browse-header {
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid var(--border);
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .browse-list {
-      max-height: 320px;
-      overflow-y: auto;
-    }
-    .browse-row {
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--border);
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 12px;
-      align-items: start;
-      font-size: 13px;
-    }
-    .browse-row:last-child { border-bottom: none; }
-    .browse-title { color: var(--text); font-weight: 500; }
-    .browse-source { color: var(--accent); font-size: 12px; }
-    .browse-score { color: var(--muted); font-size: 12px; white-space: nowrap; }
-
-    .error-msg {
-      background: rgba(248,81,73,.1);
-      border: 1px solid rgba(248,81,73,.3);
-      color: var(--red);
-      padding: 16px;
-      border-radius: var(--radius);
-      font-size: 14px;
-    }
     .hidden { display: none !important; }
 
-    footer {
-      text-align: center;
-      padding: 24px;
-      color: var(--muted);
-      font-size: 12px;
-      border-top: 1px solid var(--border);
-    }
+    footer { text-align: center; padding: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); }
   </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">H.I.V.E</div>
-  <div style="display:flex;flex-direction:column;gap:2px">
-    <div class="tagline">Heuristic Intelligent Vector Extraction</div>
-    <div style="font-size:11px;color:var(--muted);font-family:monospace" id="node-id-label">node: —</div>
+  <div class="logo">HIVE</div>
+  <div class="node-info">
+    <span style="font-size:13px;color:var(--muted)">Heuristic Intelligent Vector Extraction</span>
+    <span class="node-id" id="node-id-label">node: —</span>
   </div>
-  <div class="status-dot">
-    <div class="peer-count" id="peer-count">
-      <span class="peer-dot" id="peer-dot"></span>
-      <span id="peer-text">0 peers</span>
-    </div>
-    <span class="dot" id="status-dot"></span>
-    <span id="status-text">checking...</span>
+  <div class="header-right">
+    <div class="pill"><span class="dot peer" id="peer-dot"></span><span id="peer-text">0 peers</span></div>
+    <div class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting...</span></div>
   </div>
 </header>
 
-<main>
-  <div class="query-box">
-    <textarea id="question" placeholder="Ask anything — H.I.V.E will search verified scientific sources..." rows="3"></textarea>
-    <div class="query-footer">
-      <div class="top-k-control">
-        <label for="topk">Sources:</label>
+<div class="layout">
+  <sidebar>
+    <!-- Query -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">Ask HIVE</div>
+      <textarea id="question" placeholder="What do you want to know?&#10;(Enter to send, Shift+Enter for newline)"></textarea>
+      <div class="query-controls">
+        <span class="top-k-label">Sources: <span id="topk-val">5</span></span>
         <input type="range" id="topk" min="1" max="20" value="5" />
-        <span id="topk-val">5</span>
-      </div>
-      <div style="display:flex;align-items:center">
         <div class="spinner" id="spinner"></div>
-        <button class="ask-btn" id="ask-btn">Ask H.I.V.E</button>
+        <button class="ask-btn" id="ask-btn">Ask</button>
       </div>
     </div>
-  </div>
 
-  <div style="display:flex;justify-content:flex-end">
-    <button class="browse-btn" id="browse-btn">Browse index ▾</button>
-  </div>
+    <!-- Network -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">Knowledge Network</div>
+      <div id="network-panel"><div class="net-empty">Loading...</div></div>
+    </div>
+  </sidebar>
 
-  <div class="browse-panel hidden" id="browse-panel">
-    <div class="browse-header">
-      <span>Indexed fragments</span>
-      <span id="browse-total" style="color:var(--muted);font-weight:400"></span>
+  <main id="main">
+    <div class="placeholder" id="placeholder">
+      <div class="placeholder-icon">🐝</div>
+      <div class="placeholder-text">HIVE is ready</div>
+      <div class="placeholder-hint">Ask a question to search verified scientific knowledge</div>
     </div>
-    <div class="browse-list" id="browse-list">
-      <div style="padding:16px;color:var(--muted);font-size:13px">Loading...</div>
-    </div>
-  </div>
 
-  <div class="results hidden" id="results">
-    <div id="mode-badge-wrap"></div>
-    <div class="error-msg hidden" id="error-area"></div>
-    <div class="answer-card" id="answer-card">
-      <div class="card-title">Response</div>
-      <div class="answer-text" id="answer-text"></div>
+    <div class="hidden" id="results">
+      <div id="mode-wrap"></div>
+      <div class="error-area hidden" id="error-area"></div>
+      <div class="answer-card hidden" id="answer-card">
+        <div class="card-label">Response</div>
+        <div class="answer-text" id="answer-text"></div>
+      </div>
+      <div>
+        <div class="sources-header" style="margin-bottom:10px">
+          <span class="card-label" id="sources-title">Sources</span>
+          <span class="sources-count" id="sources-count"></span>
+        </div>
+        <div class="frag-grid" id="frag-grid"></div>
+      </div>
     </div>
-    <div>
-      <div class="card-title" style="margin-bottom:12px" id="sources-title">HIVE Index Results (<span id="frag-count">0</span>)</div>
-      <div class="fragments-list" id="fragments-list"></div>
-    </div>
-  </div>
-</main>
+  </main>
+</div>
 
-<footer>H.I.V.E v0.1 — Knowledge verified, sources traceable</footer>
+<footer>HIVE v0.1 — Knowledge verified, sources traceable</footer>
 
 <script>
-  const API = ''; // same origin — served by Fastify
+const API = '';
+let MY_NODE_ID = '';
 
-  let MY_NODE_ID = '';
+// ── Status ────────────────────────────────────────────────────────────────────
+async function checkStatus() {
+  try {
+    const d = await fetch(`${API}/api/status`).then(r => r.json());
+    MY_NODE_ID = d.nodeId ?? '';
+    document.getElementById('node-id-label').textContent = `node: ${d.nodeId ?? '—'}`;
+    const dot = document.getElementById('status-dot');
+    const txt = document.getElementById('status-text');
+    if (d.embedder_online) { dot.classList.add('on'); txt.textContent = `${d.indexed} indexed`; }
+    else { dot.classList.remove('on'); txt.textContent = 'embedder offline'; }
+    const pc = d.peers ?? 0;
+    document.getElementById('peer-text').textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
+    document.getElementById('peer-dot').className = 'dot' + (pc > 0 ? ' peer' : '');
+  } catch { document.getElementById('status-text').textContent = 'offline'; }
+}
 
-  // ── Status check ───────────────────────────────────────────
-  async function checkStatus() {
-    try {
-      const r = await fetch(`${API}/api/status`);
-      const d = await r.json();
-      const dot = document.getElementById('status-dot');
-      const txt = document.getElementById('status-text');
-      if (d.embedder_online) {
-        dot.classList.add('online');
-        txt.textContent = `${d.indexed} fragments indexed`;
-      } else {
-        txt.textContent = 'embedder offline';
-      }
-      // Peer count
-      MY_NODE_ID = d.nodeId ?? '';
-      const label = document.getElementById('node-id-label');
-      if (label && d.nodeId) label.textContent = `node: ${d.nodeId}`;
-      const peerDot = document.getElementById('peer-dot');
-      const peerTxt = document.getElementById('peer-text');
-      const pc = d.peers ?? 0;
-      peerTxt.textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
-      if (pc > 0) peerDot.classList.add('connected');
-      else peerDot.classList.remove('connected');
-    } catch {
-      document.getElementById('status-text').textContent = 'API offline';
+// ── Network panel ─────────────────────────────────────────────────────────────
+async function loadNetwork() {
+  try {
+    const d = await fetch(`${API}/api/topics`).then(r => r.json());
+    const panel = document.getElementById('network-panel');
+    const nodes = (d.nodes ?? []).sort((a, b) => (a.nodeId === MY_NODE_ID ? -1 : 1));
+    if (!nodes.length) { panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>'; return; }
+    panel.innerHTML = '';
+    for (const n of nodes) {
+      const isLocal = n.nodeId === MY_NODE_ID;
+      const shortId = n.nodeId.replace('node_', '').slice(0, 12);
+      const topTopics = n.titles.slice(0, 4);
+      panel.insertAdjacentHTML('beforeend', `
+        <div class="network-node">
+          <div class="net-header">
+            <span class="net-badge ${isLocal ? 'net-local' : 'net-remote'}">${isLocal ? 'THIS NODE' : 'PEER'}</span>
+            <span class="net-id">${shortId}</span>
+            <span class="net-count">${n.count} frags</span>
+          </div>
+          <div class="net-topics">
+            ${topTopics.length ? topTopics.map(t => `<div class="net-topic" title="${t}">${t}</div>`).join('') : '<div class="net-empty">No titles yet</div>'}
+            ${n.titles.length > 4 ? `<div class="net-topic" style="color:var(--muted);font-style:italic">+${n.titles.length - 4} more...</div>` : ''}
+          </div>
+        </div>`);
     }
-  }
+  } catch { document.getElementById('network-panel').innerHTML = '<div class="net-empty">Could not load network</div>'; }
+}
 
-  // ── UI helpers ─────────────────────────────────────────────
-  const topkSlider = document.getElementById('topk');
-  const topkVal    = document.getElementById('topk-val');
-  topkSlider.addEventListener('input', () => { topkVal.textContent = topkSlider.value; });
+// ── Slider ────────────────────────────────────────────────────────────────────
+document.getElementById('topk').addEventListener('input', e => {
+  document.getElementById('topk-val').textContent = e.target.value;
+});
 
-  function setLoading(on) {
-    document.getElementById('spinner').style.display = on ? 'block' : 'none';
-    document.getElementById('ask-btn').disabled = on;
-  }
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function setLoading(on) {
+  document.getElementById('spinner').style.display = on ? 'block' : 'none';
+  document.getElementById('ask-btn').disabled = on;
+}
 
-  function renderMode(mode) {
-    const labels = { verified: '✓ Verified by H.I.V.E', hybrid: '⚠ Not in H.I.V.E — LLM fallback', no_data: '✗ No data' };
-    const wrap = document.getElementById('mode-badge-wrap');
-    wrap.innerHTML = `<div class="mode-badge ${mode}">${labels[mode] ?? mode}</div>`;
-  }
+function scoreColor(s) { return s >= .5 ? '#3fb950' : s >= .3 ? '#d29922' : '#8b949e'; }
 
-  function renderAnswer(text) {
-    // minimal markdown: **bold**, *italic*, newlines
-    const html = text
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>');
-    document.getElementById('answer-text').innerHTML = html;
-  }
+function nodeLabel(nodeId) {
+  if (!nodeId) return '';
+  if (nodeId === MY_NODE_ID) return '<span class="badge b-local">LOCAL</span>';
+  return `<span class="badge b-remote">PEER: ${nodeId.replace('node_','').slice(0,10)}</span>`;
+}
 
-  function scoreColor(score) {
-    if (score >= 0.5) return '#3fb950';
-    if (score >= 0.3) return '#d29922';
-    return '#8b949e';
-  }
+function renderAnswer(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>');
+}
 
-  function nodeLabel(nodeId) {
-    if (!nodeId) return '';
-    if (nodeId === MY_NODE_ID) return '<span class="badge badge-local">LOCAL</span>';
-    return `<span class="badge badge-remote">NODE: ${nodeId.replace('node_','').slice(0,12)}</span>`;
-  }
+function showError(msg) {
+  document.getElementById('error-area').textContent = 'Error: ' + msg;
+  document.getElementById('error-area').classList.remove('hidden');
+  document.getElementById('answer-card').classList.add('hidden');
+  document.getElementById('frag-grid').innerHTML = '';
+  document.getElementById('sources-count').textContent = '';
+}
 
-  function renderFragments(fragments, hasHiveData) {
-    const title = document.getElementById('sources-title');
-    if (hasHiveData) {
-      title.innerHTML = 'Verified Sources used by H.I.V.E (<span id="frag-count">0</span>)';
-    } else if (fragments.length > 0) {
-      title.innerHTML = 'HIVE found these — not relevant enough to use (<span id="frag-count">0</span>)';
+function clearError() {
+  document.getElementById('error-area').classList.add('hidden');
+  document.getElementById('answer-card').classList.remove('hidden');
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+async function runQuery() {
+  const question = document.getElementById('question').value.trim();
+  if (!question) return;
+  setLoading(true);
+  clearError();
+  document.getElementById('placeholder').classList.add('hidden');
+  document.getElementById('results').classList.remove('hidden');
+  document.getElementById('mode-wrap').innerHTML = '';
+  document.getElementById('answer-text').innerHTML = '';
+  document.getElementById('frag-grid').innerHTML = '';
+
+  try {
+    const res = await fetch(`${API}/api/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, top_k: Number(document.getElementById('topk').value), use_llm: true }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error ?? `HTTP ${res.status}`); }
+    const d = await res.json();
+
+    // Mode badge
+    const modeLabel = d.mode === 'verified' ? '✓ Verified by HIVE' : '⚠ LLM fallback — not in HIVE';
+    const modeCls = d.mode === 'verified' ? 'verified' : 'hybrid';
+    document.getElementById('mode-wrap').innerHTML = `<div class="mode-badge ${modeCls}">${modeLabel}</div>`;
+
+    // Answer
+    document.getElementById('answer-text').innerHTML = renderAnswer(d.answer ?? '(no answer)');
+
+    // Sources label
+    const frags = d.fragments ?? [];
+    const usedLabel = d.has_hive_data
+      ? `Used by HIVE (${frags.length})`
+      : frags.length ? `Found but not relevant enough (${frags.length})` : 'No results';
+    document.getElementById('sources-title').textContent = 'Sources';
+    document.getElementById('sources-count').textContent = usedLabel;
+
+    // Fragment cards
+    const grid = document.getElementById('frag-grid');
+    if (!frags.length) {
+      grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">No fragments found in HIVE index.</div>';
     } else {
-      title.innerHTML = 'HIVE Index Results (<span id="frag-count">0</span>)';
-    }
-    document.getElementById('frag-count').textContent = fragments.length;
-    const list = document.getElementById('fragments-list');
-    list.innerHTML = '';
-    if (!fragments.length) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:14px">No relevant fragments found in H.I.V.E.</div>';
-      return;
-    }
-    for (const f of fragments) {
-      const verified = f.doi_valid || !f.doi;
-      const pct = Math.round(f.score * 100);
-      list.insertAdjacentHTML('beforeend', `
-        <div class="fragment-card">
-          <div class="fragment-header">
-            <span class="frag-id">${f.id}</span>
-            <span class="badge ${verified ? 'badge-verified' : 'badge-unverified'}">${verified ? 'verified' : 'unverified'}</span>
+      for (const f of frags) {
+        const pct = Math.round(f.score * 100);
+        const verified = f.doi_valid || !f.doi;
+        const card = document.createElement('div');
+        card.className = 'frag-card';
+        card.innerHTML = `
+          <div class="frag-header">
+            <span class="badge ${verified ? 'b-verified' : 'b-unverified'}">${verified ? 'verified' : 'unverified'}</span>
             ${nodeLabel(f.node_id)}
-            <div class="score-bar-wrap">
-              <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${scoreColor(f.score)}"></div></div>
+            <div class="score-wrap">
+              <div class="score-bar"><div class="score-fill" style="width:${pct}%;background:${scoreColor(f.score)}"></div></div>
               <span>${pct}%</span>
             </div>
           </div>
-          ${f.title ? `<div class="fragment-title">${f.title}</div>` : ''}
-          <div class="fragment-source">${f.source}${f.confidence ? ` · conf ${f.confidence}` : ''}</div>
-          <div class="fragment-text">${f.text}</div>
-        </div>
-      `);
-    }
-  }
-
-  function showError(msg) {
-    const area = document.getElementById('error-area');
-    area.textContent = 'Error: ' + msg;
-    area.classList.remove('hidden');
-    document.getElementById('answer-card').classList.add('hidden');
-    document.getElementById('mode-badge-wrap').innerHTML = '';
-    document.getElementById('fragments-list').innerHTML = '';
-    document.getElementById('frag-count').textContent = '0';
-  }
-
-  function clearError() {
-    document.getElementById('error-area').classList.add('hidden');
-    document.getElementById('error-area').textContent = '';
-    document.getElementById('answer-card').classList.remove('hidden');
-  }
-
-  // ── Main query ─────────────────────────────────────────────
-  document.getElementById('ask-btn').addEventListener('click', async () => {
-    const question = document.getElementById('question').value.trim();
-    if (!question) return;
-
-    setLoading(true);
-    clearError();
-    document.getElementById('results').classList.add('hidden');
-
-    try {
-      const res = await fetch(`${API}/api/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, top_k: Number(topkSlider.value), use_llm: true }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
+          ${f.title ? `<div class="frag-title">${f.title}</div>` : ''}
+          <div class="frag-source">${f.source}${f.confidence ? ` · conf ${f.confidence}` : ''}</div>
+          <div class="frag-body">${f.text}</div>`;
+        card.addEventListener('click', () => card.classList.toggle('expanded'));
+        grid.appendChild(card);
       }
-
-      const data = await res.json();
-      renderMode(data.mode);
-      renderAnswer(data.answer ?? '(no answer from LLM)');
-      renderFragments(data.fragments ?? [], data.has_hive_data);
-      document.getElementById('results').classList.remove('hidden');
-    } catch (err) {
-      showError(err.message);
-      document.getElementById('results').classList.remove('hidden');
-    } finally {
-      setLoading(false);
-      checkStatus();
     }
-  });
+    checkStatus();
+    loadNetwork();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
 
-  // ── Browse panel ───────────────────────────────────────────
-  let browseLoaded = false;
-  document.getElementById('browse-btn').addEventListener('click', async () => {
-    const panel = document.getElementById('browse-panel');
-    const isHidden = panel.classList.contains('hidden');
-    panel.classList.toggle('hidden');
-    document.getElementById('browse-btn').textContent = isHidden ? 'Browse index ▴' : 'Browse index ▾';
-    if (!isHidden || browseLoaded) return;
+document.getElementById('ask-btn').addEventListener('click', runQuery);
+document.getElementById('question').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runQuery(); }
+});
 
-    browseLoaded = true;
-    try {
-      const r = await fetch(`${API}/api/fragments?limit=100`);
-      const d = await r.json();
-      document.getElementById('browse-total').textContent = `${d.total} total`;
-      const list = document.getElementById('browse-list');
-      if (!d.fragments?.length) {
-        list.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No fragments indexed yet. Run the extractor first.</div>';
-        return;
-      }
-      const seen = new Set();
-      list.innerHTML = '';
-      for (const f of d.fragments) {
-        const key = f.title || f.source;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const conf = f.confidence ? `conf ${f.confidence}` : '';
-        list.insertAdjacentHTML('beforeend', `
-          <div class="browse-row">
-            <div>
-              ${f.title ? `<div class="browse-title">${f.title}</div>` : ''}
-              <div class="browse-source">${f.source ?? f.arxiv_id ?? '—'}</div>
-            </div>
-            <div class="browse-score">${conf}</div>
-          </div>`);
-      }
-    } catch (e) {
-      document.getElementById('browse-list').innerHTML =
-        '<div style="padding:16px;color:var(--red);font-size:13px">Could not load fragments.</div>';
-    }
-  });
-
-  // Enter to submit (Shift+Enter for newline)
-  document.getElementById('question').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('ask-btn').click(); }
-  });
-
-  checkStatus();
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkStatus();
+loadNetwork();
+setInterval(() => { checkStatus(); loadNetwork(); }, 15000);
 </script>
 </body>
 </html>

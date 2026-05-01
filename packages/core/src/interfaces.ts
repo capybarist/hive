@@ -8,6 +8,8 @@ export interface Fragment {
   doi: string | null;
   confidence: number;
   vector_id?: string;
+  title?: string;
+  arxiv_id?: string;
   extracted_at: string;
   node_id: string;
   status: FragmentStatus;
