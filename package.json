@@ -1,0 +1,10 @@
+{
+  "name": "hive-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/core",
+    "packages/agent",
+    "packages/api",
+    "packages/embeddings"
+  ]
+}
