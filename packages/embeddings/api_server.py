@@ -58,6 +58,9 @@ def embed(req: EmbedRequest):
 
 @app.post("/add")
 def add(req: AddRequest):
+    # Skip if ID already indexed (prevents duplicates on restart/resync)
+    if req.id in index._id_to_label:
+        return {"ok": True, "id": req.id, "indexed": index.size, "skipped": True}
     engine.add(req.id, req.text, req.metadata)
     _save()
     return {"ok": True, "id": req.id, "indexed": index.size}

@@ -348,7 +348,10 @@
 
 <header>
   <div class="logo">H.I.V.E</div>
-  <div class="tagline">Heuristic Intelligent Vector Extraction</div>
+  <div style="display:flex;flex-direction:column;gap:2px">
+    <div class="tagline">Heuristic Intelligent Vector Extraction</div>
+    <div style="font-size:11px;color:var(--muted);font-family:monospace" id="node-id-label">node: —</div>
+  </div>
   <div class="status-dot">
     <div class="peer-count" id="peer-count">
       <span class="peer-dot" id="peer-dot"></span>
@@ -425,6 +428,8 @@
       }
       // Peer count
       MY_NODE_ID = d.nodeId ?? '';
+      const label = document.getElementById('node-id-label');
+      if (label && d.nodeId) label.textContent = `node: ${d.nodeId}`;
       const peerDot = document.getElementById('peer-dot');
       const peerTxt = document.getElementById('peer-text');
       const pc = d.peers ?? 0;

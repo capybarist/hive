@@ -34,9 +34,20 @@ const syncManager = new SyncManager(knowledgeStore, identity.nodeId, peerApis, e
 syncManager.start();
 
 p2pNode.on('peer', () => {
-  // When a new peer joins Hyperswarm, also trigger a sync via HTTP
   if (peerApis.length) syncManager.syncOnce().catch(() => {});
 });
+
+// Announce ourselves to known peers so they sync back (bidirectional)
+const MY_API_URL = `http://127.0.0.1:${PORT}`;
+for (const peerUrl of peerApis) {
+  fetch(`${peerUrl}/api/register-peer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiUrl: MY_API_URL }),
+    signal: AbortSignal.timeout(5000),
+  }).then(() => console.log(`[p2p] Announced to ${peerUrl}`))
+    .catch(() => console.log(`[p2p] Could not announce to ${peerUrl} (offline?)`));
+}
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
@@ -87,8 +98,19 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
 app.get('/api/node-info', async () => ({
   nodeId: identity.nodeId,
   port: PORT,
-  dataDir: DATA_DIR,
+  apiUrl: `http://127.0.0.1:${PORT}`,
 }));
+
+// ── POST /api/register-peer ──────────────────────────────────────────────────
+// Remote node calls this to announce itself → triggers bidirectional sync
+app.post<{ Body: { apiUrl: string } }>('/api/register-peer', async (req) => {
+  const { apiUrl } = req.body;
+  if (!apiUrl) return { ok: false, error: 'apiUrl required' };
+  syncManager.addPeer(apiUrl);
+  syncManager.syncOnce().catch(() => {});
+  console.log(`[p2p] Peer registered via HTTP: ${apiUrl}`);
+  return { ok: true, nodeId: identity.nodeId };
+});
 
 // ── GET /api/peers ───────────────────────────────────────────────────────────
 app.get('/api/peers', async () => ({
