@@ -55,10 +55,25 @@
       margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 16px;
       font-size: 13px;
       color: var(--muted);
     }
+    .peer-count {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 12px;
+    }
+    .peer-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .peer-dot.connected { background: var(--green); }
 
     .dot {
       width: 8px; height: 8px;
@@ -223,8 +238,10 @@
       padding: 2px 8px;
       border-radius: 12px;
     }
-    .badge-verified { background: rgba(63,185,80,.15); color: var(--green); }
+    .badge-verified   { background: rgba(63,185,80,.15);  color: var(--green); }
     .badge-unverified { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .badge-local      { background: rgba(88,166,255,.12); color: var(--accent); }
+    .badge-remote     { background: rgba(163,113,247,.15); color: #a371f7; }
 
     .score-bar-wrap {
       margin-left: auto;
@@ -333,6 +350,10 @@
   <div class="logo">H.I.V.E</div>
   <div class="tagline">Heuristic Intelligent Vector Extraction</div>
   <div class="status-dot">
+    <div class="peer-count" id="peer-count">
+      <span class="peer-dot" id="peer-dot"></span>
+      <span id="peer-text">0 peers</span>
+    </div>
     <span class="dot" id="status-dot"></span>
     <span id="status-text">checking...</span>
   </div>
@@ -387,6 +408,8 @@
 <script>
   const API = ''; // same origin — served by Fastify
 
+  let MY_NODE_ID = '';
+
   // ── Status check ───────────────────────────────────────────
   async function checkStatus() {
     try {
@@ -400,6 +423,14 @@
       } else {
         txt.textContent = 'embedder offline';
       }
+      // Peer count
+      MY_NODE_ID = d.nodeId ?? '';
+      const peerDot = document.getElementById('peer-dot');
+      const peerTxt = document.getElementById('peer-text');
+      const pc = d.peers ?? 0;
+      peerTxt.textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
+      if (pc > 0) peerDot.classList.add('connected');
+      else peerDot.classList.remove('connected');
     } catch {
       document.getElementById('status-text').textContent = 'API offline';
     }
@@ -436,12 +467,18 @@
     return '#8b949e';
   }
 
+  function nodeLabel(nodeId) {
+    if (!nodeId) return '';
+    if (nodeId === MY_NODE_ID) return '<span class="badge badge-local">LOCAL</span>';
+    return `<span class="badge badge-remote">NODE: ${nodeId.replace('node_','').slice(0,12)}</span>`;
+  }
+
   function renderFragments(fragments, hasHiveData) {
     const title = document.getElementById('sources-title');
     if (hasHiveData) {
       title.innerHTML = 'Verified Sources used by H.I.V.E (<span id="frag-count">0</span>)';
     } else if (fragments.length > 0) {
-      title.innerHTML = 'HIVE found these — but not relevant enough to use (<span id="frag-count">0</span>)';
+      title.innerHTML = 'HIVE found these — not relevant enough to use (<span id="frag-count">0</span>)';
     } else {
       title.innerHTML = 'HIVE Index Results (<span id="frag-count">0</span>)';
     }
@@ -460,6 +497,7 @@
           <div class="fragment-header">
             <span class="frag-id">${f.id}</span>
             <span class="badge ${verified ? 'badge-verified' : 'badge-unverified'}">${verified ? 'verified' : 'unverified'}</span>
+            ${nodeLabel(f.node_id)}
             <div class="score-bar-wrap">
               <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${scoreColor(f.score)}"></div></div>
               <span>${pct}%</span>

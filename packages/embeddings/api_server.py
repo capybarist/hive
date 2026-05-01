@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+_PORT = int(os.environ.get("HIVE_EMBEDDER_PORT", "7700"))
+
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -10,7 +12,8 @@ from pydantic import BaseModel
 from embedder import EmbeddingEngine
 from hnsw_index import VectorIndex
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "vectors"
+_default_data = Path(__file__).resolve().parents[2] / "data" / "vectors"
+DATA_DIR = Path(os.environ.get("HIVE_VECTORS_DIR", str(_default_data)))
 INDEX_PATH = str(DATA_DIR / "hnsw.index")
 
 app = FastAPI(title="HIVE Embeddings API", version="0.1.0")
@@ -92,4 +95,4 @@ def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=7700)
+    uvicorn.run(app, host="127.0.0.1", port=_PORT)

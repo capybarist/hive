@@ -5,7 +5,7 @@ import { fetchPapers } from './arxiv_client.js';
 import { validateDOI } from './crossref_validator.js';
 import { chunkText } from './text_chunker.js';
 
-const EMBEDDER_URL = 'http://127.0.0.1:7700';
+const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -88,6 +88,7 @@ export async function extractAndIndex(
         confidence,
         chunk_index: chunk.index,
         title: paper.title,
+        node_id: store ? store.nodeId : 'unknown',
       };
 
       fragments.push({
@@ -135,8 +136,8 @@ export async function extractAndIndex(
 
 // --- Run ---
 async function main() {
-  const TOPIC = 'retrieval augmented generation';
-  const LIMIT = 5;
+  const TOPIC = process.env.HIVE_EXTRACT_TOPIC ?? 'retrieval augmented generation';
+  const LIMIT = Number(process.env.HIVE_EXTRACT_LIMIT ?? 5);
 
   const embedderUp = await checkEmbedder();
   if (!embedderUp) {

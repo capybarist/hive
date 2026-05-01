@@ -23,8 +23,10 @@ export function loadOrCreateIdentity(identityDir: string): NodeIdentity {
   });
 
   const pubHex = (publicKey as unknown as Buffer).toString('hex');
+  // Skip the 12-byte SPKI DER header (24 hex chars) to get unique key material
+  const uniquePart = createHash('sha256').update(pubHex).digest('hex').slice(0, 16);
   const identity: NodeIdentity = {
-    nodeId: `node_${pubHex.slice(0, 16)}`,
+    nodeId: `node_${uniquePart}`,
     publicKeyHex: pubHex,
     privateKeyHex: (privateKey as unknown as Buffer).toString('hex'),
   };

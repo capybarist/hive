@@ -1,4 +1,4 @@
-const EMBEDDER = 'http://127.0.0.1:7700';
+const EMBEDDER = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
 // Minimum score to include a fragment in the UI result list
 const SHOW_THRESHOLD = 0.05;
@@ -19,6 +19,7 @@ export interface SearchResult {
   doi_valid: boolean;
   title?: string;
   arxiv_id?: string;
+  node_id?: string;
 }
 
 export interface QueryResult {
@@ -63,6 +64,7 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
       doi_valid: r.doi_valid ?? false,
       title: r.title,
       arxiv_id: r.arxiv_id,
+      node_id: r.node_id,
     }));
 
   const has_hive_data = fragments.filter(f => f.score >= RELEVANT_SCORE).length >= MIN_RELEVANT_COUNT;

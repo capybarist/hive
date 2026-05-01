@@ -50,6 +50,18 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.identity.nodeId;
   }
 
+  get corestore(): Corestore {
+    return this.store;
+  }
+
+  // Store a fragment replicated from a peer — keeps original signature intact
+  async saveReplicated(fragment: Fragment): Promise<void> {
+    await this.ready();
+    await this.append({ type: 'put', key: K.frag(fragment.id), value: fragment });
+    await this.append({ type: 'put', key: K.src(fragment.source, fragment.id), value: fragment.id });
+    await this.append({ type: 'put', key: K.dat(fragment.extracted_at.slice(0, 10), fragment.id), value: fragment.id });
+  }
+
   async ready(): Promise<void> {
     if (this._ready) return;
     await this.base.ready();
