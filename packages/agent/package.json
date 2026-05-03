@@ -4,8 +4,9 @@
   "description": "HIVE knowledge extraction agent",
   "type": "module",
   "scripts": {
-    "test": "npx tsx src/extractor_agent.ts",
-    "extract": "npx tsx src/extractor_agent.ts"
+    "test": "npx tsx src/reactive_extractor.ts",
+    "extract": "npx tsx src/reactive_extractor.ts",
+    "extract:auto": "npx tsx src/autonomous_extractor.ts"
   },
   "dependencies": {
     "@hive/core": "*",

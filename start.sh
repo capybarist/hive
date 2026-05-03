@@ -36,7 +36,7 @@ fi
 
 # ── Wait for embedders ────────────────────────────────────────────────────────
 echo -n "  Waiting for embedders"
-for i in $(seq 1 25); do
+for i in $(seq 1 45); do
   alive http://127.0.0.1:7700/health && alive http://127.0.0.1:7701/health && break
   echo -n "."; sleep 2
 done
