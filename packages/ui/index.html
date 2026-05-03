@@ -387,10 +387,13 @@ document.getElementById('question').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runQuery(); }
 });
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-checkStatus();
-loadNetwork();
-setInterval(() => { checkStatus(); loadNetwork(); }, 15000);
+// ── Init — checkStatus first, then loadNetwork so MY_NODE_ID is ready ────────
+async function init() {
+  await checkStatus();
+  await loadNetwork();
+}
+init();
+setInterval(async () => { await checkStatus(); await loadNetwork(); }, 15000);
 </script>
 </body>
 </html>
