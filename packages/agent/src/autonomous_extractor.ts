@@ -70,6 +70,8 @@ async function callGemini(messages: Message[], apiKey: string): Promise<{ text?:
   return { text, toolCalls: toolCalls.length ? toolCalls : undefined, tokensUsed };
 }
 
+export type { BudgetConfig } from './budget_controller.js';
+
 export interface ExtractionResult {
   fragmentsIndexed: number;
   summary: string;
@@ -79,31 +81,37 @@ export interface ExtractionResult {
 export async function runAutonomousExtraction(
   objective: string,
   budgetConfig: Partial<BudgetConfig> = {},
+  existingStore?: KnowledgeStore,  // pass the already-open store from the API server
+  embedderUrlOverride?: string,
 ): Promise<ExtractionResult> {
-  if (!GEMINI_KEY) throw new Error('GEMINI_API_KEY not set');
+  const apiKey = process.env.GEMINI_API_KEY ?? GEMINI_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
+  const effectiveEmbedderUrl = embedderUrlOverride ?? EMBEDDER_URL;
   const budget = new BudgetController({ ...DEFAULT_BUDGET, ...budgetConfig });
-  const identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
-  const store = new KnowledgeStore(DATA_DIR, identity);
-  await store.ready();
+
+  // Use the provided store (no lock conflict) or open a new one for CLI use
+  let store: KnowledgeStore;
+  let ownStore = false;
+  if (existingStore) {
+    store = existingStore;
+  } else {
+    const identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
+    store = new KnowledgeStore(DATA_DIR, identity);
+    await store.ready();
+    ownStore = true;
+  }
 
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
   const onFragment = async (frag: { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string }) => {
-    // Save to Hypercore
     await store.save({
-      id: frag.id,
-      text: frag.text,
-      source: frag.source,
-      doi: frag.doi,
-      confidence: frag.confidence,
-      title: frag.title,
-      extracted_at: new Date().toISOString(),
-      node_id: store.nodeId,
+      id: frag.id, text: frag.text, source: frag.source,
+      doi: frag.doi, confidence: frag.confidence, title: frag.title,
+      extracted_at: new Date().toISOString(), node_id: store.nodeId,
     });
-    // Save to HNSW
-    await fetch(`${EMBEDDER_URL}/add`, {
+    await fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: frag.id, text: frag.text, metadata: { source: frag.source, doi: frag.doi, doi_valid: frag.doi !== null, confidence: frag.confidence, title: frag.title, node_id: store.nodeId } }),
@@ -136,7 +144,7 @@ export async function runAutonomousExtraction(
 
     let response;
     try {
-      response = await callGemini(messages, GEMINI_KEY);
+      response = await callGemini(messages, apiKey);
     } catch (e: any) {
       console.error(`[gemini] Error: ${e.message}`);
       break;
@@ -182,7 +190,7 @@ export async function runAutonomousExtraction(
     messages.push({ role: 'user', parts: toolResultParts });
   }
 
-  await store.close();
+  if (ownStore) await store.close();
   return { fragmentsIndexed, summary: finalSummary, budget: budget.summary() };
 }
 

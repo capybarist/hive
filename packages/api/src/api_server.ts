@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
 import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager } from '@hive/core';
+import { runAutonomousExtraction } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -15,6 +16,9 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const PEER_API = process.env.HIVE_PEER ?? '';
+const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
+const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000); // 30min
+const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 10);
 
 // ── Bootstrap node & P2P ────────────────────────────────────────────────────
 const identity = loadOrCreateIdentity(IDENTITY_DIR);
@@ -151,6 +155,29 @@ app.get('/api/status', async () => {
     peers: p2pNode.peerCount,
   };
 });
+
+// ── Autonomous extraction loop ───────────────────────────────────────────────
+if (HIVE_OBJECTIVE) {
+  console.log(`[extract] Autonomous mode active — objective: "${HIVE_OBJECTIVE}"`);
+  const runLoop = async () => {
+    try {
+      console.log(`[extract] Starting extraction cycle...`);
+      const result = await runAutonomousExtraction(
+        HIVE_OBJECTIVE,
+        { maxFragments: EXTRACT_MAX_FRAGMENTS, maxMinutes: 8 },
+        knowledgeStore,
+        embedderUrl,
+      );
+      console.log(`[extract] Cycle done: ${result.fragmentsIndexed} new fragments | ${result.budget.tokensUsed} tokens`);
+    } catch (e: any) {
+      console.error(`[extract] Error: ${e.message}`);
+    }
+    setTimeout(runLoop, EXTRACT_INTERVAL_MS);
+  };
+  setTimeout(runLoop, 10_000); // first run 10s after boot
+} else {
+  console.log(`[extract] No HIVE_OBJECTIVE set — autonomous extraction disabled`);
+}
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
