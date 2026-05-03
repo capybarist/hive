@@ -153,7 +153,7 @@ app.get('/api/status', async () => {
 });
 
 try {
-  await app.listen({ port: PORT, host: '127.0.0.1' });
+  await app.listen({ port: PORT, host: '0.0.0.0' });
   console.log(`\n   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
   console.log(`   Peer → ${PEER_API || '(no bootstrap peer)'}`);

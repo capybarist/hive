@@ -49,7 +49,7 @@ export async function synthesize(
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+    generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
   };
 
   const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
