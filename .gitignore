@@ -18,11 +18,16 @@ env/
 *.egg-info/
 .eggs/
 
-# HIVE data — never commit vector indexes or graph data
+# HIVE runtime data — never commit (auto-generated per BEE)
+data/bee-*/
+data_b/
 data/vectors/
 data/corestore/
 data/cache/
 data/identity/
+data/claim_registry/
+# topic_tree.json IS committed (it's source data, not runtime)
+!data/topic_tree.json
 
 # Model cache (downloaded by sentence-transformers / HuggingFace)
 .cache/
