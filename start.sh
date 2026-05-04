@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# HIVE — start all services
-# Usage: bash start.sh
-# Run from anywhere inside the repo
+# HIVE — launch any number of BEEs from bees/*.env configs
+# Usage:
+#   bash start.sh                  — starts all BEEs in bees/
+#   bash start.sh bee-rag          — starts only bee-rag
+#   bash start.sh bee-rag bee-llm  — starts specific BEEs
 
 cd "$(dirname "$(realpath "$0")")"
 
@@ -9,87 +11,123 @@ G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 ok()  { echo -e "${G}✓${N} $1"; }
 run() { echo -e "${Y}→${N} $1"; }
 err() { echo -e "${R}✗${N} $1"; }
-
 alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 
+# ── Which BEEs to start ───────────────────────────────────────────────────────
+if [ $# -gt 0 ]; then
+  CONFIGS=()
+  for name in "$@"; do
+    cfg="bees/${name}.env"
+    [ -f "$cfg" ] || cfg="bees/${name}"
+    [ -f "$cfg" ] || { err "Config not found: bees/${name}.env"; continue; }
+    CONFIGS+=("$cfg")
+  done
+else
+  CONFIGS=(bees/*.env)
+fi
+
+[ ${#CONFIGS[@]} -eq 0 ] && { err "No BEE configs found in bees/. Create bees/*.env files."; exit 1; }
+
 echo ""
-echo "  🐝  HIVE startup"
-echo "──────────────────────────────────────"
+echo "  🐝  HIVE — launching ${#CONFIGS[@]} BEE(s)"
+echo "────────────────────────────────────────────"
 
-# ── Embedder A (port 7700) ────────────────────────────────────────────────────
-if alive http://127.0.0.1:7700/health; then
-  ok "Embedder A :7700 already running"
-else
-  run "Starting Embedder A :7700..."
-  pkill -f "HIVE_EMBEDDER_PORT=7700\|api_server.py" 2>/dev/null; sleep 0.5
-  nohup python3 packages/embeddings/api_server.py > /tmp/hive_emb_a.log 2>&1 &
-fi
+# ── Launch each BEE ──────────────────────────────────────────────────────────
+for cfg in "${CONFIGS[@]}"; do
+  # Load config vars
+  unset BEE_NAME BEE_PORT BEE_EMBEDDER_PORT BEE_DATA_DIR BEE_PEER
+  unset HIVE_OBJECTIVE HIVE_EXTRACT_MAX_FRAGMENTS HIVE_EXTRACT_INTERVAL_MS
+  # shellcheck source=/dev/null
+  set -a; source "$cfg"; set +a
 
-# ── Embedder B (port 7701) ────────────────────────────────────────────────────
-if alive http://127.0.0.1:7701/health; then
-  ok "Embedder B :7701 already running"
-else
-  run "Starting Embedder B :7701..."
-  nohup env HIVE_VECTORS_DIR="$(pwd)/data_b/vectors" HIVE_EMBEDDER_PORT=7701 \
-    python3 packages/embeddings/api_server.py > /tmp/hive_emb_b.log 2>&1 &
-fi
+  name="${BEE_NAME:-$(basename "$cfg" .env)}"
+  port="${BEE_PORT:-8080}"
+  emb_port="${BEE_EMBEDDER_PORT:-7700}"
+  data_dir="${BEE_DATA_DIR:-../../data}"
+  abs_data="$(cd packages/api && realpath "$data_dir" 2>/dev/null || echo "$data_dir")"
 
-# ── Wait for embedders ────────────────────────────────────────────────────────
-echo -n "  Waiting for embedders"
-for i in $(seq 1 45); do
-  alive http://127.0.0.1:7700/health && alive http://127.0.0.1:7701/health && break
-  echo -n "."; sleep 2
-done
-echo ""
+  echo ""
+  run "BEE: $name  (API :$port  embedder :$emb_port)"
+  echo "     data: $abs_data"
+  [ -n "$HIVE_OBJECTIVE" ] && echo "     objective: ${HIVE_OBJECTIVE:0:70}..."
 
-if alive http://127.0.0.1:7700/health && alive http://127.0.0.1:7701/health; then
-  A=$(curl -s http://127.0.0.1:7700/health | python3 -c "import json,sys; print(json.load(sys.stdin)['indexed'])" 2>/dev/null)
-  B=$(curl -s http://127.0.0.1:7701/health | python3 -c "import json,sys; print(json.load(sys.stdin)['indexed'])" 2>/dev/null)
-  ok "Embedders ready — A: ${A} vectors | B: ${B} vectors"
-else
-  err "Embedders failed. Check /tmp/hive_emb_a.log or /tmp/hive_emb_b.log"
-  exit 1
-fi
+  # Create data directories
+  mkdir -p "$abs_data/identity" "$abs_data/vectors" "$abs_data/corestore" "$abs_data/cache"
 
-# ── API A (port 8080) ─────────────────────────────────────────────────────────
-if alive http://127.0.0.1:8080/api/status; then
-  ok "API Node A :8080 already running"
-else
-  run "Starting API Node A :8080..."
-  ( cd packages/api && nohup npm start > /tmp/hive_api_a.log 2>&1 & )
-  sleep 5
-fi
-
-# ── API B (port 8081) ─────────────────────────────────────────────────────────
-if alive http://127.0.0.1:8081/api/status; then
-  ok "API Node B :8081 already running"
-else
-  run "Starting API Node B :8081..."
-  ( cd packages/api && nohup npm run start:b > /tmp/hive_api_b.log 2>&1 & )
-  sleep 5
-fi
-
-# ── Final check ───────────────────────────────────────────────────────────────
-echo ""
-for PORT in 8080 8081; do
-  STATUS=$(curl -s --max-time 3 http://127.0.0.1:$PORT/api/status 2>/dev/null)
-  if echo "$STATUS" | grep -q '"ok"'; then
-    NODE=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin)['nodeId'][:20])" 2>/dev/null)
-    IDX=$(echo "$STATUS"  | python3 -c "import json,sys; print(json.load(sys.stdin)['indexed'])"    2>/dev/null)
-    PRS=$(echo "$STATUS"  | python3 -c "import json,sys; print(json.load(sys.stdin)['peers'])"      2>/dev/null)
-    ok "Node :$PORT  $NODE  $IDX vectors  $PRS peers"
+  # ── Embedder ────────────────────────────────────────────────────────────────
+  if alive "http://127.0.0.1:$emb_port/health"; then
+    ok "Embedder :$emb_port already running"
   else
-    err "Node :$PORT not responding — check /tmp/hive_api_$([ $PORT = 8080 ] && echo a || echo b).log"
+    run "Starting embedder :$emb_port ..."
+    HIVE_VECTORS_DIR="$abs_data/vectors" HIVE_EMBEDDER_PORT="$emb_port" \
+      nohup python3 packages/embeddings/api_server.py \
+      > "/tmp/hive_emb_${name}.log" 2>&1 &
+  fi
+
+  # ── API server ───────────────────────────────────────────────────────────────
+  if alive "http://127.0.0.1:$port/api/status"; then
+    ok "API :$port already running"
+  else
+    run "Starting API :$port ..."
+    # Write a temp env file merging global .env + bee config
+    tmp_env=$(mktemp /tmp/hive_bee_XXXXXX.env)
+    [ -f .env ] && cat .env >> "$tmp_env"
+    cat "$cfg" >> "$tmp_env"
+    printf '\nHIVE_PORT=%s\nHIVE_DATA_DIR=%s\n' "$port" "$abs_data" >> "$tmp_env"
+    [ -n "$BEE_PEER" ] && printf 'HIVE_PEER=%s\n' "$BEE_PEER" >> "$tmp_env"
+    [ -n "$EMBEDDER_URL" ] || printf 'EMBEDDER_URL=http://127.0.0.1:%s\n' "$emb_port" >> "$tmp_env"
+
+    ( cd packages/api && nohup node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
+        > "/tmp/hive_api_${name}.log" 2>&1 & )
   fi
 done
 
-SPACE="${CODESPACE_NAME:-}"
+# ── Wait for all embedders ────────────────────────────────────────────────────
 echo ""
-if [ -n "$SPACE" ]; then
-  echo "  Node A → https://${SPACE}-8080.app.github.dev"
-  echo "  Node B → https://${SPACE}-8081.app.github.dev"
-else
-  echo "  Node A → http://localhost:8080"
-  echo "  Node B → http://localhost:8081"
-fi
+run "Waiting for embedders to load model..."
+for cfg in "${CONFIGS[@]}"; do
+  source "$cfg" 2>/dev/null
+  port="${BEE_EMBEDDER_PORT:-7700}"
+  for i in $(seq 1 45); do
+    alive "http://127.0.0.1:$port/health" && break
+    echo -n "."; sleep 2
+  done
+done
+echo ""
+
+# ── Wait for all APIs ─────────────────────────────────────────────────────────
+for cfg in "${CONFIGS[@]}"; do
+  source "$cfg" 2>/dev/null
+  port="${BEE_PORT:-8080}"
+  for i in $(seq 1 20); do
+    alive "http://127.0.0.1:$port/api/status" && break
+    sleep 1
+  done
+done
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════════"
+SPACE="${CODESPACE_NAME:-}"
+for cfg in "${CONFIGS[@]}"; do
+  source "$cfg" 2>/dev/null
+  name="${BEE_NAME:-$(basename "$cfg" .env)}"
+  port="${BEE_PORT:-8080}"
+  STATUS=$(curl -s --max-time 3 "http://127.0.0.1:$port/api/status" 2>/dev/null)
+  if echo "$STATUS" | grep -q '"ok"'; then
+    node=$(echo "$STATUS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('nodeId','?')[:20])" 2>/dev/null)
+    idx=$(echo "$STATUS"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('indexed','?'))" 2>/dev/null)
+    ok "$name :$port  →  $node  |  $idx vectors"
+    if [ -n "$SPACE" ]; then
+      echo "     UI → https://${SPACE}-${port}.app.github.dev"
+    else
+      echo "     UI → http://localhost:$port"
+    fi
+  else
+    err "$name :$port — not responding (check /tmp/hive_api_${name}.log)"
+  fi
+done
+echo "════════════════════════════════════════════"
+echo ""
+echo "Logs: /tmp/hive_api_{name}.log  /tmp/hive_emb_{name}.log"
 echo ""

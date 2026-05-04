@@ -1,3 +1,4 @@
+import { XMLParser } from 'fast-xml-parser';
 import { fetchPapers } from './arxiv_client.js';
 import { validateDOI } from './crossref_validator.js';
 import { chunkText } from './text_chunker.js';
@@ -73,6 +74,18 @@ export const TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'rss_fetch',
+    description: 'Fetch and parse an RSS or Atom feed. Returns list of recent articles with title, description, link and date. Use this for news sites, blogs, and any source with an RSS feed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'RSS or Atom feed URL' },
+        limit: { type: 'number', description: 'Max articles to return (default 15)', default: 15 },
+      },
+      required: ['url'],
+    },
+  },
+  {
     name: 'finish',
     description: 'Signal that the extraction session is complete. Provide a summary.',
     parameters: {
@@ -125,6 +138,32 @@ export async function executeTool(
     case 'chunk_text': {
       const chunks = chunkText(args.text as string, (args.max_tokens as number) ?? 200);
       return { ok: true, data: chunks };
+    }
+
+    case 'rss_fetch': {
+      try {
+        const res = await fetch(args.url as string, {
+          headers: { 'User-Agent': 'HIVE/0.1 (knowledge crawler; mailto:capy@capybaralabs.tech)' },
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+        const xml = await res.text();
+        const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+        const parsed = parser.parse(xml);
+        const channel = parsed?.rss?.channel ?? parsed?.feed ?? {};
+        const rawItems = channel?.item ?? channel?.entry ?? [];
+        const items: any[] = Array.isArray(rawItems) ? rawItems : [rawItems];
+        const limit = (args.limit as number) ?? 15;
+        const articles = items.slice(0, limit).map((item: any) => ({
+          title: (typeof item.title === 'string' ? item.title : item.title?.['#text'] ?? item.title?.['_'] ?? '').trim(),
+          description: (typeof item.description === 'string' ? item.description : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 600),
+          link: item.link?.['@_href'] ?? (typeof item.link === 'string' ? item.link : '') ?? item.id ?? '',
+          pubDate: item.pubDate ?? item.updated ?? item.published ?? '',
+        })).filter(a => a.title);
+        return { ok: true, data: { feed_url: args.url, count: articles.length, articles } };
+      } catch (e: any) {
+        return { ok: false, error: e.message };
+      }
     }
 
     case 'index_fragment': {
