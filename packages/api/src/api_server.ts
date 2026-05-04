@@ -204,31 +204,64 @@ if (resolvedObjective) {
   } catch { /* topic tree not available yet */ }
 }
 
-// ── Autonomous extraction loop ───────────────────────────────────────────────
+// ── Autonomous extraction loop (multi-topic) ─────────────────────────────────
 if (resolvedObjective) {
-  logEvent('start', `Autonomous mode active — "${resolvedObjective}"`);
+  logEvent('start', `Autonomous mode active`);
 
   const runLoop = async () => {
     extracting = true;
     nextCycleAt = null;
-    logEvent('start', `Starting extraction cycle (budget: ${EXTRACT_MAX_FRAGMENTS} fragments)`);
-    try {
-      const result = await runAutonomousExtraction(
-        resolvedObjective,
-        { maxFragments: EXTRACT_MAX_FRAGMENTS, maxMinutes: 8 },
-        knowledgeStore,
-        embedderUrl,
-        (frag) => logEvent('fragment', `Indexed: "${frag.title ?? frag.id}" from ${frag.source}`),
-      );
-      logEvent('done', `Cycle complete: ${result.fragmentsIndexed} new fragments | ${result.budget.tokensUsed} tokens used`);
-    } catch (e: any) {
-      logEvent('error', `Extraction error: ${e.message}`);
+
+    // Get current claims for this BEE — may have grown since last cycle
+    let claims = await claimRegistry.getClaimsForBee(identity.nodeId);
+    if (!claims.length) {
+      // Fallback: single topic from resolved objective
+      claims = [{ topicId: 'default', beeId: identity.nodeId, claimedAt: '', renewedAt: '', fragmentCount: 0, isPrimary: true }];
     }
+
+    const fragsPerTopic = Math.max(3, Math.floor(EXTRACT_MAX_FRAGMENTS / claims.length));
+    let totalIndexed = 0;
+    let totalTokens = 0;
+
+    logEvent('start', `Starting cycle: ${claims.length} topic(s), ~${fragsPerTopic} fragments each`);
+
+    for (const claim of claims) {
+      // Build focused objective for this specific topic
+      let topicObjective = resolvedObjective;
+      if (claim.topicId !== 'default') {
+        try {
+          const { loadTree, buildObjectiveFromTopics } = await import('@hive/core');
+          const leaf = loadTree().find(t => t.id === claim.topicId);
+          if (leaf) topicObjective = buildObjectiveFromTopics([leaf]);
+        } catch { /* tree unavailable, use resolved */ }
+      }
+
+      logEvent('start', `Topic: ${claim.topicId}`);
+      try {
+        const result = await runAutonomousExtraction(
+          topicObjective,
+          { maxFragments: fragsPerTopic, maxMinutes: Math.ceil(8 / claims.length) },
+          knowledgeStore,
+          embedderUrl,
+          (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
+        );
+        totalIndexed += result.fragmentsIndexed;
+        totalTokens += result.budget.tokensUsed;
+
+        // Renew claim with updated fragment count
+        await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
+      } catch (e: any) {
+        logEvent('error', `Topic ${claim.topicId}: ${e.message}`);
+      }
+    }
+
+    logEvent('done', `Cycle complete: ${totalIndexed} fragments | ${totalTokens} tokens | ${claims.length} topics`);
     extracting = false;
     nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
     logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
     setTimeout(runLoop, EXTRACT_INTERVAL_MS);
   };
+
   setTimeout(runLoop, 10_000);
   nextCycleAt = Date.now() + 10_000;
 } else {
