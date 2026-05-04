@@ -7,6 +7,7 @@ import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
 import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager } from '@hive/core';
 import { runAutonomousExtraction } from '@hive/agent';
+import { discoverObjective } from '@hive/agent/src/objective_discovery.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -156,6 +157,18 @@ app.get('/api/status', async () => {
   };
 });
 
+// ── Resolve objective (explicit or auto-discovered) ──────────────────────────
+let resolvedObjective = HIVE_OBJECTIVE;
+if (!resolvedObjective && GEMINI_KEY) {
+  logEvent('start', 'No HIVE_OBJECTIVE set — scanning network to discover a topic...');
+  try {
+    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY);
+    logEvent('start', `Auto-discovered objective: "${resolvedObjective}"`);
+  } catch (e: any) {
+    logEvent('error', `Objective discovery failed: ${e.message}`);
+  }
+}
+
 // ── Activity log (ring buffer, last 50 events) ───────────────────────────────
 interface ActivityEvent { ts: string; type: 'start'|'fragment'|'done'|'error'|'sync'; msg: string; }
 const activityLog: ActivityEvent[] = [];
@@ -170,8 +183,8 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
 }
 
 // ── Autonomous extraction loop ───────────────────────────────────────────────
-if (HIVE_OBJECTIVE) {
-  logEvent('start', `Autonomous mode active — "${HIVE_OBJECTIVE}"`);
+if (resolvedObjective) {
+  logEvent('start', `Autonomous mode active — "${resolvedObjective}"`);
 
   const runLoop = async () => {
     extracting = true;
@@ -179,7 +192,7 @@ if (HIVE_OBJECTIVE) {
     logEvent('start', `Starting extraction cycle (budget: ${EXTRACT_MAX_FRAGMENTS} fragments)`);
     try {
       const result = await runAutonomousExtraction(
-        HIVE_OBJECTIVE,
+        resolvedObjective,
         { maxFragments: EXTRACT_MAX_FRAGMENTS, maxMinutes: 8 },
         knowledgeStore,
         embedderUrl,
@@ -197,7 +210,7 @@ if (HIVE_OBJECTIVE) {
   setTimeout(runLoop, 10_000);
   nextCycleAt = Date.now() + 10_000;
 } else {
-  logEvent('start', 'No HIVE_OBJECTIVE set — autonomous extraction disabled');
+  logEvent('start', 'No HIVE_OBJECTIVE and no GEMINI_API_KEY — autonomous extraction disabled');
 }
 
 // ── GET /api/activity ─────────────────────────────────────────────────────────

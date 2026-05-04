@@ -9,11 +9,33 @@ Red P2P de BEEs (nodos) que extraen, firman y sincronizan conocimiento científi
 
 ```bash
 cd /workspaces/codespaces-blank/hive
-bash start.sh
+bash start.sh               # arranca todas las BEEs en bees/
+bash start.sh bee-rag       # arranca solo una BEE concreta
+bash start.sh bee-rag bee-llm bee-games-es  # varias específicas
 ```
 
 La primera vez tarda ~30s (carga el modelo de embeddings de 80MB).  
 Las siguientes veces es instantáneo — el script detecta qué ya está corriendo.
+
+### Crear una nueva BEE
+
+```bash
+cat > bees/mi-bee.env << 'EOF'
+BEE_NAME=mi-bee
+BEE_PORT=8083
+BEE_EMBEDDER_PORT=7703
+BEE_DATA_DIR=../../data/mi-bee
+BEE_PEER=http://127.0.0.1:8080
+# HIVE_OBJECTIVE es opcional — si no se pone, la BEE descubre su tema sola
+# HIVE_OBJECTIVE="Busca papers sobre computación cuántica"
+HIVE_EXTRACT_MAX_FRAGMENTS=20
+HIVE_EXTRACT_INTERVAL_MS=300000
+EOF
+
+bash start.sh mi-bee
+```
+
+Si `HIVE_OBJECTIVE` no está definido, la BEE escanea la red, ve qué temas ya están cubiertos, y usa Gemini para elegir un área complementaria de forma autónoma.
 
 ---
 
