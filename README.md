@@ -1,155 +1,136 @@
-# H.I.V.E — Heuristic Intelligent Vector Extraction
+# HIVE — Heuristic Intelligent Vector Extraction
 
 Base de conocimiento descentralizada, verificada y semánticamente estructurada para LLMs.  
-Red P2P de BEEs (nodos) que extraen, firman y sincronizan conocimiento científico en tiempo real.
+Red P2P de BEEs que extraen, firman y sincronizan conocimiento de forma autónoma.
+
+> *Lo que Wikipedia es para humanos, pero para máquinas.*
 
 ---
 
-## Arranque rápido
+## Inicio rápido (producción)
 
 ```bash
-cd /workspaces/codespaces-blank/hive
-bash start.sh               # arranca todas las BEEs en bees/
-bash start.sh bee-rag       # arranca solo una BEE concreta
-bash start.sh bee-rag bee-llm bee-games-es  # varias específicas
+# 1. Clona el repositorio
+git clone https://github.com/capybarist/hive.git && cd hive
+
+# 2. Instala dependencias
+npm install
+pip install -r packages/embeddings/requirements.txt
+
+# 3. Configura tu API key
+echo "GEMINI_API_KEY=tu_clave_aqui" > .env
+
+# 4. Lanza tu BEE
+bash hive.sh
 ```
 
-La primera vez tarda ~30s (carga el modelo de embeddings de 80MB).  
-Las siguientes veces es instantáneo — el script detecta qué ya está corriendo.
-
-### Crear una nueva BEE
-
-```bash
-cat > bees/mi-bee.env << 'EOF'
-BEE_NAME=mi-bee
-BEE_PORT=8083
-BEE_EMBEDDER_PORT=7703
-BEE_DATA_DIR=../../data/mi-bee
-BEE_PEER=http://127.0.0.1:8080
-# HIVE_OBJECTIVE es opcional — si no se pone, la BEE descubre su tema sola
-# HIVE_OBJECTIVE="Busca papers sobre computación cuántica"
-HIVE_EXTRACT_MAX_FRAGMENTS=20
-HIVE_EXTRACT_INTERVAL_MS=300000
-EOF
-
-bash start.sh mi-bee
-```
-
-**`HIVE_OBJECTIVE` es opcional.** Si no se define, la BEE:
-1. Escanea sus peers y ve qué temas ya están cubiertos
-2. Usa Gemini para elegir un área complementaria que nadie cubre aún
-3. Se especializa en esa área automáticamente
-
-Solo la primera BEE de la red (sin peers) necesita un objetivo seed.
-Las demás se auto-asignan un nicho basándose en lo que observan.
+La BEE arranca, escanea la red, **elige un tema libre del árbol de conocimiento** y empieza a indexar. Sin configuración manual de temas.
 
 ---
 
-## Acceso a la UI
+## Opciones de configuración (todas opcionales)
 
-Una vez arrancado, abre la pestaña **Ports** en VS Code y haz clic en el globo 🌐 junto a los puertos:
+```bash
+# Conectar a una red existente
+HIVE_BOOTSTRAP=http://peer.example.com bash hive.sh
 
-| Puerto | BEE | Tema de extracción |
-|--------|-----|-------------------|
-| `8080` | Node A | RAG, vector databases, semantic search |
-| `8081` | Node B | LLM fine-tuning, RLHF, instruction following |
+# Puerto personalizado
+HIVE_PORT=8081 HIVE_EMBEDDER_PORT=7701 bash hive.sh
 
-Si los puertos no aparecen, añádelos manualmente con **"Forward a Port"** y ponlos en **Public**.
+# Directorio de datos (default: ~/.hive)
+HIVE_DATA_DIR=/data/my-bee bash hive.sh
 
-**URLs directas** (este Codespace):
-```
-Node A → https://fantastic-orbit-4q7wx7jw4j45275r5-8080.app.github.dev
-Node B → https://fantastic-orbit-4q7wx7jw4j45275r5-8081.app.github.dev
+# Sugerir un dominio preferido (no obligatorio)
+# La BEE seguirá siendo autónoma — solo prioriza este dominio si hay hojas libres
+BEE_TOPIC_DOMAIN=health bash hive.sh
 ```
 
 ---
 
-## Extracción autónoma
+## Cómo funciona
 
-Cada BEE extrae conocimiento de forma autónoma usando Gemini 2.5 Flash:
-
-- **Node A** busca papers sobre RAG, búsqueda vectorial y bases de datos semánticas
-- **Node B** busca papers sobre fine-tuning de LLMs, RLHF y alineamiento
-
-El ciclo corre cada 30 minutos. Para lanzarlo manualmente:
-
-```bash
-# Node A (RAG)
-cd packages/agent
-EMBEDDER_URL=http://127.0.0.1:7700 \
-HIVE_OBJECTIVE="retrieval augmented generation knowledge graphs" \
-HIVE_MAX_FRAGMENTS=10 \
-npx tsx src/autonomous_extractor.ts
-
-# Node B (fine-tuning) — en otra terminal
-cd packages/agent
-HIVE_DATA_DIR=../../data_b \
-EMBEDDER_URL=http://127.0.0.1:7701 \
-HIVE_OBJECTIVE="large language model fine tuning RLHF alignment" \
-HIVE_MAX_FRAGMENTS=10 \
-npx tsx src/autonomous_extractor.ts
 ```
+BEE arranca
+  → Lee data/topic_tree.json (95 temas disponibles)
+  → Escanea peers: qué temas ya están cubiertos
+  → Reclama 3 temas no cubiertos (o con menos cobertura)
+  → Ciclo cada 5 min: extrae fragmentos para cada tema reclamado
+  → Sincroniza automáticamente con otros BEEs cada 8s
+  → Renueva claims (TTL 30min) para mantener su territorio
+```
+
+Cada BEE decide sola qué indexar. Nadie le dice qué hacer.
 
 ---
 
 ## Arquitectura
 
 ```
-BEE A (:8080)                    BEE B (:8081)
-├── Embedder Python :7700         ├── Embedder Python :7701
-├── KnowledgeStore (Hypercore)    ├── KnowledgeStore (Hypercore)
-├── HNSW index (data/vectors/)    ├── HNSW index (data_b/vectors/)
-├── P2P (Hyperswarm)              ├── P2P (Hyperswarm)
-└── Autonomous extractor          └── Autonomous extractor
-         │                                 │
-         └──────── sync cada 8s ───────────┘
+packages/
+  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P, identidad, topic registry
+  agent/       — Extractor autónomo (Gemini function calling), extractor reactivo
+  embeddings/  — Servidor Python: all-MiniLM-L6-v2 + HNSW
+  api/         — Fastify API + servidor UI
+  ui/          — Interfaz web (HTML/JS vanilla)
+
+data/
+  topic_tree.json   — árbol de conocimiento (95 temas, 9 dominios)
+  bee-*/            — datos runtime por BEE (generados automáticamente, no en git)
+
+bees/               — configs para testing multi-BEE local (no producción)
 ```
 
-**Flujo de conocimiento:**
-1. Gemini decide qué buscar → arXiv API → papers validados con CrossRef
-2. Fragmentos firmados (ed25519) → Hypercore (append-only, verificable)
-3. Vectores → HNSW local para búsqueda semántica
-4. SyncManager propaga fragmentos entre BEEs cada 8s
-5. Consulta humana → HNSW search → Gemini sintetiza respuesta citando fuentes
+---
+
+## Testing multi-BEE local
+
+Para probar varios BEEs en la misma máquina:
+
+```bash
+# Lanza todos los BEEs de bees/*.env
+bash start.sh
+
+# O BEEs específicos
+bash start.sh bee-1 bee-2 bee-3
+
+# Añadir un BEE nuevo
+cat > bees/bee-4.env << 'EOF'
+BEE_NAME=bee-4
+BEE_PORT=8083
+BEE_EMBEDDER_PORT=7703
+BEE_DATA_DIR=../../data/bee-4
+BEE_PEER=http://127.0.0.1:8080
+HIVE_EXTRACT_MAX_FRAGMENTS=20
+HIVE_EXTRACT_INTERVAL_MS=300000
+EOF
+bash start.sh bee-4
+```
+
+---
+
+## Estado v0.1
+
+| Módulo | Descripción | Estado |
+|--------|-------------|--------|
+| 1 | Embeddings + HNSW local | ✅ |
+| 2 | Extractor reactivo (arXiv + RSS) | ✅ |
+| 3 | Hypercore + Hyperbee + Autobase | ✅ |
+| 4 | Red P2P (Hyperswarm + sync) | ✅ |
+| 5 | API vectorial | ✅ |
+| 6 | UI con Gemini | ✅ |
+| 7 | Extractor autónomo + topic tree + claim registry | ✅ |
+
+**Fuera de v0.1 (v0.2):**
+- Factor de replicación ≥ 3 (enforcement automático)
+- Enrutamiento semántico por centroide (VecDHT)
+- Sistema de tokens
+- Resistencia a ataques Sybil
 
 ---
 
 ## Logs
 
 ```bash
-tail -f /tmp/api_a.log      # Node A API + extractor autónomo
-tail -f /tmp/api_b.log      # Node B API + extractor autónomo
-tail -f /tmp/emb_a.log      # Embedder A
-tail -f /tmp/emb_b.log      # Embedder B
+tail -f /tmp/hive_api.log        # actividad de la BEE
+tail -f /tmp/hive_embedder.log   # servidor de embeddings
 ```
-
----
-
-## Estructura del proyecto
-
-```
-packages/
-  core/       — KnowledgeStore (Hypercore+Hyperbee+Autobase), P2P, identidad
-  agent/      — Extractor reactivo + autónomo (Gemini function calling)
-  embeddings/ — Servidor Python: all-MiniLM-L6-v2 + HNSW
-  api/        — Fastify API + UI server
-  ui/         — Interfaz web (HTML/JS vanilla)
-data/         — BEE A: corestore/, vectors/, identity/
-data_b/       — BEE B: corestore/, vectors/, identity/
-start.sh      — Script de arranque único
-```
-
----
-
-## Variables de entorno clave
-
-| Variable | Dónde | Descripción |
-|---|---|---|
-| `GEMINI_API_KEY` | `.env` | API key de Google Gemini |
-| `HIVE_OBJECTIVE` | `.env` / `.env.node-b` | Objetivo de extracción autónoma |
-| `HIVE_PORT` | `.env.node-b` | Puerto del API server (default: 8080) |
-| `HIVE_DATA_DIR` | `.env.node-b` | Directorio de datos de la BEE |
-| `HIVE_PEER` | `.env.node-b` | URL del peer de bootstrap |
-| `EMBEDDER_URL` | `.env.node-b` | URL del servidor de embeddings |
-| `HIVE_EXTRACT_MAX_FRAGMENTS` | `.env` | Fragmentos por ciclo (default: 8) |
-| `HIVE_EXTRACT_INTERVAL_MS` | `.env` | Intervalo entre ciclos (default: 1800000 = 30min) |
