@@ -35,7 +35,13 @@ EOF
 bash start.sh mi-bee
 ```
 
-Si `HIVE_OBJECTIVE` no está definido, la BEE escanea la red, ve qué temas ya están cubiertos, y usa Gemini para elegir un área complementaria de forma autónoma.
+**`HIVE_OBJECTIVE` es opcional.** Si no se define, la BEE:
+1. Escanea sus peers y ve qué temas ya están cubiertos
+2. Usa Gemini para elegir un área complementaria que nadie cubre aún
+3. Se especializa en esa área automáticamente
+
+Solo la primera BEE de la red (sin peers) necesita un objetivo seed.
+Las demás se auto-asignan un nicho basándose en lo que observan.
 
 ---
 

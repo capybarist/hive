@@ -6,8 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
 import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager } from '@hive/core';
-import { runAutonomousExtraction } from '@hive/agent';
-import { discoverObjective } from '@hive/agent/src/objective_discovery.js';
+import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -157,19 +156,7 @@ app.get('/api/status', async () => {
   };
 });
 
-// ── Resolve objective (explicit or auto-discovered) ──────────────────────────
-let resolvedObjective = HIVE_OBJECTIVE;
-if (!resolvedObjective && GEMINI_KEY) {
-  logEvent('start', 'No HIVE_OBJECTIVE set — scanning network to discover a topic...');
-  try {
-    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY);
-    logEvent('start', `Auto-discovered objective: "${resolvedObjective}"`);
-  } catch (e: any) {
-    logEvent('error', `Objective discovery failed: ${e.message}`);
-  }
-}
-
-// ── Activity log (ring buffer, last 50 events) ───────────────────────────────
+// ── Activity log (ring buffer) — must be declared before logEvent ────────────
 interface ActivityEvent { ts: string; type: 'start'|'fragment'|'done'|'error'|'sync'; msg: string; }
 const activityLog: ActivityEvent[] = [];
 let nextCycleAt: number | null = null;
@@ -180,6 +167,18 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
   activityLog.push(ev);
   if (activityLog.length > 50) activityLog.shift();
   console.log(`[${type}] ${msg}`);
+}
+
+// ── Resolve objective (explicit config or auto-discovered from network) ───────
+let resolvedObjective = HIVE_OBJECTIVE;
+if (!resolvedObjective && GEMINI_KEY) {
+  logEvent('start', 'No HIVE_OBJECTIVE set — scanning network to discover a topic...');
+  try {
+    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY);
+    logEvent('start', `Auto-discovered objective: "${resolvedObjective}"`);
+  } catch (e: any) {
+    logEvent('error', `Objective discovery failed: ${e.message}`);
+  }
 }
 
 // ── Autonomous extraction loop ───────────────────────────────────────────────
