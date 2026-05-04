@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager, ClaimRegistry } from '@hive/core';
+import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -15,6 +16,9 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const PEER_API = process.env.HIVE_PEER ?? '';
+const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
+const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000); // 30min
+const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 10);
 
 // ── Bootstrap node & P2P ────────────────────────────────────────────────────
 const identity = loadOrCreateIdentity(IDENTITY_DIR);
@@ -151,6 +155,135 @@ app.get('/api/status', async () => {
     peers: p2pNode.peerCount,
   };
 });
+
+// ── Activity log (ring buffer) — must be declared before logEvent ────────────
+interface ActivityEvent { ts: string; type: 'start'|'fragment'|'done'|'error'|'sync'; msg: string; }
+const activityLog: ActivityEvent[] = [];
+let nextCycleAt: number | null = null;
+let extracting = false;
+
+function logEvent(type: ActivityEvent['type'], msg: string) {
+  const ev: ActivityEvent = { ts: new Date().toISOString(), type, msg };
+  activityLog.push(ev);
+  if (activityLog.length > 50) activityLog.shift();
+  console.log(`[${type}] ${msg}`);
+}
+
+// ── Resolve objective (explicit config or auto-discovered from network) ───────
+const claimRegistry = new ClaimRegistry(DATA_DIR);
+await claimRegistry.ready();
+
+let resolvedObjective = HIVE_OBJECTIVE;
+if (!resolvedObjective && GEMINI_KEY) {
+  logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
+  try {
+    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry);
+    logEvent('start', `Assigned objective: "${resolvedObjective}"`);
+  } catch (e: any) {
+    logEvent('error', `Topic assignment failed: ${e.message}`);
+  }
+}
+
+// Register claims in the registry (even for explicit objectives, claim matching topics)
+if (resolvedObjective) {
+  try {
+    const { loadTree, assignTopics: _assign } = await import('@hive/core');
+    const leaves = loadTree();
+    const objLower = resolvedObjective.toLowerCase();
+    // Find leaves whose keywords match the objective
+    const matched = leaves.filter(leaf =>
+      leaf.keywords.some(kw => objLower.includes(kw.toLowerCase())) ||
+      objLower.includes(leaf.name_en.toLowerCase())
+    ).slice(0, 5);
+    for (const leaf of matched) {
+      await claimRegistry.claim(leaf.id, identity.nodeId);
+    }
+    if (matched.length) {
+      logEvent('start', `Registered claims for ${matched.length} matching topics in knowledge tree`);
+    }
+  } catch { /* topic tree not available yet */ }
+}
+
+// ── Autonomous extraction loop (multi-topic) ─────────────────────────────────
+if (resolvedObjective) {
+  logEvent('start', `Autonomous mode active`);
+
+  const runLoop = async () => {
+    extracting = true;
+    nextCycleAt = null;
+
+    // Get current claims for this BEE — may have grown since last cycle
+    let claims = await claimRegistry.getClaimsForBee(identity.nodeId);
+    if (!claims.length) {
+      // Fallback: single topic from resolved objective
+      claims = [{ topicId: 'default', beeId: identity.nodeId, claimedAt: '', renewedAt: '', fragmentCount: 0, isPrimary: true }];
+    }
+
+    const fragsPerTopic = Math.max(3, Math.floor(EXTRACT_MAX_FRAGMENTS / claims.length));
+    let totalIndexed = 0;
+    let totalTokens = 0;
+
+    logEvent('start', `Starting cycle: ${claims.length} topic(s), ~${fragsPerTopic} fragments each`);
+
+    for (const claim of claims) {
+      // Build focused objective for this specific topic
+      let topicObjective = resolvedObjective;
+      if (claim.topicId !== 'default') {
+        try {
+          const { loadTree, buildObjectiveFromTopics } = await import('@hive/core');
+          const leaf = loadTree().find(t => t.id === claim.topicId);
+          if (leaf) topicObjective = buildObjectiveFromTopics([leaf]);
+        } catch { /* tree unavailable, use resolved */ }
+      }
+
+      logEvent('start', `Topic: ${claim.topicId}`);
+      try {
+        const result = await runAutonomousExtraction(
+          topicObjective,
+          { maxFragments: fragsPerTopic, maxMinutes: Math.ceil(8 / claims.length) },
+          knowledgeStore,
+          embedderUrl,
+          (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
+        );
+        totalIndexed += result.fragmentsIndexed;
+        totalTokens += result.budget.tokensUsed;
+
+        // Renew claim with updated fragment count
+        await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
+      } catch (e: any) {
+        logEvent('error', `Topic ${claim.topicId}: ${e.message}`);
+      }
+    }
+
+    logEvent('done', `Cycle complete: ${totalIndexed} fragments | ${totalTokens} tokens | ${claims.length} topics`);
+    extracting = false;
+    nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
+    logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
+    setTimeout(runLoop, EXTRACT_INTERVAL_MS);
+  };
+
+  setTimeout(runLoop, 10_000);
+  nextCycleAt = Date.now() + 10_000;
+} else {
+  logEvent('start', 'No HIVE_OBJECTIVE and no GEMINI_API_KEY — autonomous extraction disabled');
+}
+
+// ── GET /api/claims ───────────────────────────────────────────────────────────
+app.get('/api/claims', async () => {
+  const active = await claimRegistry.getAllActiveClaims();
+  const claims = Object.entries(active).flatMap(([topicId, beeIds]) =>
+    beeIds.map(beeId => ({ topicId, beeId, fragmentCount: 0 }))
+  );
+  return { claims, nodeId: identity.nodeId };
+});
+
+// ── GET /api/activity ─────────────────────────────────────────────────────────
+app.get('/api/activity', async () => ({
+  events: [...activityLog].reverse(),
+  extracting,
+  nextCycleAt,
+  objective: HIVE_OBJECTIVE || null,
+}));
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
