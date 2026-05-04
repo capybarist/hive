@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager, ClaimRegistry } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -170,15 +170,38 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
 }
 
 // ── Resolve objective (explicit config or auto-discovered from network) ───────
+const claimRegistry = new ClaimRegistry(DATA_DIR);
+await claimRegistry.ready();
+
 let resolvedObjective = HIVE_OBJECTIVE;
 if (!resolvedObjective && GEMINI_KEY) {
-  logEvent('start', 'No HIVE_OBJECTIVE set — scanning network to discover a topic...');
+  logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
-    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY);
-    logEvent('start', `Auto-discovered objective: "${resolvedObjective}"`);
+    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry);
+    logEvent('start', `Assigned objective: "${resolvedObjective}"`);
   } catch (e: any) {
-    logEvent('error', `Objective discovery failed: ${e.message}`);
+    logEvent('error', `Topic assignment failed: ${e.message}`);
   }
+}
+
+// Register claims in the registry (even for explicit objectives, claim matching topics)
+if (resolvedObjective) {
+  try {
+    const { loadTree, assignTopics: _assign } = await import('@hive/core');
+    const leaves = loadTree();
+    const objLower = resolvedObjective.toLowerCase();
+    // Find leaves whose keywords match the objective
+    const matched = leaves.filter(leaf =>
+      leaf.keywords.some(kw => objLower.includes(kw.toLowerCase())) ||
+      objLower.includes(leaf.name_en.toLowerCase())
+    ).slice(0, 5);
+    for (const leaf of matched) {
+      await claimRegistry.claim(leaf.id, identity.nodeId);
+    }
+    if (matched.length) {
+      logEvent('start', `Registered claims for ${matched.length} matching topics in knowledge tree`);
+    }
+  } catch { /* topic tree not available yet */ }
 }
 
 // ── Autonomous extraction loop ───────────────────────────────────────────────
@@ -211,6 +234,15 @@ if (resolvedObjective) {
 } else {
   logEvent('start', 'No HIVE_OBJECTIVE and no GEMINI_API_KEY — autonomous extraction disabled');
 }
+
+// ── GET /api/claims ───────────────────────────────────────────────────────────
+app.get('/api/claims', async () => {
+  const active = await claimRegistry.getAllActiveClaims();
+  const claims = Object.entries(active).flatMap(([topicId, beeIds]) =>
+    beeIds.map(beeId => ({ topicId, beeId, fragmentCount: 0 }))
+  );
+  return { claims, nodeId: identity.nodeId };
+});
 
 // ── GET /api/activity ─────────────────────────────────────────────────────────
 app.get('/api/activity', async () => ({

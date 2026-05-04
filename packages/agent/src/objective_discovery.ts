@@ -1,97 +1,61 @@
 /**
- * Objective Discovery — P2P topic self-assignment
+ * Objective Discovery — P2P topic self-assignment using the topic tree
  *
- * When a BEE starts with no HIVE_OBJECTIVE, this module:
- * 1. Queries known peers for their current knowledge topics
- * 2. Asks Gemini to suggest a complementary topic not yet covered
- * 3. Returns that as the BEE's running objective
- *
- * No central authority. The BEE reads observable network state and decides.
+ * When a BEE starts with no HIVE_OBJECTIVE:
+ * 1. Reads the topic_tree.json (the knowledge map)
+ * 2. Checks the claim_registry (what's already covered by the network)
+ * 3. Assigns uncovered/under-covered topics to this BEE
+ * 4. Returns a concrete extraction objective
  */
 
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+import { ClaimRegistry, assignTopics, buildObjectiveFromTopics } from '@hive/core';
 
-export interface NetworkTopics {
-  peerUrl: string;
-  nodeId: string;
-  titles: string[];
-  count: number;
+export async function discoverObjective(
+  peerApis: string[],
+  _apiKey: string,
+  beeId: string,
+  dataDir: string,
+  capacity = 3,
+  existingRegistry?: ClaimRegistry,  // reuse if already open
+): Promise<string> {
+  const ownRegistry = !existingRegistry;
+  const registry = existingRegistry ?? new ClaimRegistry(dataDir);
+  if (!existingRegistry) await registry.ready();
+
+  try {
+    // Sync remote claims from peers before assigning
+    for (const peerUrl of peerApis) {
+      try {
+        const res = await fetch(`${peerUrl}/api/claims`, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) {
+          const data = (await res.json()) as { claims: Array<{ topicId: string; beeId: string; fragmentCount: number }> };
+          for (const c of data.claims ?? []) {
+            if (c.beeId !== beeId) {
+              await registry.claim(c.topicId, c.beeId, c.fragmentCount);
+            }
+          }
+        }
+      } catch { /* peer offline */ }
+    }
+
+    const topics = await assignTopics(beeId, registry, capacity);
+    if (!topics.length) return 'Find recent scientific content about artificial intelligence and machine learning';
+    console.log(`[discovery] Assigned ${topics.length} topic(s): ${topics.map(t => t.id).join(', ')}`);
+    return buildObjectiveFromTopics(topics);
+  } finally {
+    if (ownRegistry) await registry.close();
+  }
 }
 
-export async function scanNetworkTopics(peerApis: string[]): Promise<NetworkTopics[]> {
-  const results: NetworkTopics[] = [];
+export async function scanNetworkTopics(peerApis: string[]) {
+  const results: Array<{ peerUrl: string; nodeId: string; titles: string[]; count: number }> = [];
   for (const url of peerApis) {
     try {
       const res = await fetch(`${url}/api/topics`, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) continue;
       const data = (await res.json()) as { nodes: Array<{ nodeId: string; titles: string[]; count: number }> };
-      for (const node of data.nodes ?? []) {
-        results.push({ peerUrl: url, ...node });
-      }
+      for (const node of data.nodes ?? []) results.push({ peerUrl: url, ...node });
     } catch {}
   }
   return results;
-}
-
-export async function discoverObjective(
-  peerApis: string[],
-  apiKey: string,
-): Promise<string> {
-  // Step 1: gather what the network already knows
-  const networkTopics = await scanNetworkTopics(peerApis);
-
-  if (!networkTopics.length) {
-    // No peers — bootstrap with a broad foundational topic
-    return 'Find recent scientific papers about artificial intelligence, machine learning, and deep learning fundamentals';
-  }
-
-  // Step 2: summarise existing coverage
-  const covered = networkTopics
-    .flatMap(n => n.titles.slice(0, 5))
-    .join('\n- ');
-
-  const prompt = `You are helping a new HIVE knowledge BEE decide what domain to specialise in.
-
-The HIVE network already has BEEs covering these topics (based on indexed paper titles):
-- ${covered}
-
-Your task: suggest ONE specific research area that would COMPLEMENT what the network already has, filling a knowledge gap. It should be:
-- A real scientific/technical domain with active research
-- Different enough from the existing topics to add value
-- Specific enough to guide a focused search agent
-
-Reply with ONLY a single sentence describing the objective, like:
-"Find recent papers about [topic]"
-
-Do not explain your reasoning. Just the objective sentence.`;
-
-  try {
-    const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 100 },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!res.ok) throw new Error(`Gemini ${res.status}`);
-    const data = (await res.json()) as any;
-    const objective = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
-    if (objective) return objective;
-  } catch (e: any) {
-    console.warn(`[objective] Gemini error: ${e.message} — using fallback`);
-  }
-
-  // Fallback: pick a random gap topic
-  const fallbacks = [
-    'Find recent papers about quantum computing algorithms and error correction',
-    'Find recent papers about climate change modeling and carbon capture',
-    'Find recent papers about computational biology and protein structure prediction',
-    'Find recent papers about robotics, autonomous systems and reinforcement learning',
-    'Find recent papers about cybersecurity, adversarial attacks and privacy-preserving ML',
-  ];
-  return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
