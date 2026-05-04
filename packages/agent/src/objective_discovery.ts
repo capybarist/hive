@@ -16,7 +16,8 @@ export async function discoverObjective(
   beeId: string,
   dataDir: string,
   capacity = 3,
-  existingRegistry?: ClaimRegistry,  // reuse if already open
+  existingRegistry?: ClaimRegistry,
+  preferDomain?: string,  // e.g. "current_events", "health"
 ): Promise<string> {
   const ownRegistry = !existingRegistry;
   const registry = existingRegistry ?? new ClaimRegistry(dataDir);
@@ -38,7 +39,7 @@ export async function discoverObjective(
       } catch { /* peer offline */ }
     }
 
-    const topics = await assignTopics(beeId, registry, capacity);
+    const topics = await assignTopics(beeId, registry, capacity, preferDomain);
     if (!topics.length) return 'Find recent scientific content about artificial intelligence and machine learning';
     console.log(`[discovery] Assigned ${topics.length} topic(s): ${topics.map(t => t.id).join(', ')}`);
     return buildObjectiveFromTopics(topics);

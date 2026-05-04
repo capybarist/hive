@@ -1,0 +1,151 @@
+{
+  "meta": {
+    "0": {
+      "id": "2603.26777v1_c0",
+      "source": "arXiv:2603.26777v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "BHCast: Unlocking Black Hole Plasma Dynamics from a Single Blurry Image with Long-Term Forecasting",
+      "text": "BHCast: Unlocking Black Hole Plasma Dynamics from a Single Blurry Image with Long-Term Forecasting. The Event Horizon Telescope (EHT) delivered the first image of a black hole by capturing the light from its surrounding accretion flow, revealing structure but not dynamics. Simulations of black hole accretion dynamics are essential for interpreting EHT images but costly to generate and impractical for inference. Motivated by this bottleneck, BHCast presents a framework for forecasting black hole plasma dynamics from a single, blurry snapshot, such as those captured by the EHT. At its core, BHCa"
+    },
+    "1": {
+      "id": "2604.09543v1_c0",
+      "source": "arXiv:2604.09543v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "ANTIC: Adaptive Neural Temporal In-situ Compressor",
+      "text": "ANTIC: Adaptive Neural Temporal In-situ Compressor. The persistent storage requirements for high-resolution, spatiotemporally evolving fields governed by large-scale and high-dimensional partial differential equations (PDEs) have reached the petabyte-to-exabyte scale. Transient simulations modeling Navier-Stokes equations, magnetohydrodynamics, plasma physics, or binary black hole mergers generate data volumes that are prohibitive for modern high-performance computing (HPC) infrastructures. To address this bottleneck, we introduce ANTIC (Adaptive"
+    },
+    "2": {
+      "id": "2604.25208v1_c0",
+      "source": "arXiv:2604.25208v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Towards Seamless Lunar Mosaics: Deep Radiometric Normalization for Cross-Sensor Orbital Imagery Using Chandrayaan-2 TMC Data",
+      "text": "Towards Seamless Lunar Mosaics: Deep Radiometric Normalization for Cross-Sensor Orbital Imagery Using Chandrayaan-2 TMC Data. Radiometric inconsistencies remain a major challenge in generating seamless lunar mosaics from multi-mission orbital imagery due to variability in illumination geometry, sensor characteristics, and acquisition conditions. This paper presents a deep learning-based radiometric normalization framework for multi-mission lunar mosaics constructed primarily from ISRO's Chandrayaan-2 Terrain Mapping Camera (TMC) data, supplemented with auxiliary imagery from the SELENE (Kaguya) mission. The proposed ap"
+    },
+    "3": {
+      "id": "2604.25345v1_c0",
+      "source": "arXiv:2604.25345v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Plausible but Wrong: A case study on Agentic Failures in Astrophysical Workflows",
+      "text": "Plausible but Wrong: A case study on Agentic Failures in Astrophysical Workflows. Agentic AI systems are increasingly being integrated into scientific workflows, yet their behavior under realistic conditions remains insufficiently understood. We evaluate CMBAgent across two workflow paradigms and eighteen astrophysical tasks. In the One-Shot setting, access to domain-specific context yields an approximately ~6x performance improvement (0.85 vs. ~0 without context), with the primary failure mode being silent incorrect computation - syntactically valid code that produces plausi"
+    },
+    "4": {
+      "id": "2604.25985v1_c0",
+      "source": "arXiv:2604.25985v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Learning Neural Operator Surrogates for the Black Hole Accretion Code",
+      "text": "Learning Neural Operator Surrogates for the Black Hole Accretion Code. General-relativistic magnetohydrodynamic (GR-MHD) simulations are essential for studying black hole accretion, relativistic jets, and magnetic reconnection, yet their computational cost severely limits systematic parameter exploration. We investigate neural operator surrogates for two astrophysically relevant simulation scenarios produced by the Black Hole Accretion Code (\\texttt{BHAC}). First, a Physics Informed Fourier Neural Operator (PINO) is trained on the special-relativistic resistive MHD"
+    },
+    "5": {
+      "id": "2604.27368v1_c0",
+      "source": "arXiv:2604.27368v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Stable but Wrong: An Inference Limit in Galactic Archaeology",
+      "text": "Stable but Wrong: An Inference Limit in Galactic Archaeology. Statistical inference in observational science typically relies on a fundamental assumption: as sample size increases and uncertainties decrease, the inferred results should converge to the true physical quantities. This assumption underpins the notion that big data lead to more reliable conclusions. In Galactic archaeology, stellar ages inferred from spectroscopic surveys are widely used to reconstruct the formation history of the Milky Way disk. The age metallicity relation (AMR) and its deriv"
+    },
+    "6": {
+      "id": "2604.27593v1_c0",
+      "source": "arXiv:2604.27593v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "An Extended Evaluation Split for DeepSpaceYoloDataset",
+      "text": "An Extended Evaluation Split for DeepSpaceYoloDataset. Recent technological advances in astronomy, particularly the growing popularity of smart telescopes for the general public, make it possible to develop highly effective detection solutions that are accessible to a wide audience, rather than being reserved for major scientific observatories. Published in 2023, DeepSpaceYoloDataset is a collection of annotated images created to train YOLO-based models for detecting Deep Sky Objects, particularly suited for Electronically Assisted Astronomy. In thi"
+    },
+    "7": {
+      "id": "2603.24638v1_c0",
+      "source": "arXiv:2603.24638v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "How unconstrained machine-learning models learn physical symmetries",
+      "text": "How unconstrained machine-learning models learn physical symmetries. The requirement of generating predictions that exactly fulfill the fundamental symmetry of the corresponding physical quantities has profoundly shaped the development of machine-learning models for physical simulations. In many cases, models are built using constrained mathematical forms that ensure that symmetries are enforced exactly. However, unconstrained models that do not obey rotational symmetries are often found to have competitive performance, and to be able to \\emph{learn} to a high le"
+    },
+    "8": {
+      "id": "2603.28804v1_c0",
+      "source": "arXiv:2603.28804v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Generalizable Foundation Models for Calorimetry via Mixtures-of-Experts and Parameter Efficient Fine Tuning",
+      "text": "Generalizable Foundation Models for Calorimetry via Mixtures-of-Experts and Parameter Efficient Fine Tuning. Modern particle physics experiments face an increasing demand for high-fidelity detector simulation as luminosities rise and computational requirements approach the limits of available resources. Deep generative models have emerged as promising surrogates for traditional Monte Carlo simulation, with recent advances drawing inspiration from large language models (LLM) and next-token prediction paradigms. In this work, we introduce a generalizable foundation model for calorimetry built on next-tok"
+    },
+    "9": {
+      "id": "2604.12364v1_c0",
+      "source": "arXiv:2604.12364v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Cross-Domain Transfer with Particle Physics Foundation Models: From Jets to Neutrino Interactions",
+      "text": "Cross-Domain Transfer with Particle Physics Foundation Models: From Jets to Neutrino Interactions. Future AI-based studies in particle physics will likely start from a foundation model to accelerate training and enhance sensitivity. As a step towards a general-purpose foundation model for particle physics, we investigate whether the OmniLearned foundation model pre-trained on diverse high-$Q^2$ simulated and real $pp$ and $ep$ collisions can be effectively transferred to a few-GeV fixed-target neutrino experiment. We process MINERvA neutrino--nucleus scattering events and evaluate pre-trained"
+    },
+    "10": {
+      "id": "2603.07940v1_c0",
+      "source": "arXiv:2603.07940v1",
+      "doi": "10.15302/frontphys.2026.096401",
+      "doi_valid": true,
+      "confidence": 0.95,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "AI Agents, Language, Deep Learning and the Next Revolution in Science",
+      "text": "AI Agents, Language, Deep Learning and the Next Revolution in Science. Modern science is reaching a critical inflection point. Instruments across disciplines, from particle physics and astronomy to genomics and climate modeling, now produce data of such scale, diversity, and interdependence that traditional analytical methods can no longer keep pace. This growing imbalance between data generation and data understanding signals the need for a new scientific paradigm. We propose that intelligent, human-supervised AI agents operating over deep-learning algorithms, rep"
+    },
+    "11": {
+      "id": "2603.13970v2_c0",
+      "source": "arXiv:2603.13970v2",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "Shapes are not enough: CONSERVAttack and its use for finding vulnerabilities and uncertainties in machine learning applications",
+      "text": "Shapes are not enough: CONSERVAttack and its use for finding vulnerabilities and uncertainties in machine learning applications. In High Energy Physics, as in many other fields of science, the application of machine learning techniques has been crucial in advancing our understanding of fundamental phenomena. Increasingly, deep learning models are applied to analyze both simulated and experimental data. In most experiments, a rigorous regime of testing for physically motivated systematic uncertainties is in place. The numerical evaluation of these tests for differences between the data on the one side and simulations on th"
+    },
+    "12": {
+      "id": "2603.18546v1_c0",
+      "source": "arXiv:2603.18546v1",
+      "doi": null,
+      "doi_valid": false,
+      "confidence": 0.7,
+      "node_id": "node_b0c4db94238f03e5",
+      "title": "HEP Statistical Inference for UAV Fault Detection: CLs, LRT, and SBI Applied to Blade Damage",
+      "text": "HEP Statistical Inference for UAV Fault Detection: CLs, LRT, and SBI Applied to Blade Damage. This paper transfers three statistical methods from particle physics to multirotor propeller fault detection: the likelihood ratio test (LRT) for binary detection, the CLs modified frequentist method for false alarm rate control, and sequential neural posterior estimation (SNPE) for quantitative fault characterization. Operating on spectral features tied to rotor harmonic physics, the system returns three outputs: binary detection, controlled false alarm rates, and calibrated posteriors over fau"
+    }
+  },
+  "id_to_label": {
+    "2603.26777v1_c0": 0,
+    "2604.09543v1_c0": 1,
+    "2604.25208v1_c0": 2,
+    "2604.25345v1_c0": 3,
+    "2604.25985v1_c0": 4,
+    "2604.27368v1_c0": 5,
+    "2604.27593v1_c0": 6,
+    "2603.24638v1_c0": 7,
+    "2603.28804v1_c0": 8,
+    "2604.12364v1_c0": 9,
+    "2603.07940v1_c0": 10,
+    "2603.13970v2_c0": 11,
+    "2603.18546v1_c0": 12
+  },
+  "next_label": 13,
+  "dim": 384
+}

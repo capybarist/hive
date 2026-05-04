@@ -17,7 +17,8 @@ const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const PEER_API = process.env.HIVE_PEER ?? '';
 const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
-const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000); // 30min
+const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
+const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
 const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 10);
 
 // ── Bootstrap node & P2P ────────────────────────────────────────────────────
@@ -177,7 +178,7 @@ let resolvedObjective = HIVE_OBJECTIVE;
 if (!resolvedObjective && GEMINI_KEY) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
-    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry);
+    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
     logEvent('start', `Assigned objective: "${resolvedObjective}"`);
   } catch (e: any) {
     logEvent('error', `Topic assignment failed: ${e.message}`);

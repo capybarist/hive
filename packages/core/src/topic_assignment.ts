@@ -46,24 +46,25 @@ function loadTree(): TopicNode[] {
  * Assigns N topic leaves to a BEE, prioritising:
  * 1. Unclaimed topics (nobody covers them)
  * 2. Under-covered topics (only 1 extractor)
- * 3. Topics matching the BEE's existing content (semantic affinity — simplified: keyword match)
+ * 3. Topics in preferred domain (if BEE_TOPIC_DOMAIN is set)
+ *
+ * A small random jitter is added to reduce simultaneous-start race conditions.
  */
 export async function assignTopics(
   beeId: string,
   registry: ClaimRegistry,
   capacity = 3,
+  preferDomain?: string,  // e.g. "current_events", "health" — soft preference, not mandatory
 ): Promise<TopicNode[]> {
+  // Small jitter: each BEE waits a random 0-3s to reduce claim races
+  await new Promise(r => setTimeout(r, Math.random() * 3000));
+
   const allLeaves = loadTree();
   const activeClaims = await registry.getAllActiveClaims();
   const myCurrentClaims = new Set(
     (await registry.getClaimsForBee(beeId)).map(c => c.topicId)
   );
 
-  // Score each leaf:
-  // - unclaimed = highest priority (score 100)
-  // - claimed by 1 BEE (not us) = medium priority (score 50)
-  // - already claimed by us = keep it (score 10, fills remaining capacity)
-  // - claimed by 2+ BEEs = lowest priority (score 1)
   const scored = allLeaves.map(leaf => {
     const claimants = activeClaims[leaf.id] ?? [];
     const coveredByUs = myCurrentClaims.has(leaf.id);
@@ -72,6 +73,10 @@ export async function assignTopics(
     else if (coveredByUs) score = 10;
     else if (claimants.length === 1) score = 50;
     else score = Math.max(1, 10 - claimants.length);
+
+    // Boost topics in the preferred domain
+    if (preferDomain && leaf.id.startsWith(preferDomain)) score += 200;
+
     return { leaf, score };
   });
 
