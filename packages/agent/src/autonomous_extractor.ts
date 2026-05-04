@@ -81,8 +81,9 @@ export interface ExtractionResult {
 export async function runAutonomousExtraction(
   objective: string,
   budgetConfig: Partial<BudgetConfig> = {},
-  existingStore?: KnowledgeStore,  // pass the already-open store from the API server
+  existingStore?: KnowledgeStore,
   embedderUrlOverride?: string,
+  onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
 ): Promise<ExtractionResult> {
   const apiKey = process.env.GEMINI_API_KEY ?? GEMINI_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -120,6 +121,7 @@ export async function runAutonomousExtraction(
     budget.recordFragments(1);
     fragmentsIndexed++;
     console.log(`  [+] Indexed: ${frag.id} | ${frag.source} | conf:${frag.confidence}`);
+    onIndexed?.({ id: frag.id, title: frag.title, source: frag.source });
   };
 
   const messages: Message[] = [

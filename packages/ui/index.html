@@ -74,6 +74,24 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Activity feed */
+    .activity-feed { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+    .activity-item { display: flex; gap: 8px; font-size: 12px; line-height: 1.4; }
+    .activity-ts { color: var(--muted); white-space: nowrap; font-family: monospace; font-size: 11px; }
+    .activity-msg { color: var(--text); }
+    .activity-item.fragment .activity-msg { color: var(--green); }
+    .activity-item.done    .activity-msg { color: var(--accent); }
+    .activity-item.error   .activity-msg { color: var(--red); }
+    .activity-item.sync    .activity-msg { color: var(--yellow); }
+    .extracting-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--green); margin-bottom: 8px;
+    }
+    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+      animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.4; transform:scale(1.4); } }
+    .next-cycle { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+
     /* Network panel */
     .network-node {
       background: var(--surface2); border: 1px solid var(--border);
@@ -189,6 +207,16 @@
       </div>
     </div>
 
+    <!-- Activity feed -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">BEE Activity</div>
+      <div id="extracting-indicator"></div>
+      <div id="next-cycle-label"></div>
+      <div class="activity-feed" id="activity-feed">
+        <div class="net-empty">Loading...</div>
+      </div>
+    </div>
+
     <!-- Network -->
     <div class="sidebar-section">
       <div class="sidebar-title">Knowledge Network</div>
@@ -241,6 +269,47 @@ async function checkStatus() {
     document.getElementById('peer-text').textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
     document.getElementById('peer-dot').className = 'dot' + (pc > 0 ? ' peer' : '');
   } catch { document.getElementById('status-text').textContent = 'offline'; }
+}
+
+// ── Activity feed ─────────────────────────────────────────────────────────────
+async function loadActivity() {
+  try {
+    const d = await fetch(`${API}/api/activity`).then(r => r.json());
+
+    // Extracting badge
+    const ind = document.getElementById('extracting-indicator');
+    ind.innerHTML = d.extracting
+      ? '<div class="extracting-badge"><span class="pulse"></span> Extracting knowledge...</div>'
+      : '';
+
+    // Next cycle countdown
+    const lbl = document.getElementById('next-cycle-label');
+    if (d.nextCycleAt && !d.extracting) {
+      const mins = Math.max(0, Math.round((d.nextCycleAt - Date.now()) / 60_000));
+      const secs = Math.max(0, Math.round((d.nextCycleAt - Date.now()) / 1_000) % 60);
+      lbl.textContent = `Next cycle: ${mins}m ${secs}s`;
+      lbl.className = 'next-cycle';
+    } else {
+      lbl.textContent = d.objective ? `Objective: ${d.objective.slice(0, 55)}...` : 'No objective set';
+      lbl.className = 'next-cycle';
+    }
+
+    // Events list
+    const feed = document.getElementById('activity-feed');
+    const events = (d.events ?? []).slice(0, 20);
+    if (!events.length) { feed.innerHTML = '<div class="net-empty">No activity yet</div>'; return; }
+    feed.innerHTML = '';
+    for (const ev of events) {
+      const t = new Date(ev.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const icons = { start: '▶', fragment: '📄', done: '✓', error: '✗', sync: '↔' };
+      const icon = icons[ev.type] ?? '·';
+      feed.insertAdjacentHTML('beforeend', `
+        <div class="activity-item ${ev.type}">
+          <span class="activity-ts">${t}</span>
+          <span class="activity-msg">${icon} ${ev.msg}</span>
+        </div>`);
+    }
+  } catch { document.getElementById('activity-feed').innerHTML = '<div class="net-empty">Activity unavailable</div>'; }
 }
 
 // ── Network panel ─────────────────────────────────────────────────────────────
@@ -390,10 +459,13 @@ document.getElementById('question').addEventListener('keydown', e => {
 // ── Init — checkStatus first, then loadNetwork so MY_NODE_ID is ready ────────
 async function init() {
   await checkStatus();
-  await loadNetwork();
+  await Promise.all([loadNetwork(), loadActivity()]);
 }
 init();
-setInterval(async () => { await checkStatus(); await loadNetwork(); }, 15000);
+// Network + status: every 10s
+setInterval(async () => { await checkStatus(); await loadNetwork(); }, 10_000);
+// Activity: every 4s so extraction events appear quickly
+setInterval(loadActivity, 4_000);
 </script>
 </body>
 </html>

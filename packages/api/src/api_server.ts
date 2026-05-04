@@ -156,28 +156,57 @@ app.get('/api/status', async () => {
   };
 });
 
+// ── Activity log (ring buffer, last 50 events) ───────────────────────────────
+interface ActivityEvent { ts: string; type: 'start'|'fragment'|'done'|'error'|'sync'; msg: string; }
+const activityLog: ActivityEvent[] = [];
+let nextCycleAt: number | null = null;
+let extracting = false;
+
+function logEvent(type: ActivityEvent['type'], msg: string) {
+  const ev: ActivityEvent = { ts: new Date().toISOString(), type, msg };
+  activityLog.push(ev);
+  if (activityLog.length > 50) activityLog.shift();
+  console.log(`[${type}] ${msg}`);
+}
+
 // ── Autonomous extraction loop ───────────────────────────────────────────────
 if (HIVE_OBJECTIVE) {
-  console.log(`[extract] Autonomous mode active — objective: "${HIVE_OBJECTIVE}"`);
+  logEvent('start', `Autonomous mode active — "${HIVE_OBJECTIVE}"`);
+
   const runLoop = async () => {
+    extracting = true;
+    nextCycleAt = null;
+    logEvent('start', `Starting extraction cycle (budget: ${EXTRACT_MAX_FRAGMENTS} fragments)`);
     try {
-      console.log(`[extract] Starting extraction cycle...`);
       const result = await runAutonomousExtraction(
         HIVE_OBJECTIVE,
         { maxFragments: EXTRACT_MAX_FRAGMENTS, maxMinutes: 8 },
         knowledgeStore,
         embedderUrl,
+        (frag) => logEvent('fragment', `Indexed: "${frag.title ?? frag.id}" from ${frag.source}`),
       );
-      console.log(`[extract] Cycle done: ${result.fragmentsIndexed} new fragments | ${result.budget.tokensUsed} tokens`);
+      logEvent('done', `Cycle complete: ${result.fragmentsIndexed} new fragments | ${result.budget.tokensUsed} tokens used`);
     } catch (e: any) {
-      console.error(`[extract] Error: ${e.message}`);
+      logEvent('error', `Extraction error: ${e.message}`);
     }
+    extracting = false;
+    nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
+    logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
     setTimeout(runLoop, EXTRACT_INTERVAL_MS);
   };
-  setTimeout(runLoop, 10_000); // first run 10s after boot
+  setTimeout(runLoop, 10_000);
+  nextCycleAt = Date.now() + 10_000;
 } else {
-  console.log(`[extract] No HIVE_OBJECTIVE set — autonomous extraction disabled`);
+  logEvent('start', 'No HIVE_OBJECTIVE set — autonomous extraction disabled');
 }
+
+// ── GET /api/activity ─────────────────────────────────────────────────────────
+app.get('/api/activity', async () => ({
+  events: [...activityLog].reverse(),
+  extracting,
+  nextCycleAt,
+  objective: HIVE_OBJECTIVE || null,
+}));
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
