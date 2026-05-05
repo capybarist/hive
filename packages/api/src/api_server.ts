@@ -23,7 +23,7 @@ const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 1
 
 // ── Bootstrap node & P2P ────────────────────────────────────────────────────
 const identity = loadOrCreateIdentity(IDENTITY_DIR);
-console.log(`\n🐝 H.I.V.E node: ${identity.nodeId}`);
+console.log(`\n🐝 HIVE node: ${identity.nodeId}`);
 console.log(`   Data dir : ${DATA_DIR}`);
 
 const knowledgeStore = new KnowledgeStore(DATA_DIR, identity);

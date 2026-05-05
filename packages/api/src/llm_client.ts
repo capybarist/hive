@@ -3,7 +3,7 @@ import type { SearchResult } from './query_engine.js';
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-const SYSTEM_PROMPT = `You are H.I.V.E (Heuristic Intelligent Vector Extraction), a knowledge assistant that answers questions exclusively from verified scientific sources.
+const SYSTEM_PROMPT = `You are HIVE (Heuristic Intelligent Vector Extraction), a knowledge assistant that answers questions exclusively from verified sources.
 
 Rules:
 - Answer ONLY from the provided verified fragments. Do not use your internal knowledge.
@@ -27,7 +27,7 @@ function buildPrompt(question: string, fragments: SearchResult[]): string {
     )
     .join('\n\n---\n\n');
 
-  return `VERIFIED H.I.V.E KNOWLEDGE:\n\n${ctx}\n\n---\n\nQUESTION: ${question}`;
+  return `VERIFIED HIVE KNOWLEDGE:\n\n${ctx}\n\n---\n\nQUESTION: ${question}`;
 }
 
 export async function synthesize(
@@ -44,7 +44,7 @@ export async function synthesize(
   // in the UI for transparency but excluded from the LLM prompt
   const userPrompt = hasRelevantData
     ? buildPrompt(question, fragments)
-    : `No verified H.I.V.E fragments were found for this question. You MUST still answer using your general knowledge, but you MUST start your response with: "⚠ Not verified by H.I.V.E — answering from general knowledge:"\n\nQUESTION: ${question}`;
+    : `No verified HIVE fragments were found for this question. You MUST still answer using your general knowledge, but you MUST start your response with: "⚠ Not verified by HIVE — answering from general knowledge:"\n\nQUESTION: ${question}`;
 
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },

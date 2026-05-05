@@ -1,136 +1,138 @@
-# HIVE — Contexto para Claude Code
+# HIVE — Claude Code Context
 
-## Qué es este proyecto
+## What this project is
 
-HIVE (Heuristic Intelligent Vector Extraction) es una base de conocimiento P2P descentralizada para LLMs. Cada nodo se llama **BEE**. Las BEEs extraen conocimiento de internet, lo firman criptográficamente, lo almacenan en Hypercore (P2P, append-only, verificable) y lo sincronizan con otras BEEs. Los LLMs consultan HIVE via RAG para obtener conocimiento actualizado y verificado.
+HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge base for LLMs. Each node is called a **BEE**. BEEs autonomously extract knowledge from the internet, sign each fragment with ed25519, store it in Hypercore (append-only, cryptographically verifiable), and sync with other BEEs. LLMs query HIVE via RAG to get up-to-date, source-traceable knowledge.
 
-**Analogía:** Lo que Wikipedia es para humanos, pero optimizado para ser consumido por LLMs.
+**Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Estado actual: v0.1 completo
+## Current state: v0.1 complete
 
-Todos los módulos están implementados:
-- **Módulo 1**: Embeddings locales (all-MiniLM-L6-v2, ~80MB CPU) + índice HNSW
-- **Módulo 2**: Extractor reactivo (arXiv API + CrossRef + RSS)
-- **Módulo 3**: KnowledgeStore sobre Hypercore + Hyperbee + Autobase
-- **Módulo 4**: Red P2P (Hyperswarm discovery + HTTP sync entre BEEs)
-- **Módulo 5**: API vectorial (Fastify)
-- **Módulo 6**: UI web con síntesis Gemini
-- **Módulo 7**: Extractor autónomo (Gemini function calling) + topic tree + claim registry
+All modules implemented:
+- **Module 1**: Local embeddings (all-MiniLM-L6-v2, ~80MB CPU) + HNSW index
+- **Module 2**: Reactive extractor (arXiv API + CrossRef DOI validation + RSS)
+- **Module 3**: KnowledgeStore on Hypercore + Hyperbee + Autobase
+- **Module 4**: P2P network (Hyperswarm peer discovery + HTTP sync between BEEs)
+- **Module 5**: Vector query API (Fastify)
+- **Module 6**: Web UI with Gemini synthesis
+- **Module 7**: Autonomous extractor (Gemini function calling) + topic tree + claim registry
 
-## Arquitectura de ficheros
+## File structure
 
 ```
 hive/
-├── hive.sh              ← arranque producción (zero-config, UN solo BEE)
-├── start.sh             ← arranque dev (múltiples BEEs desde bees/*.env)
-├── bees/                ← configs dev: bee-1.env, bee-2.env, bee-3.env
+├── hive.sh              ← production launcher (zero-config, single BEE)
+├── start.sh             ← dev launcher (multiple BEEs from bees/*.env)
+├── bees/                ← dev configs: bee-1.env, bee-2.env, bee-3.env
 ├── data/
-│   ├── topic_tree.json  ← árbol de 95 temas (el único fichero en git aquí)
-│   └── bee-*/           ← runtime: corestore/, vectors/, identity/ (no en git)
+│   ├── topic_tree.json  ← 95-topic knowledge taxonomy (only committed file here)
+│   └── bee-*/           ← runtime data: corestore/, vectors/, identity/ (gitignored)
 ├── packages/
 │   ├── core/src/
 │   │   ├── knowledge_store.ts   ← KnowledgeStore (Autobase + Hyperbee)
-│   │   ├── claim_registry.ts    ← registro P2P de qué temas cubre cada BEE
-│   │   ├── topic_assignment.ts  ← asignación de temas del árbol
-│   │   ├── p2p_node.ts          ← Hyperswarm P2P
-│   │   ├── sync_manager.ts      ← sincronización HTTP entre BEEs
-│   │   └── node_identity.ts     ← identidad ed25519 por BEE
+│   │   ├── claim_registry.ts    ← P2P registry: which BEE covers which topic
+│   │   ├── topic_assignment.ts  ← assigns topic tree leaves to BEEs
+│   │   ├── p2p_node.ts          ← Hyperswarm P2P connectivity
+│   │   ├── sync_manager.ts      ← HTTP-based fragment sync between BEEs
+│   │   └── node_identity.ts     ← ed25519 identity per BEE
 │   ├── agent/src/
-│   │   ├── autonomous_extractor.ts ← agente Gemini con tools
-│   │   ├── reactive_extractor.ts   ← extractor manual por topics
-│   │   ├── objective_discovery.ts  ← auto-asignación de temas desde la red
+│   │   ├── autonomous_extractor.ts ← Gemini agent with tools (main extractor)
+│   │   ├── reactive_extractor.ts   ← manual topic-list extractor (fallback/test)
+│   │   ├── objective_discovery.ts  ← auto-assigns topics by scanning the network
 │   │   ├── tools_registry.ts       ← tools: arxiv_search, rss_fetch, web_fetch...
-│   │   └── budget_controller.ts    ← límites de tokens/fragmentos/tiempo
+│   │   └── budget_controller.ts    ← token/fragment/time limits
 │   ├── embeddings/
 │   │   └── api_server.py        ← FastAPI Python :7700, HNSW + sentence-transformers
 │   ├── api/src/
-│   │   └── api_server.ts        ← Fastify :8080, endpoints + extractor loop
+│   │   └── api_server.ts        ← Fastify :8080, all endpoints + extraction loop
 │   └── ui/
-│       └── index.html           ← UI vanilla JS, dark theme
+│       └── index.html           ← vanilla JS UI, dark theme
 └── scripts/
-    └── verify_store.ts          ← diagnóstico del KnowledgeStore
+    └── verify_store.ts          ← KnowledgeStore diagnostic tool
 ```
 
-## Cómo arranca una BEE
+## How to run
 
 ```bash
-# Producción (un BEE, zero-config):
+# Production (single BEE, zero-config):
 bash hive.sh
 
-# Dev (3 BEEs en la misma máquina):
-bash start.sh                    # arranca bee-1, bee-2, bee-3
-bash start.sh bee-1 bee-2        # solo algunos
+# Dev (3 BEEs on the same machine):
+bash start.sh                    # starts bee-1, bee-2, bee-3
+bash start.sh bee-1 bee-2        # specific BEEs only
 ```
 
-**Variables de entorno clave:**
-- `GEMINI_API_KEY` — requerida (en `.env`)
-- `HIVE_PORT` — default 8080
-- `HIVE_EMBEDDER_PORT` — default 7700
-- `HIVE_DATA_DIR` — default `~/.hive` (prod) o `data/bee-N` (dev)
-- `HIVE_BOOTSTRAP` / `BEE_PEER` — URL de un peer conocido
-- `BEE_TOPIC_DOMAIN` — hint de dominio (ej: `current_events`, `health`)
-- `HIVE_OBJECTIVE` — objetivo explícito (opcional, anula auto-descubrimiento)
-- `HIVE_EXTRACT_MAX_FRAGMENTS` — default 20
-- `HIVE_EXTRACT_INTERVAL_MS` — default 300000 (5min)
+**Key environment variables:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_API_KEY` | — | Required. Set in `.env` |
+| `HIVE_PORT` | 8080 | API server port |
+| `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
+| `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
+| `HIVE_BOOTSTRAP` / `BEE_PEER` | — | Known peer URL to bootstrap from |
+| `BEE_TOPIC_DOMAIN` | — | Domain hint (e.g. `current_events`, `health`) |
+| `HIVE_OBJECTIVE` | — | Explicit objective (overrides auto-discovery) |
+| `HIVE_EXTRACT_MAX_FRAGMENTS` | 20 | Fragments per extraction cycle |
+| `HIVE_EXTRACT_INTERVAL_MS` | 300000 | Cycle interval (5 min) |
 
-## Flujo de auto-descubrimiento de temas
+## Topic auto-discovery flow
 
-1. BEE arranca sin `HIVE_OBJECTIVE`
-2. Lee `data/topic_tree.json` (95 hojas, 9 dominios)
-3. Llama a `/api/claims` de sus peers para saber qué está cubierto
-4. Puntúa hojas: libre=100, cubierta por 1=50, ya mía=10; +200 si coincide `BEE_TOPIC_DOMAIN`
-5. Reclama las top-N hojas con jitter aleatorio (evita races)
-6. Ciclo de extracción cada 5min, con ~fragsMax/numTopics fragmentos por tema
-7. Renueva claims (TTL 30min) para no perder el territorio
+1. BEE starts with no `HIVE_OBJECTIVE`
+2. Reads `data/topic_tree.json` (95 leaf topics, 9 domains)
+3. Calls `/api/claims` on peers to see what is already covered
+4. Scores leaves: unclaimed=100, covered by 1=50, already mine=10; +200 if matches `BEE_TOPIC_DOMAIN`
+5. Claims top-N leaves with random jitter (reduces simultaneous-start races)
+6. Extraction cycle every 5 min, ~maxFragments/numTopics fragments per topic
+7. Renews claims (TTL 30 min) to maintain coverage territory
 
-## Puertos en dev local
+## Dev BEE ports
 
-| BEE | API | Embedder |
-|-----|-----|----------|
-| bee-1 (seed) | 8080 | 7700 |
-| bee-2 | 8081 | 7701 |
-| bee-3 (domain=current_events) | 8082 | 7702 |
+| BEE | API | Embedder | Notes |
+|-----|-----|----------|-------|
+| bee-1 | 8080 | 7700 | Seed (no peer) |
+| bee-2 | 8081 | 7701 | Peers with bee-1 |
+| bee-3 | 8082 | 7702 | Peers with bee-1, `BEE_TOPIC_DOMAIN=current_events` |
 
-**URLs Codespace:**
+**Codespace URLs:**
 ```
 https://fantastic-orbit-4q7wx7jw4j45275r5-8080.app.github.dev
 https://fantastic-orbit-4q7wx7jw4j45275r5-8081.app.github.dev
 https://fantastic-orbit-4q7wx7jw4j45275r5-8082.app.github.dev
 ```
 
-## Decisiones de diseño importantes
+## Key design decisions
 
-- **GenosDB descartado** → Hypercore (código público, Holepunch ecosystem)
-- **No framework de agentes** → extractor propio TypeScript + Gemini function calling
-- **Topic-centric, no source-centric** → el LLM decide las fuentes por tema
-- **append-only** → Hypercore, nunca se borra, supersedes para correcciones
-- **Sync HTTP** → SyncManager llama `/api/fragments` de peers cada 8s (no puro Hypercore)
-- **Gemini 2.5 Flash** como LLM para síntesis y extracción autónoma
+- **Hypercore over GenosDB**: open source, Holepunch ecosystem, production-proven (Pear, Keet)
+- **No agent framework**: own TypeScript extractor + Gemini function calling — cleaner, auditable
+- **Topic-centric, not source-centric**: LLM decides sources per topic at runtime
+- **Append-only storage**: Hypercore never deletes; corrections use supersedes links
+- **HTTP sync (not pure Hypercore)**: SyncManager polls `/api/fragments` every 8s — simpler for v0.1
+- **Gemini 2.5 Flash**: used for both synthesis (UI) and autonomous extraction
 
-## Bugs conocidos / pendientes
+## Known issues
 
-- `Autobase is closing`: al escribir muchos fragmentos rápido en Hypercore.
-  Mitigado: cola de escrituras en `knowledge_store.ts` + Hypercore save no-fatal.
-  El HNSW siempre funciona. Hypercore falla silenciosamente.
-- Sync HTTP no es pure P2P (Hypercore nativo pendiente para v0.2)
-- Factor de replicación ≥3 no implementado (v0.2)
-- El `BEE_TOPIC_DOMAIN=current_events` de bee-3 a veces elige temas de science
-  si todos los current_events están tomados. Es correcto pero confunde en demos.
+| Issue | Impact | Mitigation |
+|-------|--------|------------|
+| `Autobase is closing` on concurrent writes | Hypercore save fails | Write queue in `knowledge_store.ts`; Hypercore save is non-fatal; HNSW always succeeds |
+| HTTP sync is not pure P2P | Requires peer's API to be reachable | Native Hypercore replication stream planned for v0.2 |
+| No replication factor enforcement | Fragments may exist in < 3 BEEs | Planned for v0.2 |
+| `BEE_TOPIC_DOMAIN` sometimes picks wrong domain | If preferred domain is fully claimed | Expected — falls back to next best available |
 
 ## GitHub
 
 ```
-Repo: https://github.com/capybarist/hive (private)
-Branch principal: main
-Dev branches: feature/* (mergeados a main al completar)
-Push: requiere unset GITHUB_TOKEN (Codespace) + TOKEN trick
+Repo   : https://github.com/capybarist/hive (private)
+Default: main branch
+Push   : requires GITHUB_TOKEN workaround (Codespace env conflict)
+         TOKEN=$(GITHUB_TOKEN="" gh auth token)
+         git remote set-url origin "https://capybarist:${TOKEN}@github.com/capybarist/hive.git"
 ```
 
-## Contexto del desarrollador
+## Developer context
 
-- Background Java/enterprise (Windows Financial Services)
-- Aprendiendo sistemas distribuidos + IA
-- El proyecto es portfolio + producto real
-- Comunica en español
-- No le gustan los permisos constantes → `Bash(*)` en settings.json
-- Objetivo: demo grabable de 2+ BEEs sincronizando en tiempo real
+- Background: Java/enterprise (Windows Financial Services)
+- Learning distributed systems and AI
+- Project serves as both portfolio and real product
+- Communicates in Spanish
+- All code comments and logs must be in English
+- `Bash(*)` is pre-approved in `.claude/settings.json`
