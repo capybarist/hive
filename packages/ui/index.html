@@ -315,27 +315,57 @@ async function loadActivity() {
 // ── Network panel ─────────────────────────────────────────────────────────────
 async function loadNetwork() {
   try {
-    const d = await fetch(`${API}/api/topics`).then(r => r.json());
+    const [topicsData, stateData] = await Promise.all([
+      fetch(`${API}/api/topics`).then(r => r.json()),
+      fetch(`${API}/api/state`).then(r => r.json()).catch(() => ({})),
+    ]);
     const panel = document.getElementById('network-panel');
-    const nodes = (d.nodes ?? []).sort((a, b) => (a.nodeId === MY_NODE_ID ? -1 : 1));
-    if (!nodes.length) { panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>'; return; }
+    const nodes = (topicsData.nodes ?? []).sort((a, b) => (a.nodeId === MY_NODE_ID ? -1 : 1));
+    const myClaims = (stateData.myClaims ?? []).map(c => c.topicId.split('/').pop());
+
+    if (!nodes.length && !myClaims.length) {
+      panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>';
+      return;
+    }
+
     panel.innerHTML = '';
+
+    // Show claimed topics for this node (even before any fragments indexed)
+    if (myClaims.length) {
+      panel.insertAdjacentHTML('beforeend', `
+        <div class="network-node" style="border-color:var(--accent)">
+          <div class="net-header">
+            <span class="net-badge net-local">THIS NODE</span>
+            <span class="net-id">${MY_NODE_ID.replace('node_','').slice(0,12)}</span>
+            <span class="net-count">${(nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0)} frags</span>
+          </div>
+          <div class="net-topics">
+            <div class="net-topic" style="color:var(--accent);font-size:11px;font-weight:600;padding-bottom:4px">Claimed topics:</div>
+            ${myClaims.map(t => `<div class="net-topic">📌 ${t}</div>`).join('')}
+          </div>
+        </div>`);
+    }
+
     for (const n of nodes) {
-      const isLocal = n.nodeId === MY_NODE_ID;
+      if (n.nodeId === MY_NODE_ID) continue; // already shown above
       const shortId = n.nodeId.replace('node_', '').slice(0, 12);
-      const topTopics = n.titles.slice(0, 4);
+      const topTopics = n.titles.slice(0, 3);
       panel.insertAdjacentHTML('beforeend', `
         <div class="network-node">
           <div class="net-header">
-            <span class="net-badge ${isLocal ? 'net-local' : 'net-remote'}">${isLocal ? 'THIS NODE' : 'PEER'}</span>
+            <span class="net-badge net-remote">PEER</span>
             <span class="net-id">${shortId}</span>
             <span class="net-count">${n.count} frags</span>
           </div>
           <div class="net-topics">
-            ${topTopics.length ? topTopics.map(t => `<div class="net-topic" title="${t}">${t}</div>`).join('') : '<div class="net-empty">No titles yet</div>'}
-            ${n.titles.length > 4 ? `<div class="net-topic" style="color:var(--muted);font-style:italic">+${n.titles.length - 4} more...</div>` : ''}
+            ${topTopics.length ? topTopics.map(t => `<div class="net-topic" title="${t}">${t}</div>`).join('') : '<div class="net-empty">Indexing...</div>'}
+            ${n.titles.length > 3 ? `<div class="net-topic" style="color:var(--muted);font-style:italic">+${n.titles.length - 3} more...</div>` : ''}
           </div>
         </div>`);
+    }
+
+    if (!panel.children.length) {
+      panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>';
     }
   } catch { document.getElementById('network-panel').innerHTML = '<div class="net-empty">Could not load network</div>'; }
 }

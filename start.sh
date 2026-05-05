@@ -68,8 +68,21 @@ for cfg in "${CONFIGS[@]}"; do
   if alive "http://127.0.0.1:$port/api/status"; then
     ok "API :$port already running"
   else
+    # BEEs with a peer must wait for previous BEEs to register claims first.
+    # Without this, simultaneous starts cause all BEEs to see unclaimed topics
+    # and pick the same ones (race condition).
+    if [ -n "$BEE_PEER" ]; then
+      run "Waiting for peer $BEE_PEER to register its topic claims..."
+      # Wait until the peer is responsive, then extra 12s for claims to settle
+      for i in $(seq 1 20); do
+        alive "$BEE_PEER/api/status" && break
+        sleep 1
+      done
+      sleep 12
+      ok "Peer ready — starting $name"
+    fi
+
     run "Starting API :$port ..."
-    # Write a temp env file merging global .env + bee config
     tmp_env=$(mktemp /tmp/hive_bee_XXXXXX.env)
     [ -f .env ] && cat .env >> "$tmp_env"
     cat "$cfg" >> "$tmp_env"

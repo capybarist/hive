@@ -278,6 +278,28 @@ app.get('/api/claims', async () => {
   return { claims, nodeId: identity.nodeId };
 });
 
+// ── GET /api/state — full BEE debug state ────────────────────────────────────
+app.get('/api/state', async () => {
+  const embedder = await getEmbedderStatus();
+  const activeClaims = await claimRegistry.getAllActiveClaims();
+  const myClaims = await claimRegistry.getClaimsForBee(identity.nodeId);
+  return {
+    nodeId: identity.nodeId,
+    port: PORT,
+    dataDir: DATA_DIR,
+    objective: resolvedObjective,
+    embedder: embedder ?? { status: 'offline' },
+    peers: p2pNode.peers,
+    peerApis,
+    myClaims: myClaims.map(c => ({ topicId: c.topicId, fragments: c.fragmentCount, renewed: c.renewedAt })),
+    networkClaims: Object.fromEntries(
+      Object.entries(activeClaims).map(([topic, bees]) => [topic, bees])
+    ),
+    extracting,
+    nextCycleAt,
+  };
+});
+
 // ── GET /api/activity ─────────────────────────────────────────────────────────
 app.get('/api/activity', async () => ({
   events: [...activityLog].reverse(),
