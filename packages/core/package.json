@@ -11,7 +11,6 @@
     "test": "npx tsx src/test_module3.ts"
   },
   "dependencies": {
-    "autobase": "^7",
     "corestore": "^7",
     "hyperbee": "^2",
     "hypercore": "^11",
