@@ -383,6 +383,14 @@ function setLoading(on) {
 
 function scoreColor(s) { return s >= .5 ? '#3fb950' : s >= .3 ? '#d29922' : '#8b949e'; }
 
+function sourceIcon(source) {
+  if (!source) return '📄';
+  if (source.includes('arXiv') || source.includes('arxiv')) return '🔬';
+  if (source.includes('.xml') || source.includes('rss') || source.includes('feed')) return '📰';
+  if (source.includes('wikipedia')) return '📖';
+  return '🌐';
+}
+
 function nodeLabel(nodeId) {
   if (!nodeId) return '';
   if (nodeId === MY_NODE_ID) return '<span class="badge b-local">LOCAL</span>';
@@ -431,7 +439,9 @@ async function runQuery() {
     const d = await res.json();
 
     // Mode badge
-    const modeLabel = d.mode === 'verified' ? '✓ Verified by HIVE' : '⚠ LLM fallback — not in HIVE';
+    // "Verified by HIVE" means: traceable source, signed by a BEE, in the index.
+    // It does NOT mean the content is factually correct.
+    const modeLabel = d.mode === 'verified' ? '✓ In HIVE (source traceable)' : '⚠ LLM fallback — not in HIVE';
     const modeCls = d.mode === 'verified' ? 'verified' : 'hybrid';
     document.getElementById('mode-wrap').innerHTML = `<div class="mode-badge ${modeCls}">${modeLabel}</div>`;
 
@@ -466,7 +476,7 @@ async function runQuery() {
             </div>
           </div>
           ${f.title ? `<div class="frag-title">${f.title}</div>` : ''}
-          <div class="frag-source">${f.source}${f.confidence ? ` · conf ${f.confidence}` : ''}</div>
+          <div class="frag-source">${sourceIcon(f.source)} ${f.source}${f.confidence ? ` · conf ${f.confidence}` : ''}</div>
           <div class="frag-body">${f.text}</div>`;
         card.addEventListener('click', () => card.classList.toggle('expanded'));
         grid.appendChild(card);
