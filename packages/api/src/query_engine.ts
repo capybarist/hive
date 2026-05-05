@@ -67,7 +67,20 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
       node_id: r.node_id,
     }));
 
-  const has_hive_data = fragments.filter(f => f.score >= RELEVANT_SCORE).length >= MIN_RELEVANT_COUNT;
+  // Primary relevance: enough fragments score above threshold
+  let has_hive_data = fragments.filter(f => f.score >= RELEVANT_SCORE).length >= MIN_RELEVANT_COUNT;
+
+  // Fallback: exact keyword match in title/text overrides semantic threshold.
+  // Semantic embeddings poorly handle rare proper nouns (e.g. "PathMoG", acronyms).
+  if (!has_hive_data && fragments.length > 0) {
+    const queryLower = question.toLowerCase();
+    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 3);
+    has_hive_data = fragments.some(f => {
+      const haystack = ((f.title ?? '') + ' ' + f.text).toLowerCase();
+      return queryWords.every(w => haystack.includes(w));
+    });
+  }
+
   return { fragments, has_hive_data, embedder_online: true };
 }
 
