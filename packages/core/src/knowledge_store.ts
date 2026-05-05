@@ -1,6 +1,8 @@
+import Hypercore from 'hypercore';
 import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
 import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import type { Fragment, FragmentId, FragmentInput, IKnowledgeGraph, QueryFilter } from './interfaces.js';
 import { hashPayload, signPayload, verifySignature, type NodeIdentity } from './node_identity.js';
 
@@ -13,13 +15,16 @@ const K = {
 };
 
 export class KnowledgeStore implements IKnowledgeGraph {
-  private store: Corestore;
+  private store: Corestore;   // used only for P2P replication
+  private core!: any;         // direct Hypercore, independent of Corestore sessions
   private bee!: Hyperbee;
   private identity: NodeIdentity;
+  private _dataDir: string;
   private _ready = false;
 
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
+    this._dataDir = dataDir;
     this.store = new Corestore(join(dataDir, 'corestore'));
   }
 
@@ -29,11 +34,17 @@ export class KnowledgeStore implements IKnowledgeGraph {
   async ready(): Promise<void> {
     if (this._ready) return;
     await this.store.ready();
-    // Single-writer Hypercore — no Autobase, no multi-writer complexity.
-    // Each BEE owns exactly one feed; replication is handled by Hyperswarm.
-    const core = this.store.get({ name: 'fragments' });
-    await core.ready();
-    this.bee = new Hyperbee(core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+
+    // Use a direct Hypercore (bypassing Corestore) for all local writes.
+    // This isolates write sessions from P2P replication session lifecycle:
+    // when Hyperswarm closes a peer connection its replication session closes,
+    // which can close Corestore-managed cores too. A standalone Hypercore
+    // has no such dependency.
+    const storageDir = join(this._dataDir, 'hypercore-fragments');
+    mkdirSync(storageDir, { recursive: true });
+    this.core = new Hypercore(storageDir);
+    await this.core.ready();
+    this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
     await this.bee.ready();
     this._ready = true;
   }
@@ -141,6 +152,8 @@ export class KnowledgeStore implements IKnowledgeGraph {
   }
 
   async close(): Promise<void> {
+    await this.bee?.close();
+    await this.core?.close();
     await this.store.close();
   }
 }

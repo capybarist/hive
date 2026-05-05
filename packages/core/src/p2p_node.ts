@@ -39,8 +39,12 @@ export class HiveP2PNode extends EventEmitter {
         connectedAt: new Date().toISOString(),
       });
 
-      // Native Hypercore P2P replication — socket.isInitiator is set by Hyperswarm
-      (this.store as any).replicate(socket);
+      // NOTE: Native Hypercore replication via store.replicate(socket) is NOT used here.
+      // It crashes the process when peers disconnect because Corestore closes its sessions.
+      // Data sync is handled by SyncManager via HTTP (/api/fragments polling).
+      // Native Hypercore replication is planned for v0.3 with proper session management.
+      socket.on('error', () => {});
+      socket.destroy();
 
       this.emit('peer', peerId);
       console.log(`[p2p] Peer connected: ${peerId} (total: ${this._peers.size})`);
