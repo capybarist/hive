@@ -1,13 +1,14 @@
 const EMBEDDER = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// Minimum score to include a fragment in the UI result list
+// Minimum score to show a fragment in the UI at all
 const SHOW_THRESHOLD = 0.05;
-// A query is considered "in HIVE" if at least MIN_RELEVANT_COUNT fragments
-// score above RELEVANT_SCORE. This is more robust than a single top-score
-// cutoff — an irrelevant query rarely gets multiple fragments above 0.09,
-// while a genuinely on-topic query gets several.
-const RELEVANT_SCORE = 0.09;
-const MIN_RELEVANT_COUNT = 3;
+
+// "In HIVE" mode requires at least MIN_RELEVANT_COUNT fragments above RELEVANT_SCORE.
+// 0.35 is intentionally high: in a small homogeneous HNSW (e.g. only gaming news),
+// unrelated queries can score 25-32% just because there's nothing better.
+// A genuinely on-topic query scores 40-65% against relevant content.
+const RELEVANT_SCORE = 0.35;
+const MIN_RELEVANT_COUNT = 2;
 
 export interface SearchResult {
   id: string;

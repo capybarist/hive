@@ -100,6 +100,12 @@ export const TOOL_DECLARATIONS = [
 ];
 
 // ── Tool executor ────────────────────────────────────────────────────────────
+// Tracks titles seen in this session to prevent duplicate indexing of the same
+// article from different sources (e.g. RSS feed URL vs direct article URL).
+const _seenTitles = new Set<string>();
+
+export function resetSeenTitles() { _seenTitles.clear(); }
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
@@ -167,6 +173,13 @@ export async function executeTool(
     }
 
     case 'index_fragment': {
+      const title = (args.title as string | undefined)?.trim().toLowerCase() ?? '';
+      // Skip if we already indexed the same title this session (different source, same article)
+      if (title && _seenTitles.has(title)) {
+        return { ok: true, data: { indexed: false, id: args.id, skipped: 'duplicate title' } };
+      }
+      if (title) _seenTitles.add(title);
+
       if (options.onFragment) {
         await options.onFragment({
           id: args.id as string,
