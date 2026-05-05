@@ -113,11 +113,16 @@ export async function runAutonomousExtraction(
   let finalSummary = '';
 
   const onFragment = async (frag: { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string }) => {
-    await store.save({
-      id: frag.id, text: frag.text, source: frag.source,
-      doi: frag.doi, confidence: frag.confidence, title: frag.title,
-      extracted_at: new Date().toISOString(), node_id: store.nodeId,
-    });
+    // Save to Hypercore — non-fatal: HNSW is the primary search index
+    try {
+      await store.save({
+        id: frag.id, text: frag.text, source: frag.source,
+        doi: frag.doi, confidence: frag.confidence, title: frag.title,
+        extracted_at: new Date().toISOString(), node_id: store.nodeId,
+      });
+    } catch (e: any) {
+      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message} — HNSW still indexed`);
+    }
     await fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

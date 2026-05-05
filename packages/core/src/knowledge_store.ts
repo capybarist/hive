@@ -35,6 +35,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
   private base: any;
   private identity: NodeIdentity;
   private _ready = false;
+  private _writeQueue: Promise<void> = Promise.resolve(); // serialise writes
 
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
@@ -73,8 +74,12 @@ export class KnowledgeStore implements IKnowledgeGraph {
   }
 
   private async append(op: Op): Promise<void> {
-    await this.base.append(JSON.stringify(op));
-    await this.view.update();
+    // Serialise all writes through a queue to prevent concurrent Autobase conflicts
+    this._writeQueue = this._writeQueue.then(async () => {
+      await this.base.append(JSON.stringify(op));
+      await this.view.update();
+    });
+    await this._writeQueue;
   }
 
   private buildFragment(input: FragmentInput, status: 'current' | 'superseded' | 'historical' = 'current', supersedes: FragmentId[] = [], superseded_by: FragmentId | null = null): Fragment {
