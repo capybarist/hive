@@ -1,9 +1,11 @@
 # HIVE — Heuristic Intelligent Vector Extraction
 
-Base de conocimiento descentralizada, verificada y semánticamente estructurada para LLMs.  
-Red P2P de BEEs que extraen, firman y sincronizan conocimiento de forma autónoma.
+**A decentralized, verifiable knowledge base built for LLMs.**  
+A P2P network of autonomous BEEs that extract, sign, and sync knowledge.
 
-> *Lo que Wikipedia es para humanos, pero para máquinas.*
+> *What Wikipedia is for humans — but for machines.*
+
+→ **[Read the Manifesto](./MANIFESTO.md)** — why this exists and where it's going.
 
 ---
 
