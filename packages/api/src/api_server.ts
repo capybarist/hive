@@ -84,18 +84,25 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean } }>(
 );
 
 // ── GET /api/fragments ───────────────────────────────────────────────────────
+// Reads from the HNSW embedder (not Hypercore) — ensures fragments are
+// available for sync even when Hypercore/Autobase writes fail.
 app.get<{ Querystring: { limit?: string; offset?: string } }>(
   '/api/fragments',
   async (req) => {
     const limit = Number(req.query.limit ?? 50);
     const offset = Number(req.query.offset ?? 0);
 
-    const all: any[] = [];
-    for await (const f of knowledgeStore.query({ limit: 1000 })) {
-      all.push(f);
+    try {
+      const res = await fetch(`${embedderUrl}/fragments?limit=1000`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return { total: 0, offset, limit, fragments: [] };
+      const data = (await res.json()) as { total: number; fragments: any[] };
+      const page = (data.fragments ?? []).slice(offset, offset + limit);
+      return { total: data.total, offset, limit, fragments: page };
+    } catch {
+      return { total: 0, offset, limit, fragments: [] };
     }
-    const page = all.slice(offset, offset + limit);
-    return { total: all.length, offset, limit, fragments: page };
   },
 );
 
