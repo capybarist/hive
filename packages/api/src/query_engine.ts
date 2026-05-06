@@ -3,9 +3,12 @@ const EMBEDDER = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 // Minimum score to show a fragment in the UI at all
 const SHOW_THRESHOLD = 0.05;
 
-// Primary semantic relevance check
-const RELEVANT_SCORE = 0.20;
-const MIN_RELEVANT_COUNT = 2;
+// "In HIVE" if the TOP fragment scores above this threshold.
+// Using top-1 (not count) because a small homogeneous HNSW can easily
+// have 2+ fragments scoring 20-25% for any unrelated query.
+// A genuinely relevant top result scores 35-65%; noise tops out at 25-30%.
+const RELEVANT_SCORE = 0.35;
+const MIN_RELEVANT_COUNT = 1;
 
 // Stop words filtered out before keyword matching (Spanish + English)
 const STOP_WORDS = new Set([
@@ -26,6 +29,7 @@ export interface SearchResult {
   title?: string;
   arxiv_id?: string;
   node_id?: string;
+  relevant?: boolean; // true if this fragment actually contributed to the answer
 }
 
 export interface QueryResult {
@@ -73,24 +77,25 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
       node_id: r.node_id,
     }));
 
-  // Primary: semantic threshold
-  let has_hive_data = fragments.filter(f => f.score >= RELEVANT_SCORE).length >= MIN_RELEVANT_COUNT;
+  // Mark each fragment as relevant or not
+  const meaningful = question.toLowerCase().split(/\s+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
 
-  // Fallback: title keyword match for rare proper nouns, acronyms, model names.
-  // Filters stop words so Spanish queries like "que sabe de GEMA" reduce to ["gema"].
-  // Checks if ANY meaningful query word appears in ANY fragment TITLE specifically.
-  if (!has_hive_data && fragments.length > 0) {
-    const meaningful = question.toLowerCase().split(/\s+/)
-      .filter(w => w.length > 3 && !STOP_WORDS.has(w));
-    if (meaningful.length > 0) {
-      has_hive_data = fragments.some(f => {
-        const title = (f.title ?? '').toLowerCase();
-        return meaningful.some(w => title.includes(w));
-      });
-    }
-  }
+  const markedFragments = fragments.map(f => ({
+    ...f,
+    relevant: f.score >= RELEVANT_SCORE ||
+      (meaningful.length > 0 && meaningful.some(w => (f.title ?? '').toLowerCase().includes(w))),
+  }));
 
-  return { fragments, has_hive_data, embedder_online: true };
+  // "In HIVE" if any fragment is marked relevant
+  const has_hive_data = markedFragments.some(f => f.relevant);
+
+  // Only return fragments that are relevant — suppress noise from the response
+  const filteredFragments = has_hive_data
+    ? markedFragments.filter(f => f.relevant)
+    : markedFragments.slice(0, 3); // show a few for context even in hybrid mode
+
+  return { fragments: filteredFragments, has_hive_data, embedder_online: true };
 }
 
 export async function getEmbedderStatus(): Promise<{ indexed: number; model: string } | null> {

@@ -126,7 +126,7 @@ export async function runAutonomousExtraction(
     await fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: frag.id, text: frag.text, metadata: { source: frag.source, doi: frag.doi, doi_valid: frag.doi !== null, confidence: frag.confidence, title: frag.title, node_id: store.nodeId } }),
+      body: JSON.stringify({ id: frag.id, text: frag.text, metadata: { source: frag.source, doi: frag.doi, doi_valid: frag.doi !== null, confidence: frag.confidence, title: frag.title, node_id: store.nodeId, extracted_at: new Date().toISOString() } }),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => {});
     budget.recordFragments(1);

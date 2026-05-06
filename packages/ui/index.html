@@ -532,17 +532,18 @@ function renderConversationTurn(question, data) {
     .replace(/##\s(.+)/g,'<strong style="font-size:16px;display:block;margin:8px 0 4px">$1</strong>');
 
   const frags = data.fragments ?? [];
-  const sourceChips = frags.slice(0, 4).map(f => {
+  const relevant = frags.filter(f => f.relevant !== false);
+  const sourceChips = relevant.slice(0, 4).map(f => {
     const isLocal = f.node_id === MY_NODE_ID;
-    const label = f.title ? f.title.slice(0,40) : f.source.slice(0,40);
+    const label = f.title ? f.title.slice(0,42) : f.source.slice(0,42);
     return `<span class="conv-source-chip ${isLocal?'local':''}" title="${f.source}">${sourceIcon(f.source)} ${label}</span>`;
   }).join('');
 
   turn.innerHTML = `
     <div class="conv-question">${question.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
     <div class="conv-answer-text">${answerHtml}</div>
-    ${sourceChips ? `<div class="conv-sources">${sourceChips}${frags.length > 4 ? `<span class="conv-source-chip">+${frags.length-4} more</span>` : ''}</div>` : ''}
-    <div class="conv-mode">${modeIcon} ${modeText} · ${frags.length} source(s)</div>
+    ${sourceChips ? `<div class="conv-sources">${sourceChips}${relevant.length > 4 ? `<span class="conv-source-chip">+${relevant.length-4} more</span>` : ''}</div>` : ''}
+    <div class="conv-mode">${modeIcon} ${modeText}${relevant.length ? ` · ${relevant.length} source(s)` : ''}</div>
   `;
   main.appendChild(turn);
   main.scrollTop = main.scrollHeight;

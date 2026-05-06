@@ -46,14 +46,31 @@ export class SyncManager {
             continue;
           }
 
-          const existing = await this.store.get(raw.id);
-          if (!existing) {
-            await this.store.saveReplicated(raw as Fragment);
-            synced++;
-            console.log(`[sync] Replicated from ${raw.node_id?.slice(0, 16) ?? peerUrl}: ${raw.id}`);
-          }
-          // Always index to HNSW (remote fragments may be missing after restart)
+          // Ensure required fields have defaults (HNSW metadata may omit some)
+          const normalized = {
+            ...raw,
+            extracted_at: raw.extracted_at ?? new Date().toISOString(),
+            status: raw.status ?? 'current',
+            supersedes: raw.supersedes ?? [],
+            superseded_by: raw.superseded_by ?? null,
+            hash: raw.hash ?? '',
+            signature: raw.signature ?? '',
+          };
+
+          // Always add to HNSW first (primary search index, always works)
           await this.addToHNSW(raw);
+
+          // Save to Hypercore — non-fatal, HNSW is the reliable path
+          try {
+            const existing = await this.store.get(raw.id);
+            if (!existing) {
+              await this.store.saveReplicated(normalized as Fragment);
+              synced++;
+            }
+          } catch (e: any) {
+            // Hypercore write failed — fragment is still searchable via HNSW
+          }
+
           this.syncedIds.add(raw.id);
         }
       } catch (err: any) {
