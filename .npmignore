@@ -1,0 +1,19 @@
+# Runtime data — never in npm package
+data/
+bees/
+.env
+.env.*
+
+# Dev tooling
+.claude/
+.devcontainer/
+.github/
+scripts/
+*.log
+
+# Large binary data
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+node_modules/
+dist/
