@@ -1,10 +1,27 @@
 {
-  "name": "hive-monorepo",
-  "private": true,
+  "name": "hive-network",
+  "version": "0.2.0",
+  "description": "HIVE — Decentralized verifiable knowledge base for LLMs",
+  "license": "BUSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/capybarist/hive"
+  },
+  "bin": {
+    "hive-bee": "bin/hive-bee"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "workspaces": [
     "packages/core",
     "packages/agent",
     "packages/api",
     "packages/embeddings"
-  ]
+  ],
+  "scripts": {
+    "start": "bash hive.sh",
+    "start:dev": "bash start.sh",
+    "clean": "bash start.sh --clean"
+  }
 }

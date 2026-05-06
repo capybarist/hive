@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# npx hive-bee — run a HIVE BEE
+# Requires: Node.js 20+, Python 3.10+, GEMINI_API_KEY env var
+
+set -e
+DIR="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+cd "$DIR"
+
+echo "🐝 HIVE BEE"
+echo "Installing Python dependencies..."
+pip3 install -q -r packages/embeddings/requirements.txt 2>/dev/null || pip install -q -r packages/embeddings/requirements.txt
+echo "Installing Node dependencies..."
+npm install --silent
+echo "Starting BEE..."
+exec bash hive.sh "$@"

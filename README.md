@@ -9,24 +9,43 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge.
 
 ---
 
-## Inicio rápido (producción)
+## Quick start
+
+### Option 1 — Docker (recommended, no dependencies)
 
 ```bash
-# 1. Clona el repositorio
-git clone https://github.com/capybarist/hive.git && cd hive
+docker run -d \
+  -e GEMINI_API_KEY=your_key_here \
+  -p 8080:8080 \
+  -v hive-data:/hive/data \
+  ghcr.io/capybarist/hive:latest
+```
 
-# 2. Instala dependencias
+Open http://localhost:8080 — your BEE will self-configure and start indexing.
+
+### Option 2 — npx (Node.js 20+ and Python 3.10+ required)
+
+```bash
+# Set your API key
+export GEMINI_API_KEY=your_key_here
+
+# Run (installs everything automatically on first run)
+npx hive-network
+```
+
+### Option 3 — From source
+
+```bash
+git clone https://github.com/capybarist/hive.git && cd hive
 npm install
 pip install -r packages/embeddings/requirements.txt
-
-# 3. Configura tu API key
-echo "GEMINI_API_KEY=tu_clave_aqui" > .env
-
-# 4. Lanza tu BEE
+echo "GEMINI_API_KEY=your_key_here" > .env
 bash hive.sh
 ```
 
-La BEE arranca, escanea la red, **elige un tema libre del árbol de conocimiento** y empieza a indexar. Sin configuración manual de temas.
+The BEE starts, scans the network, **chooses an uncovered topic from the knowledge tree**, and begins indexing. No manual topic configuration needed.
+
+> Data persists between restarts. Run `bash start.sh --clean` only when explicitly upgrading to a new incompatible version.
 
 ---
 
