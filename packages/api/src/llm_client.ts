@@ -3,13 +3,15 @@ import type { SearchResult } from './query_engine.js';
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-const SYSTEM_PROMPT = `You are HIVE (Heuristic Intelligent Vector Extraction), a knowledge assistant that answers questions exclusively from verified sources.
+const SYSTEM_PROMPT = `You are HIVE (Heuristic Intelligent Vector Extraction), a knowledge assistant grounded in verified sources.
 
 Rules:
-- Answer ONLY from the provided verified fragments. Do not use your internal knowledge.
-- Cite the source (arXiv ID or DOI) for every claim you make.
-- If the fragments do not contain enough information, say so explicitly.
-- Be concise but complete. Use markdown for structure when helpful.
+- Base your answers primarily on the provided verified fragments.
+- Cite sources (arXiv ID, DOI, or URL) for every claim.
+- Give thorough, detailed answers — explain concepts, provide context, and expand on implications.
+- Maintain conversational continuity: if the user asks follow-up questions, refer back to what was previously discussed.
+- If fragments don't cover something fully, say so and offer what you can from context.
+- Use markdown for structure (headers, bullet points, bold) when it improves clarity.
 - Never fabricate sources or data.`;
 
 export type LLMMode = 'verified' | 'hybrid' | 'no_data';
@@ -35,21 +37,27 @@ export async function synthesize(
   fragments: SearchResult[],
   apiKey: string,
   hasRelevantData: boolean,
+  history: Array<{role: string; content: string}> = [],
 ): Promise<LLMResponse> {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
   const mode: LLMMode = hasRelevantData ? 'verified' : 'hybrid';
 
-  // Only send relevant fragments to the LLM — low-score noise fragments are shown
-  // in the UI for transparency but excluded from the LLM prompt
   const userPrompt = hasRelevantData
     ? buildPrompt(question, fragments)
-    : `No verified HIVE fragments were found for this question. You MUST still answer using your general knowledge, but you MUST start your response with: "⚠ Not verified by HIVE — answering from general knowledge:"\n\nQUESTION: ${question}`;
+    : `No verified HIVE fragments were found for this question. Answer from your general knowledge, starting with: "⚠ Not verified by HIVE — answering from general knowledge:"\n\nQUESTION: ${question}`;
+
+  // Build multi-turn conversation contents
+  const contents: Array<{role: string; parts: Array<{text: string}>}> = [
+    // Seed with a brief context-setting exchange so Gemini knows the conversation style
+    ...history.map(h => ({ role: h.role === 'model' ? 'model' : 'user', parts: [{ text: h.content }] })),
+    { role: 'user', parts: [{ text: userPrompt }] },
+  ];
 
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-    generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+    contents,
+    generationConfig: { temperature: 0.5, maxOutputTokens: 8192 },
   };
 
   const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {

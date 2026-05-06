@@ -60,10 +60,10 @@ await app.register(cors, { origin: true });
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
 // ── POST /api/query ──────────────────────────────────────────────────────────
-app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean } }>(
+app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}> } }>(
   '/api/query',
   async (req, reply) => {
-    const { question, top_k = 5, use_llm = true } = req.body;
+    const { question, top_k = 5, use_llm = true, history = [] } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
     const { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k);
@@ -75,7 +75,7 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean } }>(
     }
 
     try {
-      const { answer, mode } = await synthesize(question, fragments, GEMINI_KEY, has_hive_data);
+      const { answer, mode } = await synthesize(question, fragments, GEMINI_KEY, has_hive_data, history);
       return { answer, mode, fragments, has_hive_data, embedder_online };
     } catch (err: any) {
       return reply.code(502).send({ error: err.message });
@@ -216,58 +216,61 @@ if (resolvedObjective) {
 if (resolvedObjective) {
   logEvent('start', `Autonomous mode active`);
 
+  const MAX_TOPICS_PER_CYCLE = 5; // cap to keep cycles under ~10 min
+
   const runLoop = async () => {
     extracting = true;
     nextCycleAt = null;
-
-    // Get current claims for this BEE — may have grown since last cycle
-    let claims = await claimRegistry.getClaimsForBee(identity.nodeId);
-    if (!claims.length) {
-      // Fallback: single topic from resolved objective
-      claims = [{ topicId: 'default', beeId: identity.nodeId, claimedAt: '', renewedAt: '', fragmentCount: 0, isPrimary: true }];
-    }
-
-    const fragsPerTopic = Math.max(3, Math.floor(EXTRACT_MAX_FRAGMENTS / claims.length));
     let totalIndexed = 0;
     let totalTokens = 0;
 
-    logEvent('start', `Starting cycle: ${claims.length} topic(s), ~${fragsPerTopic} fragments each`);
+    try {
+      let claims = await claimRegistry.getClaimsForBee(identity.nodeId);
+      if (!claims.length) {
+        claims = [{ topicId: 'default', beeId: identity.nodeId, claimedAt: '', renewedAt: '', fragmentCount: 0, isPrimary: true }];
+      }
 
-    for (const claim of claims) {
-      // Build focused objective for this specific topic
-      let topicObjective = resolvedObjective;
-      if (claim.topicId !== 'default') {
+      // Cap topics per cycle so cycles don't run indefinitely
+      const activeClaims = claims.slice(0, MAX_TOPICS_PER_CYCLE);
+      const fragsPerTopic = Math.max(3, Math.floor(EXTRACT_MAX_FRAGMENTS / activeClaims.length));
+      logEvent('start', `Starting cycle: ${activeClaims.length}/${claims.length} topics, ~${fragsPerTopic} frags each`);
+
+      for (const claim of activeClaims) {
+        let topicObjective = resolvedObjective;
+        if (claim.topicId !== 'default') {
+          try {
+            const { loadTree, buildObjectiveFromTopics } = await import('@hive/core');
+            const leaf = loadTree().find(t => t.id === claim.topicId);
+            if (leaf) topicObjective = buildObjectiveFromTopics([leaf]);
+          } catch { /* use resolved */ }
+        }
+
+        logEvent('start', `Topic: ${claim.topicId}`);
         try {
-          const { loadTree, buildObjectiveFromTopics } = await import('@hive/core');
-          const leaf = loadTree().find(t => t.id === claim.topicId);
-          if (leaf) topicObjective = buildObjectiveFromTopics([leaf]);
-        } catch { /* tree unavailable, use resolved */ }
+          const result = await runAutonomousExtraction(
+            topicObjective,
+            { maxFragments: fragsPerTopic, maxMinutes: Math.ceil(8 / activeClaims.length) },
+            knowledgeStore,
+            embedderUrl,
+            (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
+          );
+          totalIndexed += result.fragmentsIndexed;
+          totalTokens += result.budget.tokensUsed;
+          await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
+        } catch (e: any) {
+          logEvent('error', `Topic ${claim.topicId}: ${e.message}`);
+        }
       }
-
-      logEvent('start', `Topic: ${claim.topicId}`);
-      try {
-        const result = await runAutonomousExtraction(
-          topicObjective,
-          { maxFragments: fragsPerTopic, maxMinutes: Math.ceil(8 / claims.length) },
-          knowledgeStore,
-          embedderUrl,
-          (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
-        );
-        totalIndexed += result.fragmentsIndexed;
-        totalTokens += result.budget.tokensUsed;
-
-        // Renew claim with updated fragment count
-        await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
-      } catch (e: any) {
-        logEvent('error', `Topic ${claim.topicId}: ${e.message}`);
-      }
+    } catch (e: any) {
+      logEvent('error', `Cycle failed: ${e.message}`);
+    } finally {
+      // Always reset — never leave the spinner stuck
+      extracting = false;
+      nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
+      logEvent('done', `Cycle complete: ${totalIndexed} fragments | ${totalTokens} tokens`);
+      logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
+      setTimeout(runLoop, EXTRACT_INTERVAL_MS);
     }
-
-    logEvent('done', `Cycle complete: ${totalIndexed} fragments | ${totalTokens} tokens | ${claims.length} topics`);
-    extracting = false;
-    nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
-    logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
-    setTimeout(runLoop, EXTRACT_INTERVAL_MS);
   };
 
   setTimeout(runLoop, 10_000);

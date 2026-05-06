@@ -176,6 +176,20 @@
 
     .hidden { display: none !important; }
 
+    /* Conversation thread */
+    .conv-turn { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .conv-turn:last-child { border-bottom: none; }
+    .conv-question { font-size: 14px; font-weight: 600; color: var(--accent); }
+    .conv-answer-text { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+    .conv-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .conv-source-chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px;
+      background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+    }
+    .conv-source-chip.local { border-color: rgba(88,166,255,.3); color: var(--accent); }
+    .conv-mode { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
     footer { text-align: center; padding: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); }
   </style>
 </head>
@@ -197,8 +211,11 @@
   <sidebar>
     <!-- Query -->
     <div class="sidebar-section">
-      <div class="sidebar-title">Ask HIVE</div>
-      <textarea id="question" placeholder="What do you want to know?&#10;(Enter to send, Shift+Enter for newline)"></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="sidebar-title" style="margin-bottom:0">Ask HIVE</div>
+        <button id="clear-btn" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer" title="New conversation">New chat</button>
+      </div>
+      <textarea id="question" placeholder="Ask anything... (Enter to send, Shift+Enter for newline)"></textarea>
       <div class="query-controls">
         <span class="top-k-label">Sources: <span id="topk-val">5</span></span>
         <input type="range" id="topk" min="1" max="20" value="5" />
@@ -491,7 +508,92 @@ async function runQuery() {
   }
 }
 
+// ── Conversation state ────────────────────────────────────────────────────────
+let conversationHistory = []; // [{role:'user',content:...},{role:'model',content:...}]
+const MAX_HISTORY_TURNS = 6; // keep last 6 exchanges in context
+
+function renderConversationTurn(question, data) {
+  const main = document.getElementById('main');
+  const placeholder = document.getElementById('placeholder');
+  if (placeholder) placeholder.classList.add('hidden');
+  document.getElementById('results').classList.add('hidden'); // hide old single-result area
+
+  const turn = document.createElement('div');
+  turn.className = 'conv-turn';
+
+  const modeIcon = data.mode === 'verified' ? '✓' : '⚠';
+  const modeText = data.mode === 'verified' ? 'In HIVE' : 'LLM knowledge';
+
+  const answerHtml = (data.answer ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/###\s(.+)/g,'<strong style="font-size:15px">$1</strong>')
+    .replace(/##\s(.+)/g,'<strong style="font-size:16px;display:block;margin:8px 0 4px">$1</strong>');
+
+  const frags = data.fragments ?? [];
+  const sourceChips = frags.slice(0, 4).map(f => {
+    const isLocal = f.node_id === MY_NODE_ID;
+    const label = f.title ? f.title.slice(0,40) : f.source.slice(0,40);
+    return `<span class="conv-source-chip ${isLocal?'local':''}" title="${f.source}">${sourceIcon(f.source)} ${label}</span>`;
+  }).join('');
+
+  turn.innerHTML = `
+    <div class="conv-question">${question.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    <div class="conv-answer-text">${answerHtml}</div>
+    ${sourceChips ? `<div class="conv-sources">${sourceChips}${frags.length > 4 ? `<span class="conv-source-chip">+${frags.length-4} more</span>` : ''}</div>` : ''}
+    <div class="conv-mode">${modeIcon} ${modeText} · ${frags.length} source(s)</div>
+  `;
+  main.appendChild(turn);
+  main.scrollTop = main.scrollHeight;
+}
+
+async function runQuery() {
+  const question = document.getElementById('question').value.trim();
+  if (!question) return;
+  document.getElementById('question').value = '';
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API}/api/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        top_k: Number(document.getElementById('topk').value),
+        use_llm: true,
+        history: conversationHistory.slice(-MAX_HISTORY_TURNS * 2),
+      }),
+    });
+
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error ?? `HTTP ${res.status}`); }
+    const data = await res.json();
+
+    // Update conversation history
+    const userPromptForHistory = data.has_hive_data
+      ? `[Question with HIVE context] ${question}`
+      : question;
+    conversationHistory.push({ role: 'user', content: userPromptForHistory });
+    conversationHistory.push({ role: 'model', content: data.answer ?? '' });
+
+    renderConversationTurn(question, data);
+    checkStatus();
+    loadNetwork();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
 document.getElementById('ask-btn').addEventListener('click', runQuery);
+document.getElementById('clear-btn').addEventListener('click', () => {
+  conversationHistory = [];
+  const main = document.getElementById('main');
+  // Remove all conversation turns
+  main.querySelectorAll('.conv-turn').forEach(el => el.remove());
+  document.getElementById('placeholder').classList.remove('hidden');
+});
 document.getElementById('question').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runQuery(); }
 });
@@ -502,9 +604,7 @@ async function init() {
   await Promise.all([loadNetwork(), loadActivity()]);
 }
 init();
-// Network + status: every 10s
 setInterval(async () => { await checkStatus(); await loadNetwork(); }, 10_000);
-// Activity: every 4s so extraction events appear quickly
 setInterval(loadActivity, 4_000);
 </script>
 </body>
