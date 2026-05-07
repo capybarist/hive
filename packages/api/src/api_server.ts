@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, SyncManager, ClaimRegistry } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -15,7 +15,7 @@ const PORT = Number(process.env.HIVE_PORT ?? 8080);
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
-const PEER_API = process.env.HIVE_PEER ?? '';
+const PEER_API = process.env.HIVE_PEER ?? '';   // kept for bootstrap announcements only
 const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
 const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
 const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
@@ -33,26 +33,12 @@ console.log(`   KnowledgeStore ready ✓`);
 const p2pNode = new HiveP2PNode(knowledgeStore.corestore);
 await p2pNode.start();
 
-const peerApis = PEER_API ? [PEER_API] : [];
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
-const syncManager = new SyncManager(knowledgeStore, identity.nodeId, peerApis, embedderUrl);
-syncManager.start();
 
-p2pNode.on('peer', () => {
-  if (peerApis.length) syncManager.syncOnce().catch(() => {});
-});
-
-// Announce ourselves to known peers so they sync back (bidirectional)
-const MY_API_URL = `http://127.0.0.1:${PORT}`;
-for (const peerUrl of peerApis) {
-  fetch(`${peerUrl}/api/register-peer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiUrl: MY_API_URL }),
-    signal: AbortSignal.timeout(5000),
-  }).then(() => console.log(`[p2p] Announced to ${peerUrl}`))
-    .catch(() => console.log(`[p2p] Could not announce to ${peerUrl} (offline?)`));
-}
+// Drive HNSW from Hypercore history: replays all stored fragments then streams
+// new ones live — covers both local writes and blocks arriving via P2P replication.
+knowledgeStore.watchFragments(embedderUrl).catch(console.error);
+console.log(`   HNSW watch started ✓`);
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
@@ -114,20 +100,17 @@ app.get('/api/node-info', async () => ({
 }));
 
 // ── POST /api/register-peer ──────────────────────────────────────────────────
-// Remote node calls this to announce itself → triggers bidirectional sync
+// Kept for claim-registry announcements. Data sync is now Hypercore-native.
 app.post<{ Body: { apiUrl: string } }>('/api/register-peer', async (req) => {
   const { apiUrl } = req.body;
   if (!apiUrl) return { ok: false, error: 'apiUrl required' };
-  syncManager.addPeer(apiUrl);
-  syncManager.syncOnce().catch(() => {});
-  console.log(`[p2p] Peer registered via HTTP: ${apiUrl}`);
+  console.log(`[p2p] Peer announced: ${apiUrl}`);
   return { ok: true, nodeId: identity.nodeId };
 });
 
 // ── GET /api/peers ───────────────────────────────────────────────────────────
 app.get('/api/peers', async () => ({
   peers: p2pNode.peers,
-  peerApis,
 }));
 
 // ── GET /api/topics ──────────────────────────────────────────────────────────
@@ -185,7 +168,7 @@ let resolvedObjective = HIVE_OBJECTIVE;
 if (!resolvedObjective && GEMINI_KEY) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
-    resolvedObjective = await discoverObjective(peerApis, GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
+    resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
     logEvent('start', `Assigned objective: "${resolvedObjective}"`);
   } catch (e: any) {
     logEvent('error', `Topic assignment failed: ${e.message}`);
@@ -300,7 +283,6 @@ app.get('/api/state', async () => {
     objective: resolvedObjective,
     embedder: embedder ?? { status: 'offline' },
     peers: p2pNode.peers,
-    peerApis,
     myClaims: myClaims.map(c => ({ topicId: c.topicId, fragments: c.fragmentCount, renewed: c.renewedAt })),
     networkClaims: Object.fromEntries(
       Object.entries(activeClaims).map(([topic, bees]) => [topic, bees])

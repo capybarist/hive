@@ -173,6 +173,52 @@ export class KnowledgeStore implements IKnowledgeGraph {
       verifySignature({ id: fragment.id, hash }, signature, this.identity.publicKeyHex);
   }
 
+  /**
+   * Stream all fragments from Hyperbee history (past + live) and POST each one
+   * to the HNSW embedder. This replaces HTTP-based sync: Hypercore replication
+   * delivers blocks to this BEE, the history stream picks them up, and HNSW
+   * stays in sync automatically — no polling, no separate sync layer needed.
+   *
+   * Call once after ready(). Never resolves (live stream). Catches its own errors.
+   */
+  async watchFragments(embedderUrl: string): Promise<void> {
+    await this.ready();
+    const seen = new Set<string>();
+
+    const post = async (frag: Fragment) => {
+      if (seen.has(frag.id)) return;
+      seen.add(frag.id);
+      try {
+        await fetch(`${embedderUrl}/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: frag.id,
+            text: frag.text,
+            metadata: {
+              source: frag.source,
+              doi: frag.doi ?? null,
+              doi_valid: frag.doi !== null,
+              confidence: frag.confidence,
+              node_id: frag.node_id,
+              title: (frag as any).title ?? null,
+              arxiv_id: (frag as any).arxiv_id ?? null,
+            },
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch { /* embedder offline — will retry next time fragment appears */ }
+    };
+
+    // createHistoryStream({ live: true }) replays all past Hyperbee entries then
+    // streams new ones indefinitely — covers both local writes and P2P-replicated blocks.
+    for await (const { key, value } of (this.bee as any).createHistoryStream({ live: true })) {
+      if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
+        await post(value as Fragment);
+      }
+    }
+  }
+
   async close(): Promise<void> {
     await this.core?.close();
     await this.store.close();
