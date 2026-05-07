@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import Hyperswarm from 'hyperswarm';
+import Protomux from 'protomux';
+import c from 'compact-encoding';
 import type Corestore from 'corestore';
 
 // All HIVE BEEs discover each other using this fixed topic
@@ -15,7 +17,10 @@ export class HiveP2PNode extends EventEmitter {
   private swarm: Hyperswarm;
   private _peers = new Map<string, PeerInfo>();
 
-  constructor(private store: Corestore) {
+  constructor(
+    private store: Corestore,
+    private localCoreKey?: Buffer,   // public key of our local fragments Hypercore
+  ) {
     super();
     this.swarm = new Hyperswarm();
   }
@@ -29,13 +34,35 @@ export class HiveP2PNode extends EventEmitter {
     this.swarm.on('connection', (socket: any, peerInfo: any) => {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);
 
-      // ── Hypercore native replication ───────────────────────────────────────
-      // Each connection gets its OWN Corestore session so closing a peer
-      // only closes that session — the write session in KnowledgeStore is unaffected.
-      // Pass the socket (NoiseSecretStream) directly; Corestore reads socket.isInitiator
-      // and handles piping internally.
+      // ── Core-key exchange + Hypercore replication ──────────────────────────
+      // Each BEE has its own Corestore with a unique 'fragments' core key.
+      // Corestore only replicates cores that BOTH sides have open.
+      // Solution: use a Protomux channel to exchange core keys before replication,
+      // then open the peer's core locally so Corestore replication can deliver data.
+      const mux = new Protomux(socket);
+      const channel = mux.createChannel({ protocol: 'hive/core-keys/v1' });
+      const keyMessage = channel.addMessage({ encoding: c.raw });
+
+      keyMessage.onmessage = async (theirCoreKey: Buffer) => {
+        try {
+          // Open peer's core read-only — Corestore replication will now sync it
+          const peerCore = (this.store as any).get({ key: theirCoreKey });
+          await peerCore.ready();
+          this.emit('peer-core', theirCoreKey, peerId);
+          console.log(`[p2p] Got core key from ${peerId}: ${theirCoreKey.toString('hex').slice(0, 16)}... (len=${peerCore.length})`);
+        } catch (e: any) {
+          console.log(`[p2p] Could not open peer core: ${e.message}`);
+        }
+      };
+
+      channel.open();
+      if (this.localCoreKey) {
+        keyMessage.send(this.localCoreKey);
+      }
+
+      // Replication session over the same mux — Corestore adds its own channels
       const replSession = (this.store as any).session();
-      replSession.replicate(socket);
+      replSession.replicate(mux);
 
       socket.on('close', () => {
         replSession.close().catch(() => {});

@@ -30,15 +30,20 @@ const knowledgeStore = new KnowledgeStore(DATA_DIR, identity);
 await knowledgeStore.ready();
 console.log(`   KnowledgeStore ready ✓`);
 
-const p2pNode = new HiveP2PNode(knowledgeStore.corestore);
-await p2pNode.start();
-
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// Drive HNSW from Hypercore history: replays all stored fragments then streams
-// new ones live — covers both local writes and blocks arriving via P2P replication.
+// Pass local core key so peers can open it for replication
+const p2pNode = new HiveP2PNode(knowledgeStore.corestore, knowledgeStore.coreKey);
+await p2pNode.start();
+
+// Drive HNSW from local Hypercore history (past + live blocks)
 knowledgeStore.watchFragments(embedderUrl).catch(console.error);
 console.log(`   HNSW watch started ✓`);
+
+// When a peer's core key arrives, watch that remote core for new fragments too
+p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
+  knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
+});
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });

@@ -27,6 +27,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
 
   get nodeId(): string { return this.identity.nodeId; }
 
+  /** Public key of the local fragments Hypercore. Shared with peers so they can replicate it. */
+  get coreKey(): Buffer { return this.core.key; }
+
   /**
    * The parent Corestore — passed to P2PNode for replication.
    * Replication uses a per-connection session so closing a connection
@@ -215,6 +218,46 @@ export class KnowledgeStore implements IKnowledgeGraph {
     for await (const { key, value } of (this.bee as any).createHistoryStream({ live: true })) {
       if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
         await post(value as Fragment);
+      }
+    }
+  }
+
+  /**
+   * Watch a remote peer's fragments core (opened read-only by key) and POST
+   * each fragment to HNSW. Called after key exchange with a peer.
+   */
+  async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string): Promise<void> {
+    await this.ready();
+    const remoteCore = (this.store as any).get({ key: remoteCoreKey });
+    await remoteCore.ready();
+    const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+    await remoteBee.ready();
+
+    const seen = new Set<string>();
+    for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
+      if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
+        if (seen.has(value.id)) continue;
+        seen.add(value.id);
+        try {
+          await fetch(`${embedderUrl}/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: value.id,
+              text: value.text,
+              metadata: {
+                source: value.source,
+                doi: value.doi ?? null,
+                doi_valid: value.doi !== null,
+                confidence: value.confidence,
+                node_id: value.node_id,
+                title: value.title ?? null,
+                arxiv_id: value.arxiv_id ?? null,
+              },
+            }),
+            signal: AbortSignal.timeout(10_000),
+          });
+        } catch { /* embedder offline */ }
       }
     }
   }
