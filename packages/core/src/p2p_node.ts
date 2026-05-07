@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import Hyperswarm from 'hyperswarm';
 import type Corestore from 'corestore';
 
-// All HIVE nodes discover each other using this fixed topic
+// All HIVE BEEs discover each other using this fixed topic
 const HIVE_TOPIC = createHash('sha256').update('hive-network-v0.1').digest();
 
 export interface PeerInfo {
@@ -20,13 +20,8 @@ export class HiveP2PNode extends EventEmitter {
     this.swarm = new Hyperswarm();
   }
 
-  get peers(): PeerInfo[] {
-    return [...this._peers.values()];
-  }
-
-  get peerCount(): number {
-    return this._peers.size;
-  }
+  get peers(): PeerInfo[] { return [...this._peers.values()]; }
+  get peerCount(): number { return this._peers.size; }
 
   async start(): Promise<void> {
     this.swarm.join(HIVE_TOPIC, { server: true, client: true });
@@ -34,28 +29,26 @@ export class HiveP2PNode extends EventEmitter {
     this.swarm.on('connection', (socket: any, peerInfo: any) => {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);
 
-      this._peers.set(peerId, {
-        peerId,
-        connectedAt: new Date().toISOString(),
-      });
-
-      // NOTE: Native Hypercore replication via store.replicate(socket) is NOT used here.
-      // It crashes the process when peers disconnect because Corestore closes its sessions.
-      // Data sync is handled by SyncManager via HTTP (/api/fragments polling).
-      // Native Hypercore replication is planned for v0.3 with proper session management.
-      socket.on('error', () => {});
-      socket.destroy();
-
-      this.emit('peer', peerId);
-      console.log(`[p2p] Peer connected: ${peerId} (total: ${this._peers.size})`);
+      // ── Hypercore native replication ───────────────────────────────────────
+      // Each connection gets its OWN Corestore session so closing a peer
+      // only closes that session — the write session in KnowledgeStore is unaffected.
+      // Pass the socket (NoiseSecretStream) directly; Corestore reads socket.isInitiator
+      // and handles piping internally.
+      const replSession = (this.store as any).session();
+      replSession.replicate(socket);
 
       socket.on('close', () => {
+        replSession.close().catch(() => {});
         this._peers.delete(peerId);
         this.emit('peer-left', peerId);
         console.log(`[p2p] Peer left: ${peerId}`);
       });
 
       socket.on('error', () => {});
+
+      this._peers.set(peerId, { peerId, connectedAt: new Date().toISOString() });
+      this.emit('peer', peerId);
+      console.log(`[p2p] Peer connected: ${peerId} (total: ${this._peers.size})`);
     });
 
     await this.swarm.flush();
