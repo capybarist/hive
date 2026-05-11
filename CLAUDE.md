@@ -6,7 +6,7 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 **Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Current state: v0.3 — native P2P replication
+## Current state: v0.2 — bidirectional HTTP sync + Hypercore P2P
 
 All modules implemented and working:
 - **Module 1**: Local embeddings (all-MiniLM-L6-v2, ~80MB CPU) + HNSW index
@@ -52,7 +52,7 @@ hive/
 │   │   ├── p2p_node.ts          ← Hyperswarm + Protomux core-key exchange + replication
 │   │   ├── claim_registry.ts    ← P2P registry: which BEE covers which topic
 │   │   ├── topic_assignment.ts  ← assigns topic tree leaves to BEEs
-│   │   ├── sync_manager.ts      ← DEPRECATED: was HTTP polling, replaced by Hypercore replication
+│   │   ├── sync_manager.ts      ← HTTP fallback for UDP-blocked environments; active in Codespaces
 │   │   └── node_identity.ts     ← ed25519 identity per BEE
 │   ├── agent/src/
 │   │   ├── autonomous_extractor.ts ← Gemini agent with tools (main extractor)
@@ -98,8 +98,8 @@ bash start.sh --clean            # wipe data and restart
 | `HIVE_EXTRACT_MAX_FRAGMENTS` | 20 | Fragments per extraction cycle |
 | `HIVE_EXTRACT_INTERVAL_MS` | 300000 | Cycle interval (5 min) |
 
-Note: `BEE_PEER` is now used only for claim-registry HTTP calls (topic coordination).
-Data sync is fully Hypercore-native — no HTTP sync needed.
+Note: `BEE_PEER` drives both HTTP claim discovery and data sync fallback.
+Hypercore replication is primary (when Hyperswarm DHT is available).
 
 ## Topic auto-discovery flow
 

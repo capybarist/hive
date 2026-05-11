@@ -1,0 +1,69 @@
+Business Source License 1.1
+
+License text © 2023 Elastic License 2.0
+
+This Business Source License (this "Agreement") sets forth the terms and conditions
+under which the licensor grants you a non-exclusive, royalty-free, worldwide,
+non-transferable copyright license to reproduce, prepare derivative works of,
+publicly display, publicly perform, and distribute the software and documentation
+(the "Software"), subject to the Agreement's limitations and conditions.
+
+## 1. Grant of Rights
+
+Subject to the terms and conditions of this Agreement, the Licensor hereby grants
+you a non-exclusive, royalty-free, worldwide, non-transferable license to use,
+reproduce, modify, and distribute the Software as follows:
+
+- You may use the Software for any purpose;
+- You may make modifications to the Software;
+- You may redistribute the Software, provided that all redistributions also
+  include a copy of this Agreement;
+- You may not use the Software for any Commercial Purpose (except as permitted
+  by this Agreement).
+
+## 2. Commercial Use
+
+Commercial use of the Software is not permitted unless prior written approval is
+obtained from the Licensor, or unless the terms below apply:
+
+This license grant shall convert to an open source software license as set forth
+in SCHEDULE A effective on the earlier of:
+(i) the first anniversary of the release of this version of the Software, or
+(ii) the date that is 12 months after the date this version of the Software was first released.
+
+Upon such conversion, the Software shall be licensed under the terms of the
+license specified in SCHEDULE A (currently Apache License 2.0).
+
+## 3. License Grant Restrictions
+
+This Agreement permits your use of the Source Code subject to these restrictions:
+
+- You may not sell, lease, or lend the Software.
+- You may not remove or alter any portion or form of any notice contained in
+  the Software.
+- You may not make any representation, warranty or undertaking regarding the
+  Software except as expressly set forth in this Agreement.
+
+## 4. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 5. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL LICENSOR BE
+LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES,
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+THE USE OF THIS SOFTWARE, EVEN IF LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGES.
+
+## SCHEDULE A
+
+Upon license conversion (after 12 months), this Software shall be licensed under
+the Apache License, Version 2.0. See https://www.apache.org/licenses/LICENSE-2.0
+for the full text.

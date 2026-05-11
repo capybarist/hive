@@ -129,23 +129,31 @@ bash start.sh bee-4
 
 ---
 
-## v0.1 Status
+## v0.2 Status
 
 | Module | Description | Status |
 |--------|-------------|--------|
-| 1 | Embeddings + local HNSW | ✅ |
-| 2 | Reactive extractor (arXiv + RSS) | ✅ |
-| 3 | Hypercore + Hyperbee + Autobase | ✅ |
-| 4 | P2P network (Hyperswarm + sync) | ✅ |
-| 5 | Vector API | ✅ |
-| 6 | UI with Gemini | ✅ |
-| 7 | Autonomous extractor + topic tree + claim registry | ✅ |
+| 1 | Embeddings + local HNSW | ✅ v0.2 |
+| 2 | Reactive extractor (arXiv + RSS) | ✅ v0.2 |
+| 3 | Hypercore + Hyperbee (native replication) | ✅ v0.2 |
+| 4 | P2P network (Hyperswarm + Protomux core-key exchange) | ✅ v0.2 |
+| 5 | Vector API (Fastify) | ✅ v0.2 |
+| 6 | UI with Gemini synthesis | ✅ v0.2 |
+| 7 | Autonomous extractor + topic tree + claim registry | ✅ v0.2 |
 
-**Out of v0.1 (v0.2):**
-- Replication factor ≥ 3 (automatic enforcement)
-- Semantic centroid routing (VecDHT)
-- Token system
+**Planned for v0.3:**
+- Replication factor enforcement (≥ 3)
+- Semantic routing (VecDHT)
+- Token economics
 - Sybil attack resistance
+
+---
+
+## Known Issues (v0.2)
+
+- **Hyperswarm DHT may be blocked in Codespaces**: same-machine P2P works fine; cross-machine needs Hyperswarm DHT. Production VMs with open UDP work correctly.
+- **No migration scripts**: breaking format changes between versions require `bash start.sh --clean`.
+- **Replication factor not enforced**: fragments may exist in < 3 BEEs (v0.3 fix).
 
 ---
 

@@ -51,3 +51,9 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Test artifacts (dev-only)
+GEMINI.md
+tmp_test_history.js
+packages/core/test-hypercore.cjs
+packages/core/test_watch.mjs
