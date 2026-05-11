@@ -1,0 +1,69 @@
+# HIVE Aggregator stack — Qdrant + HIVE aggregator node
+#
+# Usage:
+#   LLM_API_KEY=your_key docker-compose -f docker-compose.aggregator.yml up -d
+#
+# The aggregator connects to the HIVE P2P network, indexes every fragment
+# from every BEE it finds, and exposes a fast public search API over Qdrant.
+# No extraction — read-only from the P2P network's perspective.
+#
+# API available at: http://localhost:8080
+#   GET  /api/status        — aggregator health + peer count + indexed count
+#   GET  /api/stats         — fragment / BEE / topic counts from Qdrant
+#   POST /api/query         — semantic search (supports filters)
+#   GET  /api/topics        — topics indexed across the network
+#   GET  /api/fragments     — paginated fragment list
+
+services:
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: hive-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    expose:
+      - "6333"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  hive-aggregator:
+    image: ghcr.io/capybarist/hive:latest
+    container_name: hive-aggregator
+    restart: unless-stopped
+    environment:
+      # Aggregator mode — no extraction, indexes all peer fragments
+      - HIVE_MODE=aggregator
+
+      # Embedder uses Qdrant instead of in-process HNSW
+      - EMBEDDER_BACKEND=qdrant
+      - QDRANT_URL=http://qdrant:6333
+
+      # LLM for synthesis queries (Gemini free tier is enough for a demo)
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - LLM_API_KEY=${LLM_API_KEY}
+
+      # Networking
+      - HIVE_PORT=8080
+      - HIVE_EMBEDDER_PORT=7700
+
+      # Data directory (identity persists across restarts)
+      - HIVE_DATA_DIR=/hive/data
+
+      # Optional: bootstrap peer to join immediately on startup
+      # - HIVE_PEER=http://other-bee.example.com
+
+    ports:
+      - "8080:8080"
+    volumes:
+      - aggregator-data:/hive/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+volumes:
+  qdrant-data:
+  aggregator-data:
