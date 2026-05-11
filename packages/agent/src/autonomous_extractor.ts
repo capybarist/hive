@@ -1,4 +1,5 @@
-import { KnowledgeStore, loadOrCreateIdentity } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, createLLMProvider } from '@hive/core';
+import type { LLMMessage, MessagePart } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
@@ -7,8 +8,6 @@ import { TOOL_DECLARATIONS, executeTool, resetSeenTitles } from './tools_registr
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
 const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
-const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent.
 
@@ -41,41 +40,6 @@ If you index something off-topic, you are wasting the budget.
 
 Maximize: papers indexed per token spent. Call finish() when budget is near exhaustion.`;
 
-interface Message {
-  role: 'user' | 'model';
-  parts: Array<{ text?: string; functionCall?: { name: string; args: Record<string, unknown> }; functionResponse?: { name: string; response: unknown } }>;
-}
-
-async function callGemini(messages: Message[], apiKey: string): Promise<{ text?: string; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; tokensUsed: number }> {
-  const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: messages,
-    tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-    toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
-    generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
-  };
-
-  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
-  });
-
-  if (!res.ok) throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
-
-  const data = (await res.json()) as any;
-  const candidate = data.candidates?.[0];
-  const tokensUsed = (data.usageMetadata?.totalTokenCount ?? 0) as number;
-
-  const text = candidate?.content?.parts?.find((p: any) => p.text)?.text as string | undefined;
-  const toolCalls = (candidate?.content?.parts ?? [])
-    .filter((p: any) => p.functionCall)
-    .map((p: any) => ({ name: p.functionCall.name, args: p.functionCall.args ?? {} }));
-
-  return { text, toolCalls: toolCalls.length ? toolCalls : undefined, tokensUsed };
-}
-
 export type { BudgetConfig } from './budget_controller.js';
 
 export interface ExtractionResult {
@@ -91,8 +55,7 @@ export async function runAutonomousExtraction(
   embedderUrlOverride?: string,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
 ): Promise<ExtractionResult> {
-  const apiKey = process.env.GEMINI_API_KEY ?? GEMINI_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  const provider = createLLMProvider();
 
   const effectiveEmbedderUrl = embedderUrlOverride ?? EMBEDDER_URL;
   const budget = new BudgetController({ ...DEFAULT_BUDGET, ...budgetConfig });
@@ -150,8 +113,8 @@ export async function runAutonomousExtraction(
     onIndexed?.({ id: frag.id, title: frag.title, source: frag.source });
   };
 
-  const messages: Message[] = [
-    { role: 'user', parts: [{ text: `Research objective: ${objective}\n\nStart extracting knowledge now. Remember to call finish() when done.` }] },
+  const messages: LLMMessage[] = [
+    { role: 'user', parts: [{ type: 'text', text: `Research objective: ${objective}\n\nStart extracting knowledge now. Remember to call finish() when done.` }] },
   ];
 
   console.log(`\n🤖 Autonomous extractor starting`);
@@ -172,22 +135,22 @@ export async function runAutonomousExtraction(
 
     let response;
     try {
-      response = await callGemini(messages, apiKey);
+      response = await provider.generateWithTools(messages, SYSTEM_PROMPT, TOOL_DECLARATIONS);
     } catch (e: any) {
-      console.error(`[gemini] Error: ${e.message}`);
+      console.error(`[llm] Error: ${e.message}`);
       break;
     }
     budget.recordTokens(response.tokensUsed);
 
-    // Add model response to history
-    const modelParts: Message['parts'] = [];
-    if (response.text) modelParts.push({ text: response.text });
+    // Add assistant response to history
+    const assistantParts: MessagePart[] = [];
+    if (response.text) assistantParts.push({ type: 'text', text: response.text });
     if (response.toolCalls) {
       for (const tc of response.toolCalls) {
-        modelParts.push({ functionCall: { name: tc.name, args: tc.args } });
+        assistantParts.push({ type: 'tool_call', id: tc.id, name: tc.name, args: tc.args });
       }
     }
-    if (modelParts.length) messages.push({ role: 'model', parts: modelParts });
+    if (assistantParts.length) messages.push({ role: 'assistant', parts: assistantParts });
 
     if (!response.toolCalls?.length) {
       // Model responded with text only — finished naturally
@@ -197,7 +160,7 @@ export async function runAutonomousExtraction(
     }
 
     // Execute each tool call
-    const toolResultParts: Message['parts'] = [];
+    const toolResultParts: MessagePart[] = [];
     for (const tc of response.toolCalls) {
       console.log(`  [tool] ${tc.name}(${JSON.stringify(tc.args).slice(0, 80)})`);
 
@@ -212,7 +175,7 @@ export async function runAutonomousExtraction(
       }
 
       const result = await executeTool(tc.name, tc.args, { embedderUrl: effectiveEmbedderUrl, onFragment });
-      toolResultParts.push({ functionResponse: { name: tc.name, response: result } });
+      toolResultParts.push({ type: 'tool_result', id: tc.id, name: tc.name, result });
     }
 
     messages.push({ role: 'user', parts: toolResultParts });

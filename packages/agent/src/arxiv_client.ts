@@ -19,33 +19,34 @@ export async function fetchPapers(
   limit: number = 10,
   categories: string[] = DEFAULT_CATEGORIES,
 ): Promise<Paper[]> {
-  // Add a small random jitter to avoid thundering herd on arXiv API from multiple BEEs
-  await new Promise(r => setTimeout(r, Math.random() * 2000));
+  // Jitter to spread load across multiple BEEs
+  await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
 
   const catFilter = categories.map((c) => `cat:${c}`).join('+OR+');
-  // Use phrase search for multi-word topics so arXiv matches the exact phrase
   const topicQuery = topic.includes(' ') ? `all:"${topic}"` : `all:${topic}`;
   const url =
     `${ARXIV_API}?search_query=(${encodeURIComponent(topicQuery)})+AND+(${catFilter})` +
     `&start=0&max_results=${limit}&sortBy=submittedDate&sortOrder=descending`;
 
   let res: Response | null = null;
-  for (let attempt = 1; attempt <= 4; attempt++) {
+  // Max 2 attempts with short delays — extraction budgets are tight (2-8 min).
+  // 4 attempts × (10+20+30+40)s delays could exhaust the full budget before any indexing.
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
       if (res.ok) break;
     } catch (e: any) {
-      console.warn(`arXiv fetch failed: ${e.message}, attempt ${attempt}/4`);
+      console.warn(`arXiv fetch failed: ${e.message}, attempt ${attempt}/2`);
     }
-    if (!res || res.status === 429 || res.status === 503) {
-      const wait = attempt * 10_000;
-      console.warn(`arXiv rate limit (${res?.status ?? 'timeout'}), retrying in ${wait / 1000}s... (attempt ${attempt}/4)`);
+    if (attempt < 2 && (!res || res.status === 429 || res.status === 503)) {
+      const wait = 5_000;
+      console.warn(`arXiv rate limit (${res?.status ?? 'timeout'}), retrying in ${wait / 1000}s...`);
       await new Promise((r) => setTimeout(r, wait));
-    } else {
+    } else if (res && !res.ok && res.status !== 429 && res.status !== 503) {
       throw new Error(`arXiv API error: ${res.status}`);
     }
   }
-  if (!res || !res.ok) throw new Error(`arXiv API error after retries: ${res?.status}`);
+  if (!res || !res.ok) throw new Error(`arXiv unavailable (${res?.status ?? 'timeout'}) — skipping this topic`);
 
   const xml = await res.text();
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });

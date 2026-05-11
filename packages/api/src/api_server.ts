@@ -3,16 +3,16 @@ import cors from '@fastify/cors';
 import staticPlugin from '@fastify/static';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, SyncManager } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, SyncManager, isLLMConfigured, validateLLMKey } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
 
 const PORT = Number(process.env.HIVE_PORT ?? 8080);
-const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const PEER_API = process.env.HIVE_PEER ?? '';   // kept for bootstrap announcements only
@@ -93,12 +93,12 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?
 
     if (!use_llm) return { fragments, has_hive_data, embedder_online, answer: null, mode: 'raw' };
 
-    if (!GEMINI_KEY) {
-      return reply.code(503).send({ error: 'GEMINI_API_KEY not configured' });
+    if (!isLLMConfigured()) {
+      return reply.code(503).send({ error: 'No LLM API key configured (set GEMINI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY)' });
     }
 
     try {
-      const { answer, mode } = await synthesize(question, fragments, GEMINI_KEY, has_hive_data, history);
+      const { answer, mode } = await synthesize(question, fragments, '', has_hive_data, history);
       return { answer, mode, fragments, has_hive_data, embedder_online };
     } catch (err: any) {
       return reply.code(502).send({ error: err.message });
@@ -212,7 +212,8 @@ app.get('/api/status', async () => {
     embedder_online: embedder !== null,
     indexed: embedder?.indexed ?? 0,
     model: embedder?.model ?? null,
-    gemini_configured: Boolean(GEMINI_KEY),
+    llm_configured: isLLMConfigured(),
+    llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
     peers: p2pNode.peerCount,
   };
 });
@@ -235,10 +236,10 @@ const claimRegistry = new ClaimRegistry(DATA_DIR);
 await claimRegistry.ready();
 
 let resolvedObjective = HIVE_OBJECTIVE;
-if (!resolvedObjective && GEMINI_KEY) {
+if (!resolvedObjective) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
-    resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], GEMINI_KEY, identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
+    resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
     logEvent('start', `Assigned objective: "${resolvedObjective}"`);
   } catch (e: any) {
     logEvent('error', `Topic assignment failed: ${e.message}`);
@@ -285,12 +286,10 @@ if (resolvedObjective) {
 }
 
 // ── Autonomous extraction loop (multi-topic) ─────────────────────────────────
-if (resolvedObjective) {
-  logEvent('start', `Autonomous mode active`);
+let extractionLoopRunning = false;
+const MAX_TOPICS_PER_CYCLE = 5;
 
-  const MAX_TOPICS_PER_CYCLE = 5; // cap to keep cycles under ~10 min
-
-  const runLoop = async () => {
+const runLoop = async () => {
     extracting = true;
     nextCycleAt = null;
     let totalIndexed = 0;
@@ -354,12 +353,63 @@ if (resolvedObjective) {
     }
   };
 
-  const initialJitter = 5_000 + Math.random() * 60_000;
-  setTimeout(runLoop, initialJitter);
-  nextCycleAt = Date.now() + initialJitter;
-} else {
-  logEvent('start', 'No HIVE_OBJECTIVE and no GEMINI_API_KEY — autonomous extraction disabled');
+async function startExtractionIfReady() {
+  if (extractionLoopRunning) return;
+  if (!isLLMConfigured()) {
+    logEvent('start', 'LLM not configured — set LLM_PROVIDER + LLM_API_KEY to enable autonomous extraction.');
+    return;
+  }
+  if (!resolvedObjective) {
+    try {
+      resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
+      logEvent('start', `Assigned objective: "${resolvedObjective}"`);
+    } catch (e: any) {
+      logEvent('error', `Topic assignment failed: ${e.message}`);
+    }
+  }
+  if (!resolvedObjective) return;
+
+  extractionLoopRunning = true;
+  logEvent('start', 'Autonomous mode active');
+  const delay = 2_000 + Math.random() * 8_000;
+  setTimeout(runLoop, delay);
+  nextCycleAt = Date.now() + delay;
 }
+
+startExtractionIfReady();
+
+// ── POST /api/config — set LLM provider + API key at runtime ─────────────────
+function upsertEnvLine(content: string, key: string, value: string): string {
+  const line = `${key}=${value}`;
+  const re = new RegExp(`^${key}=.*$`, 'm');
+  return re.test(content) ? content.replace(re, line) : (content + (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+}
+
+app.post<{ Body: { provider: string; apiKey: string } }>('/api/config', async (req, reply) => {
+  const { provider, apiKey } = req.body ?? {};
+  const VALID = ['gemini', 'claude', 'openai'];
+  if (!VALID.includes(provider)) return reply.code(400).send({ error: `Invalid provider. Valid: ${VALID.join(', ')}` });
+  if (!apiKey?.trim()) return reply.code(400).send({ error: 'apiKey is required' });
+
+  // Validate key before saving — catches typos and invalid keys immediately
+  const validationError = await validateLLMKey(provider, apiKey.trim());
+  if (validationError) return reply.code(400).send({ error: `Key validation failed: ${validationError}` });
+
+  process.env.LLM_PROVIDER = provider;
+  process.env.LLM_API_KEY = apiKey.trim();
+
+  const envPath = resolve(join(__dirname, '../../../../.env'));
+  try {
+    let content = '';
+    try { content = await readFile(envPath, 'utf8'); } catch {}
+    content = upsertEnvLine(content, 'LLM_PROVIDER', provider);
+    content = upsertEnvLine(content, 'LLM_API_KEY', apiKey.trim());
+    await writeFile(envPath, content, 'utf8');
+  } catch { /* .env write failed — in-memory update still works for this session */ }
+
+  await startExtractionIfReady();
+  return { ok: true, provider };
+});
 
 // ── GET /api/state — full BEE debug state ────────────────────────────────────
 app.get('/api/state', async () => {
@@ -395,7 +445,8 @@ try {
   console.log(`\n   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
   console.log(`   Peer → ${PEER_API || '(no bootstrap peer)'}`);
-  console.log(`   Gemini → ${GEMINI_KEY ? 'configured ✓' : 'NOT SET'}\n`);
+  const provider = process.env.LLM_PROVIDER ?? 'gemini';
+  console.log(`   LLM    → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}\n`);
 } catch (err) {
   console.error(err);
   process.exit(1);

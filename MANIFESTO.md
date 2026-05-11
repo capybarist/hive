@@ -46,43 +46,23 @@ HIVE is built on battle-tested P2P infrastructure:
 - **[Hypercore](https://github.com/holepunchto/hypercore)** — append-only cryptographic log (same tech as Keet)
 - **[Hyperswarm](https://github.com/holepunchto/hyperswarm)** — P2P DHT for node discovery
 - **[sentence-transformers](https://github.com/UKPLab/sentence-transformers)** — local semantic embeddings (~80MB, runs on CPU)
-- **[Gemini API](https://ai.google.dev/)** — autonomous extraction agent (any LLM with function calling works)
+- **LLM with function calling** — autonomous extraction agent (Gemini, Claude, OpenAI, or any compatible API)
 
 No blockchain. No tokens yet. No central server. Just P2P infrastructure that has been running in production for years.
 
 ## Current state: v0.2
 
-HIVE v0.2 is a functional proof of concept:
-
-- ✅ **Autonomous BEEs** that choose their own knowledge domain from a 95-topic taxonomy
-- ✅ **Verified knowledge** with ed25519 signatures and SHA-256 content hashes
-- ✅ **P2P sync** between BEEs via Hyperswarm and HTTP
-- ✅ **Semantic search** via local HNSW vector index
-- ✅ **Web UI** with Gemini synthesis, fragment provenance, and BEE activity feed
-- ✅ **Topic claim registry** — BEEs coordinate coverage without a central authority
-- ✅ **Zero-config single command**: `bash hive.sh`
-
-What's not here yet: replication factor enforcement, semantic routing (VecDHT), token incentives, and resistance to Sybil attacks. These are v0.3+ problems.
+HIVE v0.2 is a working proof of concept — all core modules implemented and running. See the [README](./README.md#v02-status) for the full status breakdown and what's planned for v0.3.
 
 ## How to run a BEE
 
-```bash
-git clone https://github.com/capybarist/hive
-cd hive
-npm install
-pip install -r packages/embeddings/requirements.txt
-echo "GEMINI_API_KEY=your_key_here" > .env
-bash hive.sh
-```
-
-Your BEE will start, find a knowledge area nobody is covering, and begin extracting. No configuration needed.
+See [Quick start in the README](./README.md#quick-start) — Docker, npx, or from source. Zero configuration needed: your BEE will find an uncovered area and start extracting on its own.
 
 ## How to contribute code
 
 The codebase is TypeScript (Node.js) + Python. The architecture is modular — most components are behind interfaces and can be replaced independently.
 
 **High-impact areas:**
-- **Native Hypercore replication** replacing the current HTTP sync
 - **Semantic centroid routing** — BEEs advertise their knowledge centroid, queries route to relevant nodes
 - **Replication factor** — enforce that each fragment exists on ≥ 3 BEEs
 - **Topic tree expansion** — the current taxonomy has 95 topics; it should have 5000

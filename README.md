@@ -15,6 +15,7 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge.
 
 ```bash
 docker run -d \
+  -e LLM_PROVIDER=gemini \
   -e GEMINI_API_KEY=your_key_here \
   -p 8080:8080 \
   -v hive-data:/hive/data \
@@ -26,7 +27,8 @@ Open http://localhost:8080 — your BEE will self-configure and start indexing.
 ### Option 2 — npx (Node.js 20+ and Python 3.10+ required)
 
 ```bash
-# Set your API key
+# Set your API key (Gemini, Claude, or OpenAI)
+export LLM_PROVIDER=gemini
 export GEMINI_API_KEY=your_key_here
 
 # Run (installs everything automatically on first run)
@@ -39,7 +41,7 @@ npx hive-network
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
 pip install -r packages/embeddings/requirements.txt
-echo "GEMINI_API_KEY=your_key_here" > .env
+cp .env.example .env   # then edit .env with your API key
 bash hive.sh
 ```
 
@@ -52,6 +54,13 @@ The BEE starts, scans the network, **chooses an uncovered topic from the knowled
 ## Configuration options (all optional)
 
 ```bash
+# Provider — gemini (default), claude, or openai
+LLM_PROVIDER=claude ANTHROPIC_API_KEY=your_key bash hive.sh
+LLM_PROVIDER=openai OPENAI_API_KEY=your_key bash hive.sh
+
+# Override the default model for the chosen provider
+LLM_MODEL=gpt-4o-mini bash hive.sh
+
 # Connect to an existing network
 HIVE_BOOTSTRAP=http://peer.example.com bash hive.sh
 

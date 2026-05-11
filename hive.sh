@@ -9,9 +9,11 @@
 #   BEE_TOPIC_DOMAIN=health bash hive.sh # soft topic preference
 #
 # Required env:
-#   GEMINI_API_KEY   — your Gemini API key (set in shell or .env file)
+#   LLM_PROVIDER=gemini|claude|openai   (default: gemini)
+#   LLM_API_KEY=your_api_key_here
 #
 # Optional env:
+#   LLM_MODEL                 (override default model for the provider)
 #   HIVE_PORT                 (default: 8080)
 #   HIVE_EMBEDDER_PORT        (default: 7700)
 #   HIVE_DATA_DIR             (default: ~/.hive)
@@ -34,7 +36,12 @@ err() { echo -e "${R}✗${N} $1"; exit 1; }
 alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 
 # ── Validate ──────────────────────────────────────────────────────────────────
-[ -z "$GEMINI_API_KEY" ] && err "GEMINI_API_KEY is required. Set it in your environment or in a .env file."
+LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
+case "$LLM_PROVIDER" in
+  gemini|claude|openai) ;;
+  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai" ;;
+esac
+[ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required. Set it in your environment or in a .env file."
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT="${HIVE_PORT:-8080}"

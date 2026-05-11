@@ -6,3 +6,5 @@ export { SyncManager } from './sync_manager.js';
 export { ClaimRegistry } from './claim_registry.js';
 export { assignTopics, buildObjectiveFromTopics, loadTree } from './topic_assignment.js';
 export type { TopicNode } from './topic_assignment.js';
+export { createLLMProvider, isLLMConfigured, validateLLMKey } from './llm_provider.js';
+export type { LLMProvider, LLMMessage, MessagePart, ToolDef, ToolCall, GenerateOptions, GenerateResult } from './llm_provider.js';
