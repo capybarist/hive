@@ -57,8 +57,8 @@ export class SyncManager {
             signature: raw.signature ?? '',
           };
 
-          // Always add to HNSW first (primary search index, always works)
-          await this.addToHNSW(raw);
+          // Add to HNSW — only mark as synced if this succeeds so we retry on failure
+          const added = await this.addToHNSW(raw);
 
           // Save to Hypercore — non-fatal, HNSW is the reliable path
           try {
@@ -68,10 +68,12 @@ export class SyncManager {
               synced++;
             }
           } catch (e: any) {
-            // Hypercore write failed — fragment is still searchable via HNSW
+            // Hypercore write failed — fragment still searchable via HNSW
           }
 
-          this.syncedIds.add(raw.id);
+          // Only mark as done if HNSW add succeeded — lets us retry on next cycle
+          // if the embedder was temporarily unavailable
+          if (added) this.syncedIds.add(raw.id);
         }
       } catch (err: any) {
         console.log(`[sync] Peer ${peerUrl} unreachable: ${err.message}`);
@@ -91,10 +93,10 @@ export class SyncManager {
     if (this.intervalHandle) clearInterval(this.intervalHandle);
   }
 
-  private async addToHNSW(frag: any): Promise<void> {
-    if (!frag.text) return;
+  private async addToHNSW(frag: any): Promise<boolean> {
+    if (!frag.text) return false;
     try {
-      await fetch(`${this.embedderUrl}/add`, {
+      const res = await fetch(`${this.embedderUrl}/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -112,6 +114,10 @@ export class SyncManager {
         }),
         signal: AbortSignal.timeout(10_000),
       });
-    } catch {}
+      return res.ok;
+    } catch (e: any) {
+      console.warn(`[sync] addToHNSW failed for ${frag.id}: ${e.message}`);
+      return false;
+    }
   }
 }

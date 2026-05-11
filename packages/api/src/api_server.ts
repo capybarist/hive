@@ -69,7 +69,29 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?
     const { question, top_k = 5, use_llm = true, history = [] } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
-    const { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k);
+    let { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k);
+
+    // Federated query: if local HNSW has no relevant data, ask peer BEEs.
+    // This handles the case where extraction happened on a different node and
+    // sync hasn't propagated yet (or Hyperswarm is unavailable).
+    if (!has_hive_data && PEER_API) {
+      try {
+        const peerRes = await fetch(`${PEER_API}/api/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, top_k, use_llm: false }),
+          signal: AbortSignal.timeout(6_000),
+        });
+        if (peerRes.ok) {
+          const peerData = (await peerRes.json()) as any;
+          if (peerData.has_hive_data) {
+            fragments = peerData.fragments ?? fragments;
+            has_hive_data = true;
+            console.log(`[federated] Got ${fragments.length} fragments from ${PEER_API}`);
+          }
+        }
+      } catch { /* peer unreachable — fall through to hybrid mode */ }
+    }
 
     if (!use_llm) return { fragments, has_hive_data, embedder_online, answer: null, mode: 'raw' };
 
