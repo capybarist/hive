@@ -126,6 +126,8 @@ export async function runAutonomousExtraction(
     } catch (e: any) {
       console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
     }
+    // Extract arxiv_id from source string (e.g. "arXiv:2605.05576v1" → "2605.05576v1")
+    const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1] ?? null;
     // Direct HNSW write for immediate local search availability.
     // watchFragments() handles P2P-replicated fragments and startup replay.
     fetch(`${effectiveEmbedderUrl}/add`, {
@@ -136,6 +138,7 @@ export async function runAutonomousExtraction(
         metadata: {
           source: frag.source, doi: frag.doi ?? null, doi_valid: frag.doi !== null,
           confidence: frag.confidence, title: frag.title ?? null, node_id: store.nodeId,
+          arxiv_id: arxivId,
           extracted_at: new Date().toISOString(),
         },
       }),

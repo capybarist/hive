@@ -75,15 +75,22 @@ export class KnowledgeStore implements IKnowledgeGraph {
   // ── IKnowledgeGraph ─────────────────────────────────────────────────────────
 
   private async ensureOpen(): Promise<void> {
-    // If the core was closed (e.g. Corestore internal session management),
-    // reopen it transparently. This makes writes self-healing.
     if (this.core?.closed) {
       console.warn('[store] Core was closed — reopening...');
       this.core = this.store.get({ name: 'fragments' });
-      await this.core.ready();
+      await this.withTimeout(this.core.ready(), 10_000, 'core.ready');
       this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-      await this.bee.ready();
+      await this.withTimeout(this.bee.ready(), 10_000, 'bee.ready');
     }
+  }
+
+  private withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)
+      ),
+    ]);
   }
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -102,7 +109,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       b.put(K.frag(fragment.id), fragment);
       b.put(K.src(fragment.source, fragment.id), fragment.id);
       b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
-      await b.flush();
+      await this.withTimeout(b.flush(), 8_000, 'save flush');
       return fragment.id;
     });
   }
@@ -115,7 +122,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       b.put(K.frag(fragment.id), fragment);
       b.put(K.src(fragment.source, fragment.id), fragment.id);
       b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
-      await b.flush();
+      await this.withTimeout(b.flush(), 8_000, 'saveReplicated flush');
     });
   }
 
@@ -163,7 +170,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       b.put(K.frag(newFragment.id), newFragment);
       b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
       b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
-      await b.flush();
+      await this.withTimeout(b.flush(), 8_000, 'supersede flush');
       return newFragment.id;
     });
   }

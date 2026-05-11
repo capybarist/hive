@@ -293,14 +293,23 @@ if (resolvedObjective) {
         }
 
         logEvent('start', `Topic: ${claim.topicId}`);
+        const topicMaxMin = Math.ceil(8 / activeClaims.length);
+        // Hard timeout: 2× budget + 2 min buffer for in-flight operations.
+        // Guards against store.save() or b.flush() hanging beyond their own timeouts.
+        const topicDeadlineMs = (topicMaxMin * 2 + 2) * 60_000;
         try {
-          const result = await runAutonomousExtraction(
-            topicObjective,
-            { maxFragments: fragsPerTopic, maxMinutes: Math.ceil(8 / activeClaims.length) },
-            knowledgeStore,
-            embedderUrl,
-            (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
-          );
+          const result = await Promise.race([
+            runAutonomousExtraction(
+              topicObjective,
+              { maxFragments: fragsPerTopic, maxMinutes: topicMaxMin },
+              knowledgeStore,
+              embedderUrl,
+              (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
+            ),
+            new Promise<never>((_, rej) =>
+              setTimeout(() => rej(new Error(`topic deadline exceeded (${topicMaxMin * 2 + 2}min)`)), topicDeadlineMs)
+            ),
+          ]);
           totalIndexed += result.fragmentsIndexed;
           totalTokens += result.budget.tokensUsed;
           await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
