@@ -46,16 +46,14 @@ p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
 });
 
 // ── HTTP sync fallback ───────────────────────────────────────────────────────
-// Hyperswarm DHT requires open UDP which may be blocked in some environments
-// (e.g. Codespaces). SyncManager polls peer HTTP APIs as a reliable fallback
-// so BEEs always share data even when native Hypercore replication can't connect.
-const syncManager = PEER_API
-  ? new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl)
-  : null;
-if (syncManager) {
-  syncManager.start();
-  console.log(`   HTTP sync → ${PEER_API} ✓`);
-}
+// SyncManager always runs, even on seed nodes with no initial peers.
+// Peers dynamically register via POST /api/register-peer, so a seed BEE
+// starts with an empty peer list and accumulates peers at runtime.
+const syncManager = new SyncManager(
+  knowledgeStore, identity.nodeId, PEER_API ? [PEER_API] : [], embedderUrl,
+);
+syncManager.start();
+if (PEER_API) console.log(`   HTTP sync → ${PEER_API} ✓`);
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
@@ -139,11 +137,16 @@ app.get('/api/node-info', async () => ({
 }));
 
 // ── POST /api/register-peer ──────────────────────────────────────────────────
-// Kept for claim-registry announcements. Data sync is now Hypercore-native.
+// Peers call this on startup so the seed node learns about them and starts
+// pulling their fragments. This makes the topology bidirectional:
+// BEE-2 → syncs from BEE-1 (via PEER_API config)
+// BEE-1 → syncs from BEE-2 (via this registration)
 app.post<{ Body: { apiUrl: string } }>('/api/register-peer', async (req) => {
   const { apiUrl } = req.body;
   if (!apiUrl) return { ok: false, error: 'apiUrl required' };
-  console.log(`[p2p] Peer announced: ${apiUrl}`);
+  syncManager.addPeer(apiUrl);
+  syncManager.syncOnce().catch(() => {});   // immediate pull
+  console.log(`[sync] Peer registered: ${apiUrl}`);
   return { ok: true, nodeId: identity.nodeId };
 });
 
@@ -396,4 +399,17 @@ try {
 } catch (err) {
   console.error(err);
   process.exit(1);
+}
+
+// Announce ourselves to the bootstrap peer so it adds us to its SyncManager.
+// This makes data flow bidirectionally: we pull from peer, peer pulls from us.
+if (PEER_API) {
+  fetch(`${PEER_API}/api/register-peer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiUrl: `http://127.0.0.1:${PORT}` }),
+    signal: AbortSignal.timeout(5_000),
+  })
+    .then(r => { if (r.ok) console.log(`[sync] Announced to bootstrap peer ${PEER_API}`); })
+    .catch(e => console.warn(`[sync] Could not announce to ${PEER_API}: ${e.message}`));
 }
