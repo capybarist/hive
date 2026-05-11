@@ -14,7 +14,7 @@ All modules implemented and working:
 - **Module 3**: KnowledgeStore on Hypercore + Hyperbee (SESSION_CLOSED fixed)
 - **Module 4**: P2P network — Hyperswarm discovery + native Hypercore replication with core-key exchange
 - **Module 5**: Vector query API (Fastify)
-- **Module 6**: Web UI with Gemini synthesis
+- **Module 6**: Web UI with LLM synthesis (Gemini / Claude / OpenAI)
 - **Module 7**: Autonomous extractor (Gemini function calling) + topic tree + claim registry
 
 ## How data flows between BEEs (P2P architecture)
@@ -88,7 +88,9 @@ bash start.sh --clean            # wipe data and restart
 **Key environment variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEMINI_API_KEY` | — | Required. Set in `.env` |
+| `LLM_PROVIDER` | `gemini` | LLM provider: `gemini`, `claude`, or `openai` |
+| `LLM_API_KEY` | — | Required. API key for the chosen provider |
+| `LLM_MODEL` | — | Optional model override (e.g. `gpt-4o-mini`) |
 | `HIVE_PORT` | 8080 | API server port |
 | `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
 | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
@@ -136,7 +138,7 @@ https://fantastic-orbit-4q7wx7jw4j45275r5-8082.app.github.dev
   Hypercore = source of truth. HNSW = local search index, always rebuildable from Hypercore.
 - **Native Hypercore replication**: Protomux channel exchanges core public keys on connect;
   each BEE opens peer's core read-only; Corestore replication delivers blocks automatically.
-- **Gemini 2.5 Flash**: used for both synthesis (UI) and autonomous extraction
+- **Multi-provider LLM**: Gemini (default), Claude, or OpenAI — set via `LLM_PROVIDER` + `LLM_API_KEY`
 
 ## Known issues
 

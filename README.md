@@ -14,9 +14,26 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge.
 ### Option 1 — Docker (recommended, no dependencies)
 
 ```bash
+# Gemini (free tier available at aistudio.google.com)
 docker run -d \
   -e LLM_PROVIDER=gemini \
-  -e GEMINI_API_KEY=your_key_here \
+  -e LLM_API_KEY=your_key_here \
+  -p 8080:8080 \
+  -v hive-data:/hive/data \
+  ghcr.io/capybarist/hive:latest
+
+# Claude
+docker run -d \
+  -e LLM_PROVIDER=claude \
+  -e LLM_API_KEY=your_key_here \
+  -p 8080:8080 \
+  -v hive-data:/hive/data \
+  ghcr.io/capybarist/hive:latest
+
+# OpenAI
+docker run -d \
+  -e LLM_PROVIDER=openai \
+  -e LLM_API_KEY=your_key_here \
   -p 8080:8080 \
   -v hive-data:/hive/data \
   ghcr.io/capybarist/hive:latest
@@ -24,18 +41,7 @@ docker run -d \
 
 Open http://localhost:8080 — your BEE will self-configure and start indexing.
 
-### Option 2 — npx (Node.js 20+ and Python 3.10+ required)
-
-```bash
-# Set your API key (Gemini, Claude, or OpenAI)
-export LLM_PROVIDER=gemini
-export GEMINI_API_KEY=your_key_here
-
-# Run (installs everything automatically on first run)
-npx hive-network
-```
-
-### Option 3 — From source
+### Option 2 — From source
 
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
@@ -55,10 +61,12 @@ The BEE starts, scans the network, **chooses an uncovered topic from the knowled
 
 ```bash
 # Provider — gemini (default), claude, or openai
-LLM_PROVIDER=claude ANTHROPIC_API_KEY=your_key bash hive.sh
-LLM_PROVIDER=openai OPENAI_API_KEY=your_key bash hive.sh
+LLM_PROVIDER=claude  LLM_API_KEY=your_key bash hive.sh
+LLM_PROVIDER=openai  LLM_API_KEY=your_key bash hive.sh
+LLM_PROVIDER=gemini  LLM_API_KEY=your_key bash hive.sh
 
 # Override the default model for the chosen provider
+# Defaults: gemini-2.5-flash | claude-sonnet-4-6 | gpt-4o
 LLM_MODEL=gpt-4o-mini bash hive.sh
 
 # Connect to an existing network
@@ -98,7 +106,7 @@ Each BEE decides what to index on its own. Nobody tells it what to do.
 ```
 packages/
   core/        — KnowledgeStore (Hypercore+Hyperbee), P2P, identity, topic registry
-  agent/       — Autonomous extractor (Gemini function calling), reactive extractor
+  agent/       — Autonomous extractor (LLM function calling), reactive extractor
   embeddings/  — Python server: all-MiniLM-L6-v2 + HNSW
   api/         — Fastify API + UI server
   ui/          — Web interface (vanilla HTML/JS)
@@ -147,7 +155,7 @@ bash start.sh bee-4
 | 3 | Hypercore + Hyperbee (native replication) | ✅ v0.2 |
 | 4 | P2P network (Hyperswarm + Protomux core-key exchange) | ✅ v0.2 |
 | 5 | Vector API (Fastify) | ✅ v0.2 |
-| 6 | UI with Gemini synthesis | ✅ v0.2 |
+| 6 | UI with LLM synthesis (Gemini / Claude / OpenAI) | ✅ v0.2 |
 | 7 | Autonomous extractor + topic tree + claim registry | ✅ v0.2 |
 
 **Planned for v0.3:**
