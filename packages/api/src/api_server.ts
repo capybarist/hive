@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, SyncManager } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +44,18 @@ console.log(`   HNSW watch started ✓`);
 p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
   knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
 });
+
+// ── HTTP sync fallback ───────────────────────────────────────────────────────
+// Hyperswarm DHT requires open UDP which may be blocked in some environments
+// (e.g. Codespaces). SyncManager polls peer HTTP APIs as a reliable fallback
+// so BEEs always share data even when native Hypercore replication can't connect.
+const syncManager = PEER_API
+  ? new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl)
+  : null;
+if (syncManager) {
+  syncManager.start();
+  console.log(`   HTTP sync → ${PEER_API} ✓`);
+}
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });

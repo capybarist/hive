@@ -3,11 +3,10 @@ const EMBEDDER = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 // Minimum score to show a fragment in the UI at all
 const SHOW_THRESHOLD = 0.05;
 
-// "In HIVE" if the TOP fragment scores above this threshold.
-// Using top-1 (not count) because a small homogeneous HNSW can easily
-// have 2+ fragments scoring 20-25% for any unrelated query.
-// A genuinely relevant top result scores 35-65%; noise tops out at 25-30%.
-const RELEVANT_SCORE = 0.35;
+// "In HIVE" if the TOP fragment scores above this threshold OR keyword match.
+// all-MiniLM-L6-v2 scores conversational queries 0.28-0.50 for relevant docs;
+// noise tops out at 0.20-0.25 for a reasonably diverse HNSW.
+const RELEVANT_SCORE = 0.30;
 const MIN_RELEVANT_COUNT = 1;
 
 // Stop words filtered out before keyword matching (Spanish + English)
@@ -84,7 +83,13 @@ export async function queryByText(question: string, topK = 5): Promise<QueryResu
   const markedFragments = fragments.map(f => ({
     ...f,
     relevant: f.score >= RELEVANT_SCORE ||
-      (meaningful.length > 0 && meaningful.some(w => (f.title ?? '').toLowerCase().includes(w))),
+      (meaningful.length > 0 && meaningful.some(w => {
+        // Check title first (fast), then fall back to full text.
+        // text always contains the title by indexing convention ("Title. Abstract..."),
+        // so this catches fragments where title was not stored separately.
+        const haystack = ((f.title ?? '') + ' ' + f.text).toLowerCase();
+        return haystack.includes(w);
+      })),
   }));
 
   // "In HIVE" if any fragment is marked relevant
