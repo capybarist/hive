@@ -12,13 +12,16 @@ export interface Paper {
 
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 
-const DEFAULT_CATEGORIES = ['cs.AI', 'cs.LG', 'cs.DB', 'cs.IR', 'cs.CL', 'cs.CV', 'cs.NE'];
+const DEFAULT_CATEGORIES = ['cs.*', 'physics.*', 'math.*', 'q-bio.*', 'q-fin.*', 'stat.*', 'econ.*'];
 
 export async function fetchPapers(
   topic: string,
   limit: number = 10,
   categories: string[] = DEFAULT_CATEGORIES,
 ): Promise<Paper[]> {
+  // Add a small random jitter to avoid thundering herd on arXiv API from multiple BEEs
+  await new Promise(r => setTimeout(r, Math.random() * 2000));
+
   const catFilter = categories.map((c) => `cat:${c}`).join('+OR+');
   // Use phrase search for multi-word topics so arXiv matches the exact phrase
   const topicQuery = topic.includes(' ') ? `all:"${topic}"` : `all:${topic}`;
@@ -28,11 +31,15 @@ export async function fetchPapers(
 
   let res: Response | null = null;
   for (let attempt = 1; attempt <= 4; attempt++) {
-    res = await fetch(url);
-    if (res.ok) break;
-    if (res.status === 429 || res.status === 503) {
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      if (res.ok) break;
+    } catch (e: any) {
+      console.warn(`arXiv fetch failed: ${e.message}, attempt ${attempt}/4`);
+    }
+    if (!res || res.status === 429 || res.status === 503) {
       const wait = attempt * 10_000;
-      console.warn(`arXiv rate limit (${res.status}), retrying in ${wait / 1000}s... (attempt ${attempt}/4)`);
+      console.warn(`arXiv rate limit (${res?.status ?? 'timeout'}), retrying in ${wait / 1000}s... (attempt ${attempt}/4)`);
       await new Promise((r) => setTimeout(r, wait));
     } else {
       throw new Error(`arXiv API error: ${res.status}`);

@@ -39,7 +39,7 @@ export class HiveP2PNode extends EventEmitter {
       // Corestore only replicates cores that BOTH sides have open.
       // Solution: use a Protomux channel to exchange core keys before replication,
       // then open the peer's core locally so Corestore replication can deliver data.
-      const mux = new Protomux(socket);
+      const mux = Protomux.from(socket) || new Protomux(socket);
       const channel = mux.createChannel({ protocol: 'hive/core-keys/v1' });
       const keyMessage = channel.addMessage({ encoding: c.raw });
 
@@ -60,9 +60,9 @@ export class HiveP2PNode extends EventEmitter {
         keyMessage.send(this.localCoreKey);
       }
 
-      // Replication session over the same mux — Corestore adds its own channels
+      // Replication session over the same socket
       const replSession = (this.store as any).session();
-      replSession.replicate(mux);
+      replSession.replicate(socket);
 
       socket.on('close', () => {
         replSession.close().catch(() => {});
@@ -78,7 +78,11 @@ export class HiveP2PNode extends EventEmitter {
       console.log(`[p2p] Peer connected: ${peerId} (total: ${this._peers.size})`);
     });
 
-    await this.swarm.flush();
+    // Don't let flush() hang the node indefinitely
+    await Promise.race([
+      this.swarm.flush(),
+      new Promise(r => setTimeout(r, 10_000))
+    ]);
     console.log(`[p2p] Joined HIVE network — topic: ${HIVE_TOPIC.toString('hex').slice(0, 16)}...`);
   }
 

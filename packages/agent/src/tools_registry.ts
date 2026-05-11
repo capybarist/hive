@@ -116,8 +116,12 @@ export async function executeTool(
 ): Promise<ToolResult> {
   switch (name) {
     case 'arxiv_search': {
-      const papers = await fetchPapers(args.query as string, (args.limit as number) ?? 5);
-      return { ok: true, data: papers.map(p => ({ arxiv_id: p.arxiv_id, title: p.title, abstract: p.abstract.slice(0, 500), doi: p.doi, source: p.source })) };
+      try {
+        const papers = await fetchPapers(args.query as string, (args.limit as number) ?? 5);
+        return { ok: true, data: papers.map(p => ({ arxiv_id: p.arxiv_id, title: p.title, abstract: p.abstract.slice(0, 500), doi: p.doi, source: p.source })) };
+      } catch (e: any) {
+        return { ok: false, error: e.message };
+      }
     }
 
     case 'crossref_validate': {

@@ -49,72 +49,72 @@ The BEE starts, scans the network, **chooses an uncovered topic from the knowled
 
 ---
 
-## Opciones de configuración (todas opcionales)
+## Configuration options (all optional)
 
 ```bash
-# Conectar a una red existente
+# Connect to an existing network
 HIVE_BOOTSTRAP=http://peer.example.com bash hive.sh
 
-# Puerto personalizado
+# Custom port
 HIVE_PORT=8081 HIVE_EMBEDDER_PORT=7701 bash hive.sh
 
-# Directorio de datos (default: ~/.hive)
+# Data directory (default: ~/.hive)
 HIVE_DATA_DIR=/data/my-bee bash hive.sh
 
-# Sugerir un dominio preferido (no obligatorio)
-# La BEE seguirá siendo autónoma — solo prioriza este dominio si hay hojas libres
+# Suggest a preferred domain (optional)
+# The BEE will still be autonomous — it only prioritizes this domain if there are uncovered leaves
 BEE_TOPIC_DOMAIN=health bash hive.sh
 ```
 
 ---
 
-## Cómo funciona
+## How it works
 
 ```
-BEE arranca
-  → Lee data/topic_tree.json (95 temas disponibles)
-  → Escanea peers: qué temas ya están cubiertos
-  → Reclama 3 temas no cubiertos (o con menos cobertura)
-  → Ciclo cada 5 min: extrae fragmentos para cada tema reclamado
-  → Sincroniza automáticamente con otros BEEs cada 8s
-  → Renueva claims (TTL 30min) para mantener su territorio
+BEE starts
+  → Reads data/topic_tree.json (95 available topics)
+  → Scans peers: which topics are already covered
+  → Claims 3 uncovered topics (or least-covered ones)
+  → Loop every 5 min: extracts fragments for each claimed topic
+  → Automatically syncs with other BEEs every 8s
+  → Renews claims (TTL 30min) to maintain its territory
 ```
 
-Cada BEE decide sola qué indexar. Nadie le dice qué hacer.
+Each BEE decides what to index on its own. Nobody tells it what to do.
 
 ---
 
-## Arquitectura
+## Architecture
 
 ```
 packages/
-  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P, identidad, topic registry
-  agent/       — Extractor autónomo (Gemini function calling), extractor reactivo
-  embeddings/  — Servidor Python: all-MiniLM-L6-v2 + HNSW
-  api/         — Fastify API + servidor UI
-  ui/          — Interfaz web (HTML/JS vanilla)
+  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P, identity, topic registry
+  agent/       — Autonomous extractor (Gemini function calling), reactive extractor
+  embeddings/  — Python server: all-MiniLM-L6-v2 + HNSW
+  api/         — Fastify API + UI server
+  ui/          — Web interface (vanilla HTML/JS)
 
 data/
-  topic_tree.json   — árbol de conocimiento (95 temas, 9 dominios)
-  bee-*/            — datos runtime por BEE (generados automáticamente, no en git)
+  topic_tree.json   — knowledge tree (95 topics, 9 domains)
+  bee-*/            — runtime data per BEE (auto-generated, not in git)
 
-bees/               — configs para testing multi-BEE local (no producción)
+bees/               — configs for local multi-BEE testing (not production)
 ```
 
 ---
 
-## Testing multi-BEE local
+## Local multi-BEE testing
 
-Para probar varios BEEs en la misma máquina:
+To test multiple BEEs on the same machine:
 
 ```bash
-# Lanza todos los BEEs de bees/*.env
+# Launches all BEEs from bees/*.env
 bash start.sh
 
-# O BEEs específicos
+# Or specific BEEs only
 bash start.sh bee-1 bee-2 bee-3
 
-# Añadir un BEE nuevo
+# Add a new BEE
 cat > bees/bee-4.env << 'EOF'
 BEE_NAME=bee-4
 BEE_PORT=8083
@@ -129,29 +129,29 @@ bash start.sh bee-4
 
 ---
 
-## Estado v0.1
+## v0.1 Status
 
-| Módulo | Descripción | Estado |
+| Module | Description | Status |
 |--------|-------------|--------|
-| 1 | Embeddings + HNSW local | ✅ |
-| 2 | Extractor reactivo (arXiv + RSS) | ✅ |
+| 1 | Embeddings + local HNSW | ✅ |
+| 2 | Reactive extractor (arXiv + RSS) | ✅ |
 | 3 | Hypercore + Hyperbee + Autobase | ✅ |
-| 4 | Red P2P (Hyperswarm + sync) | ✅ |
-| 5 | API vectorial | ✅ |
-| 6 | UI con Gemini | ✅ |
-| 7 | Extractor autónomo + topic tree + claim registry | ✅ |
+| 4 | P2P network (Hyperswarm + sync) | ✅ |
+| 5 | Vector API | ✅ |
+| 6 | UI with Gemini | ✅ |
+| 7 | Autonomous extractor + topic tree + claim registry | ✅ |
 
-**Fuera de v0.1 (v0.2):**
-- Factor de replicación ≥ 3 (enforcement automático)
-- Enrutamiento semántico por centroide (VecDHT)
-- Sistema de tokens
-- Resistencia a ataques Sybil
+**Out of v0.1 (v0.2):**
+- Replication factor ≥ 3 (automatic enforcement)
+- Semantic centroid routing (VecDHT)
+- Token system
+- Sybil attack resistance
 
 ---
 
 ## Logs
 
 ```bash
-tail -f /tmp/hive_api.log        # actividad de la BEE
-tail -f /tmp/hive_embedder.log   # servidor de embeddings
+tail -f /tmp/hive_api.log        # BEE activity
+tail -f /tmp/hive_embedder.log   # embeddings server
 ```

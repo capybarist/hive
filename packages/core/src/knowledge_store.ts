@@ -20,6 +20,8 @@ export class KnowledgeStore implements IKnowledgeGraph {
   // Serialize all Hyperbee writes to prevent concurrent flush conflicts
   private _writeQueue: Promise<void> = Promise.resolve();
 
+  private _readyPromise: Promise<void> | null = null;
+
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
     this.store = new Corestore(join(dataDir, 'corestore'));
@@ -39,15 +41,21 @@ export class KnowledgeStore implements IKnowledgeGraph {
 
   async ready(): Promise<void> {
     if (this._ready) return;
-    await this.store.ready();
-    // Store the core as an instance field to prevent garbage collection.
-    // A local variable would go out of scope after ready() returns and the GC
-    // would close the Hypercore, causing SESSION_CLOSED on subsequent writes.
-    this.core = this.store.get({ name: 'fragments' });
-    await this.core.ready();
-    this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-    await this.bee.ready();
-    this._ready = true;
+    if (this._readyPromise) return this._readyPromise;
+
+    this._readyPromise = (async () => {
+      await this.store.ready();
+      // Store the core as an instance field to prevent garbage collection.
+      // A local variable would go out of scope after ready() returns and the GC
+      // would close the Hypercore, causing SESSION_CLOSED on subsequent writes.
+      this.core = this.store.get({ name: 'fragments' });
+      await this.core.ready();
+      this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await this.bee.ready();
+      this._ready = true;
+    })();
+
+    return this._readyPromise;
   }
 
   // ── Write helpers ───────────────────────────────────────────────────────────
@@ -91,9 +99,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      await b.put(K.frag(fragment.id), fragment);
-      await b.put(K.src(fragment.source, fragment.id), fragment.id);
-      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
+      b.put(K.frag(fragment.id), fragment);
+      b.put(K.src(fragment.source, fragment.id), fragment.id);
+      b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
       await b.flush();
       return fragment.id;
     });
@@ -104,9 +112,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      await b.put(K.frag(fragment.id), fragment);
-      await b.put(K.src(fragment.source, fragment.id), fragment.id);
-      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
+      b.put(K.frag(fragment.id), fragment);
+      b.put(K.src(fragment.source, fragment.id), fragment.id);
+      b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
       await b.flush();
     });
   }
@@ -150,11 +158,11 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      await b.put(K.hist(oldId, old.extracted_at), signedOld);
-      await b.put(K.frag(oldId), signedOld);
-      await b.put(K.frag(newFragment.id), newFragment);
-      await b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
-      await b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
+      b.put(K.hist(oldId, old.extracted_at), signedOld);
+      b.put(K.frag(oldId), signedOld);
+      b.put(K.frag(newFragment.id), newFragment);
+      b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
+      b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
       await b.flush();
       return newFragment.id;
     });
@@ -186,11 +194,18 @@ export class KnowledgeStore implements IKnowledgeGraph {
    */
   async watchFragments(embedderUrl: string): Promise<void> {
     await this.ready();
+    
+    // Create a dedicated session for watching to avoid contention with the main session
+    const watchSession = this.store.session();
+    const watchCore = watchSession.get({ name: 'fragments' });
+    await watchCore.ready();
+    const watchBee = new Hyperbee(watchCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+    await watchBee.ready();
+
     const seen = new Set<string>();
 
     const post = async (frag: Fragment) => {
       if (seen.has(frag.id)) return;
-      seen.add(frag.id);
       try {
         await fetch(`${embedderUrl}/add`, {
           method: 'POST',
@@ -210,12 +225,13 @@ export class KnowledgeStore implements IKnowledgeGraph {
           }),
           signal: AbortSignal.timeout(10_000),
         });
-      } catch { /* embedder offline — will retry next time fragment appears */ }
+        seen.add(frag.id);
+      } catch { /* embedder offline — not marked seen, will retry on next appearance */ }
     };
 
     // createHistoryStream({ live: true }) replays all past Hyperbee entries then
     // streams new ones indefinitely — covers both local writes and P2P-replicated blocks.
-    for await (const { key, value } of (this.bee as any).createHistoryStream({ live: true })) {
+    for await (const { key, value } of (watchBee as any).createHistoryStream({ live: true })) {
       if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
         await post(value as Fragment);
       }
@@ -228,7 +244,8 @@ export class KnowledgeStore implements IKnowledgeGraph {
    */
   async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string): Promise<void> {
     await this.ready();
-    const remoteCore = (this.store as any).get({ key: remoteCoreKey });
+    const remoteSession = this.store.session();
+    const remoteCore = remoteSession.get({ key: remoteCoreKey });
     await remoteCore.ready();
     const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
     await remoteBee.ready();
@@ -237,7 +254,6 @@ export class KnowledgeStore implements IKnowledgeGraph {
     for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
       if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
         if (seen.has(value.id)) continue;
-        seen.add(value.id);
         try {
           await fetch(`${embedderUrl}/add`, {
             method: 'POST',
@@ -257,7 +273,8 @@ export class KnowledgeStore implements IKnowledgeGraph {
             }),
             signal: AbortSignal.timeout(10_000),
           });
-        } catch { /* embedder offline */ }
+          seen.add(value.id);
+        } catch { /* embedder offline — not marked seen, will retry on reconnect */ }
       }
     }
   }

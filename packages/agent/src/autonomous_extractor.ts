@@ -2,7 +2,7 @@ import { KnowledgeStore, loadOrCreateIdentity } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
-import { TOOL_DECLARATIONS, executeTool } from './tools_registry.js';
+import { TOOL_DECLARATIONS, executeTool, resetSeenTitles } from './tools_registry.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -112,8 +112,11 @@ export async function runAutonomousExtraction(
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
+  // Reset per-session dedup so a new extraction cycle can re-index previously seen titles
+  resetSeenTitles();
+
   const onFragment = async (frag: { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string }) => {
-    // Save to Hypercore — non-fatal: HNSW is the primary search index
+    // Save to Hypercore (source of truth + P2P replication via watchFragments)
     try {
       await store.save({
         id: frag.id, text: frag.text, source: frag.source,
@@ -121,12 +124,21 @@ export async function runAutonomousExtraction(
         extracted_at: new Date().toISOString(), node_id: store.nodeId,
       });
     } catch (e: any) {
-      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message} — HNSW still indexed`);
+      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
     }
-    await fetch(`${effectiveEmbedderUrl}/add`, {
+    // Direct HNSW write for immediate local search availability.
+    // watchFragments() handles P2P-replicated fragments and startup replay.
+    fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: frag.id, text: frag.text, metadata: { source: frag.source, doi: frag.doi, doi_valid: frag.doi !== null, confidence: frag.confidence, title: frag.title, node_id: store.nodeId, extracted_at: new Date().toISOString() } }),
+      body: JSON.stringify({
+        id: frag.id, text: frag.text,
+        metadata: {
+          source: frag.source, doi: frag.doi ?? null, doi_valid: frag.doi !== null,
+          confidence: frag.confidence, title: frag.title ?? null, node_id: store.nodeId,
+          extracted_at: new Date().toISOString(),
+        },
+      }),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => {});
     budget.recordFragments(1);
@@ -192,11 +204,11 @@ export async function runAutonomousExtraction(
       if (tc.name === 'finish') {
         finalSummary = tc.args.summary as string;
         console.log(`\n[agent] Done: ${finalSummary}`);
-        await store.close();
+        if (ownStore) await store.close();
         return { fragmentsIndexed, summary: finalSummary, budget: budget.summary() };
       }
 
-      const result = await executeTool(tc.name, tc.args, { embedderUrl: EMBEDDER_URL, onFragment });
+      const result = await executeTool(tc.name, tc.args, { embedderUrl: effectiveEmbedderUrl, onFragment });
       toolResultParts.push({ functionResponse: { name: tc.name, response: result } });
     }
 

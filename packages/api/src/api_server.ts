@@ -137,6 +137,34 @@ app.get('/api/topics', async () => {
   return { nodes: Object.values(byNode) };
 });
 
+// ── GET /api/claims ──────────────────────────────────────────────────────────
+app.get('/api/claims', async () => {
+  const active = await claimRegistry.getAllActiveClaims();
+  const claims = [];
+  for (const [topicId, beeIds] of Object.entries(active)) {
+    for (const beeId of beeIds) {
+      claims.push({ topicId, beeId, fragmentCount: 0 });
+    }
+  }
+  return { claims };
+});
+
+// ── POST /api/claims ─────────────────────────────────────────────────────────
+app.post<{ Body: { claims: Array<{ topicId: string; beeId: string; fragmentCount: number }> } }>(
+  '/api/claims',
+  async (req) => {
+    const { claims } = req.body;
+    if (Array.isArray(claims)) {
+      for (const c of claims) {
+        if (c.topicId && c.beeId) {
+          await claimRegistry.claim(c.topicId, c.beeId, c.fragmentCount);
+        }
+      }
+    }
+    return { ok: true };
+  }
+);
+
 // ── GET /api/status ──────────────────────────────────────────────────────────
 app.get('/api/status', async () => {
   const embedder = await getEmbedderStatus();
@@ -191,9 +219,28 @@ if (resolvedObjective) {
       leaf.keywords.some(kw => objLower.includes(kw.toLowerCase())) ||
       objLower.includes(leaf.name_en.toLowerCase())
     ).slice(0, 5);
+    
+    const newClaims = [];
     for (const leaf of matched) {
       await claimRegistry.claim(leaf.id, identity.nodeId);
+      newClaims.push({ topicId: leaf.id, beeId: identity.nodeId, fragmentCount: 0 });
     }
+    
+    // Broadcast our claims to the bootstrap peer so others can see them
+    if (PEER_API && newClaims.length > 0) {
+      try {
+        await fetch(`${PEER_API}/api/claims`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claims: newClaims }),
+          signal: AbortSignal.timeout(3000)
+        });
+        logEvent('start', `Pushed ${newClaims.length} claims to bootstrap peer`);
+      } catch (err: any) {
+        logEvent('error', `Failed to push claims to bootstrap peer: ${err.message}`);
+      }
+    }
+    
     if (matched.length) {
       logEvent('start', `Registered claims for ${matched.length} matching topics in knowledge tree`);
     }
@@ -261,20 +308,12 @@ if (resolvedObjective) {
     }
   };
 
-  setTimeout(runLoop, 10_000);
-  nextCycleAt = Date.now() + 10_000;
+  const initialJitter = 5_000 + Math.random() * 60_000;
+  setTimeout(runLoop, initialJitter);
+  nextCycleAt = Date.now() + initialJitter;
 } else {
   logEvent('start', 'No HIVE_OBJECTIVE and no GEMINI_API_KEY — autonomous extraction disabled');
 }
-
-// ── GET /api/claims ───────────────────────────────────────────────────────────
-app.get('/api/claims', async () => {
-  const active = await claimRegistry.getAllActiveClaims();
-  const claims = Object.entries(active).flatMap(([topicId, beeIds]) =>
-    beeIds.map(beeId => ({ topicId, beeId, fragmentCount: 0 }))
-  );
-  return { claims, nodeId: identity.nodeId };
-});
 
 // ── GET /api/state — full BEE debug state ────────────────────────────────────
 app.get('/api/state', async () => {
@@ -302,7 +341,7 @@ app.get('/api/activity', async () => ({
   events: [...activityLog].reverse(),
   extracting,
   nextCycleAt,
-  objective: HIVE_OBJECTIVE || null,
+  objective: resolvedObjective || null,
 }));
 
 try {

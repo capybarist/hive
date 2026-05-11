@@ -15,8 +15,10 @@ export interface TopicClaim {
 
 export class ClaimRegistry {
   private store: Corestore;
+  private core!: any;
   private bee: Hyperbee | null = null;
   private _ready = false;
+  private _readyPromise: Promise<void> | null = null;
 
   constructor(dataDir: string) {
     this.store = new Corestore(join(dataDir, 'claim_registry'));
@@ -24,16 +26,32 @@ export class ClaimRegistry {
 
   async ready(): Promise<void> {
     if (this._ready) return;
-    await this.store.ready();
-    const core = this.store.get({ name: 'claims' });
-    await core.ready();
-    this.bee = new Hyperbee(core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-    await this.bee.ready();
-    this._ready = true;
+    if (this._readyPromise) return this._readyPromise;
+
+    this._readyPromise = (async () => {
+      await this.store.ready();
+      this.core = this.store.get({ name: 'claims' });
+      await this.core.ready();
+      this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await this.bee.ready();
+      this._ready = true;
+    })();
+
+    return this._readyPromise;
+  }
+
+  private async ensureOpen(): Promise<void> {
+    if (this.core?.closed) {
+      this.core = this.store.get({ name: 'claims' });
+      await this.core.ready();
+      this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await this.bee.ready();
+    }
   }
 
   async claim(topicId: string, beeId: string, fragmentCount = 0): Promise<void> {
     await this.ready();
+    await this.ensureOpen();
     const existing = await this.getClaim(topicId, beeId);
     const entry: TopicClaim = {
       topicId,
@@ -48,17 +66,20 @@ export class ClaimRegistry {
 
   async release(topicId: string, beeId: string): Promise<void> {
     await this.ready();
+    await this.ensureOpen();
     await this.bee!.del(`claim:${topicId}:${beeId}`);
   }
 
   async getClaim(topicId: string, beeId: string): Promise<TopicClaim | null> {
     await this.ready();
+    await this.ensureOpen();
     const node = await this.bee!.get(`claim:${topicId}:${beeId}`);
     return node ? (node.value as TopicClaim) : null;
   }
 
   async getClaimsForTopic(topicId: string): Promise<TopicClaim[]> {
     await this.ready();
+    await this.ensureOpen();
     const prefix = `claim:${topicId}:`;
     const claims: TopicClaim[] = [];
     const now = Date.now();
@@ -72,6 +93,7 @@ export class ClaimRegistry {
 
   async getClaimsForBee(beeId: string): Promise<TopicClaim[]> {
     await this.ready();
+    await this.ensureOpen();
     const claims: TopicClaim[] = [];
     const now = Date.now();
     for await (const node of this.bee!.createReadStream({ gt: 'claim:', lt: 'claim:\xff' })) {
@@ -87,6 +109,7 @@ export class ClaimRegistry {
   /** Returns all active claims grouped by topicId → list of beeIds */
   async getAllActiveClaims(): Promise<Record<string, string[]>> {
     await this.ready();
+    await this.ensureOpen();
     const result: Record<string, string[]> = {};
     const now = Date.now();
     for await (const node of this.bee!.createReadStream({ gt: 'claim:', lt: 'claim:\xff' })) {
