@@ -46,14 +46,18 @@ export async function isEmbedderOnline(): Promise<boolean> {
   }
 }
 
-export async function queryByText(question: string, topK = 5): Promise<QueryResult> {
+export async function queryByText(
+  question: string,
+  topK = 5,
+  filters?: Record<string, unknown>,
+): Promise<QueryResult> {
   const online = await isEmbedderOnline();
   if (!online) return { fragments: [], has_hive_data: false, embedder_online: false };
 
   const res = await fetch(`${EMBEDDER}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: question, top_k: topK }),
+    body: JSON.stringify({ query: question, top_k: topK, ...(filters ? { filters } : {}) }),
     signal: AbortSignal.timeout(10000),
   });
 

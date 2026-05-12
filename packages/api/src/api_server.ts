@@ -13,6 +13,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
 
 const PORT = Number(process.env.HIVE_PORT ?? 8080);
+const HIVE_MODE = (process.env.HIVE_MODE ?? 'bee') as 'bee' | 'aggregator';
+const IS_AGGREGATOR = HIVE_MODE === 'aggregator';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const PEER_API = process.env.HIVE_PEER ?? '';   // kept for bootstrap announcements only
@@ -36,38 +38,46 @@ const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 const p2pNode = new HiveP2PNode(knowledgeStore.corestore, knowledgeStore.coreKey);
 await p2pNode.start();
 
-// Drive HNSW from local Hypercore history (past + live blocks)
-knowledgeStore.watchFragments(embedderUrl).catch(console.error);
-console.log(`   HNSW watch started ✓`);
+// Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
+if (!IS_AGGREGATOR) {
+  knowledgeStore.watchFragments(embedderUrl).catch(console.error);
+  console.log(`   Local watch started ✓`);
+}
 
-// When a peer's core key arrives, watch that remote core for new fragments too
+// When a peer's core key arrives, replicate and index their fragments.
+// Both BEEs and aggregator do this — aggregator does it for ALL peers.
 p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
   knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
 });
 
-// ── HTTP sync fallback ───────────────────────────────────────────────────────
-// SyncManager always runs, even on seed nodes with no initial peers.
-// Peers dynamically register via POST /api/register-peer, so a seed BEE
-// starts with an empty peer list and accumulates peers at runtime.
-const syncManager = new SyncManager(
-  knowledgeStore, identity.nodeId, PEER_API ? [PEER_API] : [], embedderUrl,
-);
-syncManager.start();
-if (PEER_API) console.log(`   HTTP sync → ${PEER_API} ✓`);
+// ── HTTP sync fallback (BEE mode only) ──────────────────────────────────────
+// Aggregator relies exclusively on Hyperswarm P2P — no HTTP sync needed.
+if (!IS_AGGREGATOR) {
+  const syncManager = new SyncManager(
+    knowledgeStore, identity.nodeId, PEER_API ? [PEER_API] : [], embedderUrl,
+  );
+  syncManager.start();
+  if (PEER_API) console.log(`   HTTP sync → ${PEER_API} ✓`);
+}
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+});
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
 // ── POST /api/query ──────────────────────────────────────────────────────────
-app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}> } }>(
+app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown> } }>(
   '/api/query',
   async (req, reply) => {
-    const { question, top_k = 5, use_llm = true, history = [] } = req.body;
+    const { question, top_k = 5, use_llm = true, history = [], filters } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
-    let { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k);
+    let { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k, filters);
 
     // Federated query: if local HNSW has no relevant data, ask peer BEEs.
     // This handles the case where extraction happened on a different node and
@@ -207,15 +217,28 @@ app.get('/api/status', async () => {
   const embedder = await getEmbedderStatus();
   return {
     api: 'ok',
+    mode: HIVE_MODE,
     nodeId: identity.nodeId,
     nodeIdShort: identity.nodeId.slice(0, 20),
     embedder_online: embedder !== null,
     indexed: embedder?.indexed ?? 0,
     model: embedder?.model ?? null,
+    backend: (embedder as any)?.backend ?? 'hnsw',
     llm_configured: isLLMConfigured(),
     llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
     peers: p2pNode.peerCount,
   };
+});
+
+// ── GET /api/stats — aggregator summary (fragment/BEE/topic counts) ──────────
+app.get('/api/stats', async () => {
+  try {
+    const res = await fetch(`${embedderUrl}/stats`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { error: 'embedder unavailable', mode: HIVE_MODE };
+    return { mode: HIVE_MODE, ...(await res.json() as object) };
+  } catch {
+    return { error: 'stats unavailable', mode: HIVE_MODE };
+  }
 });
 
 // ── Activity log (ring buffer) — must be declared before logEvent ────────────
@@ -231,12 +254,20 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
   console.log(`[${type}] ${msg}`);
 }
 
-// ── Resolve objective (explicit config or auto-discovered from network) ───────
+// ── Claim registry (both modes use it for network visibility) ────────────────
 const claimRegistry = new ClaimRegistry(DATA_DIR);
 await claimRegistry.ready();
 
-let resolvedObjective = HIVE_OBJECTIVE;
-if (!resolvedObjective) {
+// ── Aggregator mode: just index, never extract ────────────────────────────────
+if (IS_AGGREGATOR) {
+  logEvent('start', 'Aggregator mode active — indexing all peer fragments into Qdrant');
+  logEvent('start', `Qdrant backend @ ${process.env.QDRANT_URL ?? 'http://localhost:6333'}`);
+  logEvent('start', 'Waiting for BEEs to connect via Hyperswarm...');
+}
+
+// ── BEE mode: resolve objective and start extraction ─────────────────────────
+let resolvedObjective = IS_AGGREGATOR ? '' : HIVE_OBJECTIVE;
+if (!IS_AGGREGATOR && !resolvedObjective) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
     resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
@@ -246,8 +277,8 @@ if (!resolvedObjective) {
   }
 }
 
-// Register claims in the registry (even for explicit objectives, claim matching topics)
-if (resolvedObjective) {
+// Register claims in the registry (BEE mode only)
+if (!IS_AGGREGATOR && resolvedObjective) {
   try {
     const { loadTree, assignTopics: _assign } = await import('@hive/core');
     const leaves = loadTree();
@@ -285,7 +316,7 @@ if (resolvedObjective) {
   } catch { /* topic tree not available yet */ }
 }
 
-// ── Autonomous extraction loop (multi-topic) ─────────────────────────────────
+// ── Autonomous extraction loop (BEE mode only) ───────────────────────────────
 let extractionLoopRunning = false;
 const MAX_TOPICS_PER_CYCLE = 5;
 
@@ -354,6 +385,7 @@ const runLoop = async () => {
   };
 
 async function startExtractionIfReady() {
+  if (IS_AGGREGATOR) return; // aggregator never extracts — it only indexes peer fragments
   if (extractionLoopRunning) return;
   if (!isLLMConfigured()) {
     logEvent('start', 'LLM not configured — set LLM_PROVIDER + LLM_API_KEY to enable autonomous extraction.');
@@ -376,7 +408,7 @@ async function startExtractionIfReady() {
   nextCycleAt = Date.now() + delay;
 }
 
-startExtractionIfReady();
+if (!IS_AGGREGATOR) startExtractionIfReady();
 
 // ── POST /api/config — set LLM provider + API key at runtime ─────────────────
 function upsertEnvLine(content: string, key: string, value: string): string {
@@ -442,11 +474,17 @@ app.get('/api/activity', async () => ({
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
-  console.log(`\n   API  → http://127.0.0.1:${PORT}/api/status`);
+  console.log(`\n   Mode → ${HIVE_MODE.toUpperCase()}`);
+  console.log(`   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
   console.log(`   Peer → ${PEER_API || '(no bootstrap peer)'}`);
-  const provider = process.env.LLM_PROVIDER ?? 'gemini';
-  console.log(`   LLM    → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}\n`);
+  if (!IS_AGGREGATOR) {
+    const provider = process.env.LLM_PROVIDER ?? 'gemini';
+    console.log(`   LLM  → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}`);
+  } else {
+    console.log(`   Qdrant → ${process.env.QDRANT_URL ?? 'http://localhost:6333'}`);
+  }
+  console.log();
 } catch (err) {
   console.error(err);
   process.exit(1);
