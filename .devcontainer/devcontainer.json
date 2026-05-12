@@ -1,0 +1,76 @@
+{
+  "name": "HIVE BEE",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "24" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // Install all dependencies once on container creation
+  "postCreateCommand": "npm install && pip install -r packages/embeddings/requirements.txt",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // TypeScript / JavaScript
+        "ms-vscode.vscode-typescript-next",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+
+        // Shell scripts
+        "timonwong.shellcheck",
+        "foxundermoon.shell-format",
+
+        // Docker
+        "ms-azuretools.vscode-docker",
+
+        // REST / API testing
+        "humao.rest-client",
+
+        // Git
+        "eamodio.gitlens",
+
+        // DX — inline errors, path completion, bracket pairs
+        "usernamehw.errorlens",
+        "christian-kohler.path-intellisense",
+
+        // YAML / JSON
+        "redhat.vscode-yaml",
+
+        // GitHub
+        "github.vscode-pull-request-github"
+      ],
+
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "[shellscript]": {
+          "editor.defaultFormatter": "foxundermoon.shell-format"
+        },
+        "typescript.preferences.importModuleSpecifier": "relative",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // Expose the BEE ports so they appear automatically in the Ports tab
+  "forwardPorts": [8080, 8081, 8082, 7700, 7701, 7702],
+  "portsAttributes": {
+    "8080": { "label": "BEE-1 API",      "onAutoForward": "silent" },
+    "8081": { "label": "BEE-2 API",      "onAutoForward": "silent" },
+    "8082": { "label": "BEE-3 API",      "onAutoForward": "silent" },
+    "7700": { "label": "BEE-1 Embedder", "onAutoForward": "silent" },
+    "7701": { "label": "BEE-2 Embedder", "onAutoForward": "silent" },
+    "7702": { "label": "BEE-3 Embedder", "onAutoForward": "silent" }
+  }
+}

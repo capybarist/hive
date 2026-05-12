@@ -123,9 +123,9 @@ Hypercore replication is primary (when Hyperswarm DHT is available).
 
 **Codespace URLs:**
 ```
-https://fantastic-orbit-4q7wx7jw4j45275r5-8080.app.github.dev
-https://fantastic-orbit-4q7wx7jw4j45275r5-8081.app.github.dev
-https://fantastic-orbit-4q7wx7jw4j45275r5-8082.app.github.dev
+https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8080.app.github.dev
+https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8081.app.github.dev
+https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8082.app.github.dev
 ```
 
 ## Key design decisions
