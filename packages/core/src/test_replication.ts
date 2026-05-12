@@ -92,18 +92,23 @@ async function phase2() {
   const aCoreKey: Buffer = storeA.coreKey;
   info(`BEE-A core key: ${aCoreKey.toString('hex').slice(0, 16)}...`);
 
-  // BEE-B opens BEE-A's core read-only BEFORE replication starts
+  // Simulate the new flow: replication starts first, THEN core is opened + download() called.
+  // This mirrors how api_server.ts now works: store.replicate(socket) runs immediately,
+  // peer core key is fetched via HTTP after, then opened + download() + peer-core emitted.
   const storeBAny = storeB as any;
+
+  // 1. Start replication first (clean, no Protomux channel)
+  directReplicate((storeA as any).store, storeBAny.store);
+
+  // 2. "HTTP fetch" phase — open core after replication is already running
+  await wait(100);
   const remoteCoreOnB = storeBAny.store.get({ key: aCoreKey });
   await remoteCoreOnB.ready();
-  info(`Remote core length before sync: ${remoteCoreOnB.length}`);
+  info(`Remote core length before download: ${remoteCoreOnB.length}`);
 
-  // Enable downloading — sets core.replicator.downloading=true so _shouldReplicate()
-  // returns true and the core gets attached to the replication stream.
+  // 3. Enable downloading — triggers ondownloading → streamTracker.attachAll
   remoteCoreOnB.download({ start: 0, end: -1 });
 
-  // Direct replication — both stores; now storeB has BEE-A's core open and downloading
-  directReplicate((storeA as any).store, storeBAny.store);
   await wait(2000);
 
   info(`Remote core length after sync:  ${remoteCoreOnB.length}`);

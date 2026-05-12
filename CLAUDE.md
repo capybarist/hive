@@ -165,8 +165,8 @@ https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8082.app.github.dev
 | Issue | Impact | Status |
 |-------|--------|--------|
 | SESSION_CLOSED on writes | Hypercore write fails | **Fixed** — ensureOpen() + write queue |
-| Native Hypercore block replication | Blocks don't flow between nodes | **In progress** — root cause: Protomux conflict + `_shouldReplicate` requires `downloading=true`. Fixes applied, unconfirmed. See `test_replication.ts`. |
-| HTTP sync as fallback | Works but not P2P-native | **Intentional temporary** — decentralized URL discovery via Protomux msg[1]. Remove when Hypercore replication is fixed. |
+| Native Hypercore block replication | Blocks don't flow between nodes | **Fixed** — root cause was `b.put()` not awaited in KnowledgeStore (Hyperbee v2 batch.put() is async). Hypercore was always empty. All 3 test phases pass. |
+| HTTP sync as fallback | Works but not P2P-native | **Kept as fallback** — decentralized URL discovery via Protomux msg. Remove when confident Hypercore replication is stable in production. |
 | No fragment TTL | Stale content stays forever | **TODO** — news fragments should expire ~24h, Wikipedia ~7 days. Track `extracted_at` and purge/supersede on re-extraction. |
 | No cross-cycle dedup | Same article re-indexed each cycle (skipped by HNSW ID check, but wastes LLM tokens) | **TODO** — check `store.has(id)` before calling `index_fragment`. Especially relevant for stable content like Wikipedia. |
 | `supersede()` not wired | KnowledgeStore has supersede() but no code calls it | **TODO** — extractor should call supersede() when re-indexing updated content instead of creating a new fragment with the same topic. |

@@ -34,9 +34,9 @@ console.log(`   KnowledgeStore ready ✓`);
 
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// Pass local core key + HTTP URL so peers can replicate and sync via HTTP.
+// Pass local HTTP URL so peers can discover us and fetch our core key via HTTP.
 const localApiUrl = `http://127.0.0.1:${PORT}`;
-const p2pNode = new HiveP2PNode(knowledgeStore.corestore, knowledgeStore.coreKey, localApiUrl);
+const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localApiUrl);
 await p2pNode.start();
 
 // Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
@@ -45,33 +45,53 @@ if (!IS_AGGREGATOR) {
   console.log(`   Local watch started ✓`);
 }
 
-// When a peer's core key arrives, attempt native Hypercore replication.
+// When a peer's core key is known, start native Hypercore replication.
+// Emitted after we fetch the peer's core key via HTTP (see peer-api handler below).
 p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
   knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
 });
 
-// ── HTTP sync — fallback while native Hypercore replication is being fixed ───
-// When a peer announces its HTTP URL via P2P, add it to SyncManager so we pull
-// fragments from it directly. This makes sync work regardless of P2P replication
-// status, and is fully decentralized — no hardcoded node URLs.
+// ── Peer discovery via P2P + native Hypercore replication ────────────────────
+// When a peer connects via Hyperswarm, it sends its HTTP URL via Protomux.
+// We then:
+//   1. Add it to SyncManager for HTTP sync (reliable fallback)
+//   2. Fetch its core key via GET /api/status (clean — no Protomux conflict)
+//   3. Open the core, enable downloading — triggers Corestore's streamTracker
+//      to attach the core to the active replication session automatically
 let syncManager: SyncManager | null = null;
 if (PEER_API) {
-  syncManager = new SyncManager(
-    knowledgeStore, identity.nodeId, [PEER_API], embedderUrl,
-  );
+  syncManager = new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl);
   syncManager.start();
   console.log(`   HTTP sync → ${PEER_API} ✓`);
 }
 
-// When a peer announces its HTTP URL via P2P key-exchange channel, add it to
-// SyncManager. This is the decentralized peer discovery mechanism — no hardcoded URLs.
-p2pNode.on('peer-api', (peerApiUrl: string) => {
+p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
+  // 1. HTTP sync (always works)
   if (!syncManager) {
     syncManager = new SyncManager(knowledgeStore, identity.nodeId, [], embedderUrl);
     syncManager.start();
   }
   syncManager.addPeer(peerApiUrl);
   syncManager.syncOnce().catch(() => {});
+
+  // 2. Native Hypercore replication: fetch core key via HTTP, then open + download
+  try {
+    const res = await fetch(`${peerApiUrl}/api/status`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return;
+    const data = await res.json() as any;
+    if (!data.coreKey) return;
+
+    const remoteCoreKey = Buffer.from(data.coreKey, 'hex');
+    const peerCore = (knowledgeStore.corestore as any).get({ key: remoteCoreKey });
+    await peerCore.ready();
+    // Enabling download triggers Corestore's ondownloading → streamTracker.attachAll,
+    // which attaches the core to the already-running replicate() session.
+    peerCore.download({ start: 0, end: -1 });
+    console.log(`[p2p] Core key fetched from ${peerApiUrl} — native replication started`);
+    p2pNode.emit('peer-core', remoteCoreKey, peerId);
+  } catch {
+    // HTTP fetch failed — HTTP sync still works as fallback
+  }
 });
 
 // ── Fastify server ───────────────────────────────────────────────────────────
@@ -242,6 +262,7 @@ app.get('/api/status', async () => {
     llm_ok: llmHealthy,
     llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
     peers: p2pNode.peerCount,
+    coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
   };
 });
 
