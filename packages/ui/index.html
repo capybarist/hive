@@ -287,7 +287,10 @@
 
   <!-- Topbar -->
   <div class="topbar">
-    <span class="node-label" id="node-id-label">node: —</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span class="node-label" id="node-id-label">node: —</span>
+      <span id="mode-badge" class="hidden" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 10px;border-radius:20px;background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3)">AGGREGATOR</span>
+    </div>
     <div class="topbar-pills">
       <div class="pill"><span class="dot peer" id="peer-dot"></span><span id="peer-text">0 peers</span></div>
       <div class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting...</span></div>
@@ -417,6 +420,11 @@ async function checkStatus() {
     const pc = d.peers ?? 0;
     document.getElementById('peer-text').textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
     document.getElementById('peer-dot').className = 'dot' + (pc > 0 ? ' peer' : '');
+
+    // Mode badge
+    const modeBadge = document.getElementById('mode-badge');
+    if (d.mode === 'aggregator') modeBadge.classList.remove('hidden');
+    else modeBadge.classList.add('hidden');
 
     // LLM status in sidebar
     const llmDot = document.getElementById('llm-dot');

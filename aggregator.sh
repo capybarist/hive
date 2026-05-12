@@ -36,8 +36,8 @@ info(){ echo -e "${C}ℹ${N} $1"; }
 alive() { curl -s --max-time 2 "$1" 2>/dev/null | grep -q '"ok"\|"status"\|"indexed"'; }
 
 # ── Config ────────────────────────────────────────────────────────────────────
-PORT="${HIVE_PORT:-8080}"
-EMB_PORT="${HIVE_EMBEDDER_PORT:-7700}"
+PORT="${HIVE_PORT:-8090}"
+EMB_PORT="${HIVE_EMBEDDER_PORT:-7790}"
 DATA_DIR="${HIVE_DATA_DIR:-$HOME/.hive-aggregator}"
 BOOTSTRAP="${HIVE_PEER:-}"
 QDRANT_URL="${QDRANT_URL:-}"
@@ -111,7 +111,10 @@ HIVE_PEER=$BOOTSTRAP
 EOF
   [ -n "$QDRANT_URL" ] && echo "QDRANT_URL=$QDRANT_URL" >> "$tmp_env"
 
-  ( cd packages/api && nohup node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
+  # HIVE_MODE must be in the process env, not only in --env-file,
+  # because Node.js --env-file does not override shell-exported variables.
+  ( cd packages/api && HIVE_MODE=aggregator nohup node --env-file="$tmp_env" \
+      --import tsx/esm src/api_server.ts \
       > /tmp/hive_aggregator.log 2>&1 & )
 
   for i in $(seq 1 20); do
