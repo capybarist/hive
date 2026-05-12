@@ -62,7 +62,12 @@ if (!IS_AGGREGATOR) {
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+});
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
 // ── POST /api/query ──────────────────────────────────────────────────────────
