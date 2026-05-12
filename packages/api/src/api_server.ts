@@ -385,6 +385,7 @@ const runLoop = async () => {
   };
 
 async function startExtractionIfReady() {
+  if (IS_AGGREGATOR) return; // aggregator never extracts — it only indexes peer fragments
   if (extractionLoopRunning) return;
   if (!isLLMConfigured()) {
     logEvent('start', 'LLM not configured — set LLM_PROVIDER + LLM_API_KEY to enable autonomous extraction.');
