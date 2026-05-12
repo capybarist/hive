@@ -138,7 +138,7 @@ export async function executeTool(
         if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
         const html = await res.text();
         // Strip HTML tags, collapse whitespace
-        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
+        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
         return { ok: true, data: { url: args.url, text } };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -164,9 +164,9 @@ export async function executeTool(
         const rawItems = channel?.item ?? channel?.entry ?? [];
         const items: any[] = Array.isArray(rawItems) ? rawItems : [rawItems];
         const limit = (args.limit as number) ?? 15;
-        const articles = items.slice(0, limit).map((item: any) => ({
+        const articles = items.slice(0, Math.min(limit, 8)).map((item: any) => ({
           title: (typeof item.title === 'string' ? item.title : item.title?.['#text'] ?? item.title?.['_'] ?? '').trim(),
-          description: (typeof item.description === 'string' ? item.description : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 600),
+          description: (typeof item.description === 'string' ? item.description : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
           link: item.link?.['@_href'] ?? (typeof item.link === 'string' ? item.link : '') ?? item.id ?? '',
           pubDate: item.pubDate ?? item.updated ?? item.published ?? '',
         })).filter(a => a.title);
@@ -185,11 +185,14 @@ export async function executeTool(
       if (title) _seenTitles.add(title);
 
       if (options.onFragment) {
+        const rawDoi = args.doi as string | null | undefined;
+        const doi = (rawDoi && rawDoi !== 'null' && rawDoi !== 'undefined' && rawDoi.startsWith('10.'))
+          ? rawDoi : null;
         await options.onFragment({
           id: args.id as string,
           text: args.text as string,
           source: args.source as string,
-          doi: (args.doi as string) ?? null,
+          doi,
           confidence: args.confidence as number,
           title: args.title as string | undefined,
         });

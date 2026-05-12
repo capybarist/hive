@@ -60,32 +60,59 @@
       letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px;
     }
 
-    /* LLM config inline */
+    /* LLM status row */
     .llm-status-row {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 12px; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px; font-size: 12px;
     }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-    .dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.on   { background: var(--green);  box-shadow: 0 0 6px var(--green); }
     .dot.warn { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
     .dot.peer { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
-    #llm-status-text { color: var(--muted); font-size: 12px; }
-    #llm-status-text.ok { color: var(--green); }
+    .llm-config-btn {
+      background: none; border: none; padding: 0; cursor: pointer;
+      font-size: 12px; font-family: inherit;
+      color: var(--muted); text-decoration: underline; text-underline-offset: 2px;
+      text-decoration-color: rgba(107,114,128,.4);
+      transition: color .15s;
+    }
+    .llm-config-btn:hover { color: var(--text); }
+    .llm-config-btn.ok { color: var(--green); text-decoration-color: rgba(16,185,129,.4); }
 
-    .sidebar-select, .sidebar-input {
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(2px);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 22px 22px 18px; width: 340px; max-width: calc(100vw - 32px);
+      box-shadow: 0 24px 60px rgba(0,0,0,.6);
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;
+    }
+    .modal-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .modal-close {
+      background: none; border: none; color: var(--muted); font-size: 16px;
+      cursor: pointer; padding: 2px 6px; border-radius: 5px; line-height: 1;
+      transition: color .15s;
+    }
+    .modal-close:hover { color: var(--text); }
+    .modal-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 5px; display: block; }
+    .modal-field { margin-bottom: 12px; }
+    .modal-select, .modal-input {
       width: 100%; background: var(--surface2); border: 1px solid var(--border);
       border-radius: 7px; color: var(--text); font-size: 13px;
       padding: 8px 10px; outline: none; font-family: inherit;
-      margin-bottom: 7px;
     }
-    .sidebar-select:focus, .sidebar-input:focus { border-color: var(--accent); }
-    .cfg-hint { font-size: 11px; color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
-    .cfg-msg { font-size: 11px; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; }
+    .modal-select:focus, .modal-input:focus { border-color: var(--accent); }
+    .cfg-hint { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.4; }
+    .cfg-msg { font-size: 11px; padding: 6px 10px; border-radius: 6px; margin-bottom: 10px; }
     .cfg-msg.error { color: var(--red); background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); }
     .cfg-msg.ok { color: var(--green); background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.25); }
     .cfg-save-btn {
       width: 100%; background: var(--accent2); color: #fff; border: none;
-      border-radius: 7px; padding: 8px; font-size: 13px; font-weight: 600;
+      border-radius: 7px; padding: 9px; font-size: 13px; font-weight: 600;
       cursor: pointer; transition: opacity .15s;
     }
     .cfg-save-btn:hover { opacity: .85; }
@@ -245,22 +272,13 @@
 
   <div class="sidebar-scroll">
 
-    <!-- LLM Provider — always visible -->
+    <!-- LLM Provider — compact status + click to configure -->
     <div class="nav-section">
       <div class="nav-title">LLM Provider</div>
       <div class="llm-status-row">
         <span class="dot" id="llm-dot"></span>
-        <span id="llm-status-text">Not configured</span>
+        <button class="llm-config-btn" id="llm-config-btn">Not configured</button>
       </div>
-      <select id="cfg-provider" class="sidebar-select">
-        <option value="gemini">Gemini (Google)</option>
-        <option value="claude">Claude (Anthropic)</option>
-        <option value="openai">OpenAI</option>
-      </select>
-      <input type="password" id="cfg-key" class="sidebar-input" placeholder="API key..." autocomplete="off" spellcheck="false" />
-      <div class="cfg-hint" id="cfg-hint">Get a key at aistudio.google.com — free tier available.</div>
-      <div class="cfg-msg hidden" id="cfg-msg"></div>
-      <button class="cfg-save-btn" id="cfg-save">Save &amp; Apply</button>
     </div>
 
     <!-- BEE Activity -->
@@ -349,48 +367,100 @@
 
 </div>
 
+<!-- ── LLM Config Modal ── -->
+<div class="modal-backdrop hidden" id="cfg-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">LLM Provider</span>
+      <button class="modal-close" id="cfg-modal-close">✕</button>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="cfg-provider">Provider</label>
+      <select id="cfg-provider" class="modal-select">
+        <option value="gemini">Gemini (Google)</option>
+        <option value="groq">Groq — free tier</option>
+        <option value="claude">Claude (Anthropic)</option>
+        <option value="openai">OpenAI</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="cfg-key">API Key</label>
+      <input type="password" id="cfg-key" class="modal-input" placeholder="Paste key here…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="cfg-model">Model <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+      <input type="text" id="cfg-model" class="modal-input" placeholder="" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="cfg-hint" id="cfg-hint"></div>
+    <div class="cfg-msg hidden" id="cfg-msg"></div>
+    <button class="cfg-save-btn" id="cfg-save">Save &amp; Apply</button>
+  </div>
+</div>
+
 <script>
 const API = '';
 let MY_NODE_ID = '';
 
-// ── LLM Config (sidebar, always visible) ──────────────────────────────────────
+// ── LLM Config Modal ──────────────────────────────────────────────────────────
 const PROVIDER_HINTS = {
   gemini: 'Get a key at aistudio.google.com — free tier available.',
+  groq:   'Get a free key at console.groq.com — 500K tokens/day free (llama-3.1-8b-instant).',
   claude: 'Get a key at console.anthropic.com.',
   openai: 'Get a key at platform.openai.com.',
 };
+const PROVIDER_DEFAULTS = {
+  gemini: 'gemini-2.5-flash',
+  groq:   'llama-3.1-8b-instant',
+  claude: 'claude-sonnet-4-6',
+  openai: 'gpt-4o',
+};
 
-document.getElementById('cfg-provider').addEventListener('change', e => {
-  document.getElementById('cfg-hint').textContent = PROVIDER_HINTS[e.target.value] ?? '';
-});
+function openCfgModal() {
+  document.getElementById('cfg-modal').classList.remove('hidden');
+  document.getElementById('cfg-key').focus();
+}
+function closeCfgModal() {
+  document.getElementById('cfg-modal').classList.add('hidden');
+  document.getElementById('cfg-msg').className = 'cfg-msg hidden';
+}
+
+document.getElementById('llm-config-btn').addEventListener('click', openCfgModal);
+document.getElementById('cfg-modal-close').addEventListener('click', closeCfgModal);
+document.getElementById('cfg-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeCfgModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCfgModal(); });
+
+function updateProviderHint() {
+  const p = document.getElementById('cfg-provider').value;
+  document.getElementById('cfg-hint').textContent = PROVIDER_HINTS[p] ?? '';
+  document.getElementById('cfg-model').placeholder = PROVIDER_DEFAULTS[p] ?? '';
+}
+document.getElementById('cfg-provider').addEventListener('change', updateProviderHint);
+updateProviderHint();
 
 async function saveConfig() {
   const provider = document.getElementById('cfg-provider').value;
-  const apiKey = document.getElementById('cfg-key').value.trim();
-  const msgEl = document.getElementById('cfg-msg');
-  const saveBtn = document.getElementById('cfg-save');
+  const apiKey   = document.getElementById('cfg-key').value.trim();
+  const model    = document.getElementById('cfg-model').value.trim() || undefined;
+  const msgEl    = document.getElementById('cfg-msg');
+  const saveBtn  = document.getElementById('cfg-save');
 
   msgEl.className = 'cfg-msg hidden';
-  if (!apiKey) {
-    msgEl.textContent = 'API key is required.';
-    msgEl.className = 'cfg-msg error';
-    return;
-  }
+  if (!apiKey) { msgEl.textContent = 'API key is required.'; msgEl.className = 'cfg-msg error'; return; }
 
   saveBtn.disabled = true;
-  saveBtn.textContent = 'Saving...';
+  saveBtn.textContent = 'Saving…';
   try {
     const res = await fetch(`${API}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, apiKey }),
+      body: JSON.stringify({ provider, apiKey, ...(model ? { model } : {}) }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Save failed');
-    msgEl.textContent = '✓ Saved — extraction starting...';
+    msgEl.textContent = '✓ Saved — extraction starting…';
     msgEl.className = 'cfg-msg ok';
     document.getElementById('cfg-key').value = '';
-    setTimeout(() => { msgEl.className = 'cfg-msg hidden'; }, 3000);
+    setTimeout(closeCfgModal, 1800);
     await checkStatus();
     loadActivity();
   } catch (e) {
@@ -426,18 +496,35 @@ async function checkStatus() {
     if (d.mode === 'aggregator') modeBadge.classList.remove('hidden');
     else modeBadge.classList.add('hidden');
 
-    // LLM status in sidebar
+    // LLM status in sidebar — reflects actual connectivity, not just key presence
     const llmDot = document.getElementById('llm-dot');
-    const llmTxt = document.getElementById('llm-status-text');
-    if (d.llm_configured) {
+    const llmBtn = document.getElementById('llm-config-btn');
+    llmDot.style.background = '';
+    llmDot.style.boxShadow = '';
+    llmBtn.style.color = '';
+    if (!d.llm_configured) {
+      llmDot.className = 'dot warn';
+      llmBtn.textContent = 'Not configured — click to set up';
+      llmBtn.className = 'llm-config-btn';
+    } else if (d.llm_ok === true) {
       llmDot.className = 'dot on';
-      llmTxt.textContent = `${d.llm_provider ?? 'configured'} ✓`;
-      llmTxt.className = 'ok';
-      document.getElementById('cfg-provider').value = d.llm_provider ?? 'gemini';
+      llmBtn.textContent = `${d.llm_provider} ✓`;
+      llmBtn.className = 'llm-config-btn ok';
+    } else if (d.llm_ok === false) {
+      llmDot.className = 'dot';
+      llmDot.style.background = 'var(--red)';
+      llmDot.style.boxShadow = '0 0 6px var(--red)';
+      llmBtn.textContent = `${d.llm_provider} — key error`;
+      llmBtn.className = 'llm-config-btn';
+      llmBtn.style.color = 'var(--red)';
     } else {
       llmDot.className = 'dot warn';
-      llmTxt.textContent = 'Not configured';
-      llmTxt.className = '';
+      llmBtn.textContent = `${d.llm_provider} — verifying…`;
+      llmBtn.className = 'llm-config-btn';
+    }
+    if (d.llm_configured) {
+      document.getElementById('cfg-provider').value = d.llm_provider ?? 'gemini';
+      updateProviderHint();
     }
   } catch { document.getElementById('status-text').textContent = 'offline'; }
 }

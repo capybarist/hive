@@ -30,14 +30,16 @@ function sourceUrl(f: SearchResult): string | null {
 
 function buildPrompt(question: string, fragments: SearchResult[]): string {
   const ctx = fragments
+    .slice(0, 4)
     .map((f, i) => {
       const url = sourceUrl(f);
       const sourceLabel = url ? `${f.source} → ${url}` : f.source;
-      return `[Fragment ${i + 1}]\nSource: ${sourceLabel}${f.title ? ` — "${f.title}"` : ''}\nConfidence: ${f.confidence}\n\n${f.text}`;
+      const text = f.text.slice(0, 400);
+      return `[${i + 1}] ${f.title ?? ''} (${sourceLabel})\n${text}`;
     })
-    .join('\n\n---\n\n');
+    .join('\n\n');
 
-  return `VERIFIED HIVE KNOWLEDGE:\n\n${ctx}\n\n---\n\nQUESTION: ${question}`;
+  return `HIVE KNOWLEDGE:\n${ctx}\n\nQUESTION: ${question}`;
 }
 
 export async function synthesize(
@@ -55,13 +57,14 @@ export async function synthesize(
     : `No verified HIVE fragments were found for this question. Answer from your general knowledge, starting with: "⚠ Not verified by HIVE — answering from general knowledge:"\n\nQUESTION: ${question}`;
 
   const messages: LLMMessage[] = [
-    ...history.map(h => ({
+    // Keep only last 2 turns of history to stay within TPM limits
+    ...history.slice(-4).map(h => ({
       role: (h.role === 'model' || h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
-      parts: [{ type: 'text' as const, text: h.content }],
+      parts: [{ type: 'text' as const, text: h.content.slice(0, 600) }],
     })),
     { role: 'user', parts: [{ type: 'text', text: userPrompt }] },
   ];
 
-  const { text } = await provider.generate(messages, SYSTEM_PROMPT, { temperature: 0.5, maxTokens: 8192 });
+  const { text } = await provider.generate(messages, SYSTEM_PROMPT, { temperature: 0.5, maxTokens: 1024 });
   return { answer: text, mode };
 }

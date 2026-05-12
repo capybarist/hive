@@ -61,17 +61,32 @@ if [ -n "$tmp_files" ]; then
   ok "Removed $count temp env file(s)"
 fi
 
-# ── Verify ports are free ─────────────────────────────────────────────────────
+# ── Verify ports are free (and force-kill stragglers if --force) ──────────────
 echo ""
 still_running=()
-for port in 7700 7701 7702 7703 8080 8081 8082 8083; do
+for port in 7700 7701 7702 7703 7790 8080 8081 8082 8083 8090; do
   pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1)
-  [ -n "$pid" ] && still_running+=("port $port (pid=$pid)")
+  [ -z "$pid" ] && continue
+  if [ $FORCE -eq 1 ]; then
+    kill -9 "$pid" 2>/dev/null && ok "Force-killed pid $pid on port $port" || err "Could not kill pid $pid"
+    killed=$((killed + 1))
+  else
+    still_running+=("port $port (pid=$pid)")
+  fi
 done
+
+# Re-check after force kills
+if [ $FORCE -eq 1 ]; then
+  still_running=()
+  for port in 7700 7701 7702 7703 7790 8080 8081 8082 8083 8090; do
+    pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1)
+    [ -n "$pid" ] && still_running+=("port $port (pid=$pid)")
+  done
+fi
 
 if [ ${#still_running[@]} -gt 0 ]; then
   err "Still occupied: ${still_running[*]}"
-  err "Run with --force to kill immediately"
+  [ $FORCE -eq 0 ] && err "Run with --force to kill immediately"
   exit 1
 elif [ $killed -eq 0 ]; then
   run "No HIVE processes were running"

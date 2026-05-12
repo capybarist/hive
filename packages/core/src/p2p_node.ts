@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import Hyperswarm from 'hyperswarm';
-import Protomux from 'protomux';
 import c from 'compact-encoding';
 import type Corestore from 'corestore';
 
@@ -20,6 +19,7 @@ export class HiveP2PNode extends EventEmitter {
   constructor(
     private store: Corestore,
     private localCoreKey?: Buffer,   // public key of our local fragments Hypercore
+    private localApiUrl?: string,    // HTTP API URL of this node, shared with peers for HTTP sync
   ) {
     super();
     this.swarm = new Hyperswarm();
@@ -35,37 +35,54 @@ export class HiveP2PNode extends EventEmitter {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);
 
       // ── Core-key exchange + Hypercore replication ──────────────────────────
-      // Each BEE has its own Corestore with a unique 'fragments' core key.
-      // Corestore only replicates cores that BOTH sides have open.
-      // Solution: use a Protomux channel to exchange core keys before replication,
-      // then open the peer's core locally so Corestore replication can deliver data.
-      const mux = Protomux.from(socket) || new Protomux(socket);
-      const channel = mux.createChannel({ protocol: 'hive/core-keys/v1' });
-      const keyMessage = channel.addMessage({ encoding: c.raw });
+      // Root cause of previous failures: Hypercore.createProtocolStream() (called
+      // internally by store.replicate()) creates its OWN Protomux on the socket.
+      // Creating a second Protomux via Protomux.from(socket) corrupts both.
+      //
+      // Fix: start store.replicate() first, then wait for the noise handshake
+      // and add our key-exchange channel to CORESTORE'S internal Protomux
+      // (stream.noiseStream.userData). No conflict, no corruption.
+      //
+      // Dynamic attachment: when we later call store.get({ key: theirCoreKey }),
+      // Corestore's streamTracker.attachAll() auto-attaches it to all active
+      // replication sessions — no manual wiring needed.
+      const replStream = (this.store as any).replicate(socket);
 
-      keyMessage.onmessage = async (theirCoreKey: Buffer) => {
-        try {
-          // Open peer's core read-only — Corestore replication will now sync it
-          const peerCore = (this.store as any).get({ key: theirCoreKey });
-          await peerCore.ready();
-          this.emit('peer-core', theirCoreKey, peerId);
-          console.log(`[p2p] Got core key from ${peerId}: ${theirCoreKey.toString('hex').slice(0, 16)}... (len=${peerCore.length})`);
-        } catch (e: any) {
-          console.log(`[p2p] Could not open peer core: ${e.message}`);
-        }
-      };
+      replStream.noiseStream.opened.then(() => {
+        const mux: any = replStream.noiseStream.userData;
+        const channel = mux.createChannel({ protocol: 'hive/core-keys/v1' });
+        if (!channel) return; // mux closed already
 
-      channel.open();
-      if (this.localCoreKey) {
-        keyMessage.send(this.localCoreKey);
-      }
+        // msg[0]: 32-byte core public key (raw Buffer)
+        // msg[1]: HTTP API URL of the sender (UTF-8 string) — used for HTTP sync fallback
+        const keyMessage = channel.addMessage({ encoding: c.raw });
+        const urlMessage = channel.addMessage({ encoding: c.string });
 
-      // Replication session over the same socket
-      const replSession = (this.store as any).session();
-      replSession.replicate(socket);
+        keyMessage.onmessage = async (theirCoreKey: Buffer) => {
+          try {
+            const peerCore = (this.store as any).get({ key: theirCoreKey });
+            await peerCore.ready();
+            this.emit('peer-core', theirCoreKey, peerId);
+            console.log(`[p2p] Got core key from ${peerId}: ${theirCoreKey.toString('hex').slice(0, 16)}... (len=${peerCore.length})`);
+          } catch (e: any) {
+            console.log(`[p2p] Could not open peer core: ${e.message}`);
+          }
+        };
+
+        urlMessage.onmessage = (theirApiUrl: string) => {
+          if (theirApiUrl) {
+            console.log(`[p2p] Got API URL from ${peerId}: ${theirApiUrl}`);
+            this.emit('peer-api', theirApiUrl, peerId);
+          }
+        };
+
+        channel.open();
+        if (this.localCoreKey) keyMessage.send(this.localCoreKey);
+        if (this.localApiUrl) urlMessage.send(this.localApiUrl);
+      }).catch(() => {});
 
       socket.on('close', () => {
-        replSession.close().catch(() => {});
+        replStream.destroy?.();
         this._peers.delete(peerId);
         this.emit('peer-left', peerId);
         console.log(`[p2p] Peer left: ${peerId}`);

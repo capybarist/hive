@@ -251,9 +251,14 @@ export class KnowledgeStore implements IKnowledgeGraph {
    */
   async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string): Promise<void> {
     await this.ready();
-    const remoteSession = this.store.session();
-    const remoteCore = remoteSession.get({ key: remoteCoreKey });
+    // Open on the main store so it's included in the store.replicate() connection.
+    const remoteCore = (this.store as any).get({ key: remoteCoreKey });
     await remoteCore.ready();
+
+    // Pre-want all blocks so the replication protocol delivers them eagerly.
+    remoteCore.download({ start: 0, end: -1 });
+    console.log(`[repl] watchRemoteCore started: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
+
     const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
     await remoteBee.ready();
 

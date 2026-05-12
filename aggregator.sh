@@ -11,7 +11,7 @@
 #   QDRANT_URL=http://localhost:6333 bash aggregator.sh  # Qdrant mode (production)
 #
 # Required env:
-#   LLM_PROVIDER=gemini|claude|openai   (default: gemini)
+#   LLM_PROVIDER=gemini|claude|openai|groq   (default: gemini)
 #   LLM_API_KEY=your_api_key_here       (for synthesis queries)
 #
 # Optional env:
@@ -42,6 +42,27 @@ DATA_DIR="${HIVE_DATA_DIR:-$HOME/.hive-aggregator}"
 BOOTSTRAP="${HIVE_PEER:-}"
 QDRANT_URL="${QDRANT_URL:-}"
 
+# ── Qdrant — start via Docker if not already running ─────────────────────────
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+if curl -s --max-time 2 "$QDRANT_URL/healthz" &>/dev/null; then
+  ok "Qdrant already running at $QDRANT_URL"
+elif command -v docker &>/dev/null; then
+  run "Starting Qdrant via Docker..."
+  docker run -d --rm -p 6333:6333 qdrant/qdrant > /dev/null 2>&1
+  echo -n "  Waiting for Qdrant"
+  for i in $(seq 1 20); do
+    curl -s --max-time 1 "$QDRANT_URL/healthz" &>/dev/null && break
+    echo -n "."; sleep 1
+  done
+  echo ""
+  curl -s --max-time 1 "$QDRANT_URL/healthz" &>/dev/null \
+    && ok "Qdrant ready" \
+    || { err "Qdrant failed to start — falling back to HNSW"; QDRANT_URL=""; }
+else
+  run "Docker not available — using HNSW backend (set QDRANT_URL to use Qdrant)"
+  QDRANT_URL=""
+fi
+
 if [ -n "$QDRANT_URL" ]; then
   BACKEND="qdrant"
 else
@@ -51,8 +72,8 @@ fi
 # ── Validate ──────────────────────────────────────────────────────────────────
 LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
 case "$LLM_PROVIDER" in
-  gemini|claude|openai) ;;
-  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai" ;;
+  gemini|claude|openai|groq) ;;
+  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq" ;;
 esac
 [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required (used for synthesis queries)."
 
@@ -100,7 +121,7 @@ else
   run "Starting aggregator on :$PORT..."
 
   tmp_env=$(mktemp /tmp/hive_agg_XXXXXX.env)
-  [ -f .env ] && cat .env >> "$tmp_env"
+  [ -f .env ] && { cat .env; echo; } >> "$tmp_env"
   cat >> "$tmp_env" << EOF
 HIVE_MODE=aggregator
 HIVE_PORT=$PORT
@@ -111,9 +132,10 @@ HIVE_PEER=$BOOTSTRAP
 EOF
   [ -n "$QDRANT_URL" ] && echo "QDRANT_URL=$QDRANT_URL" >> "$tmp_env"
 
-  # HIVE_MODE must be in the process env, not only in --env-file,
-  # because Node.js --env-file does not override shell-exported variables.
-  ( cd packages/api && HIVE_MODE=aggregator nohup node --env-file="$tmp_env" \
+  # Unset LLM vars so --env-file is the sole source of truth.
+  # HIVE_MODE is passed explicitly because it must override any inherited value.
+  ( cd packages/api && unset LLM_API_KEY LLM_PROVIDER LLM_MODEL && \
+    HIVE_MODE=aggregator nohup node --env-file="$tmp_env" \
       --import tsx/esm src/api_server.ts \
       > /tmp/hive_aggregator.log 2>&1 & )
 

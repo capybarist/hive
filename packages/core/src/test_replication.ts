@@ -98,9 +98,13 @@ async function phase2() {
   await remoteCoreOnB.ready();
   info(`Remote core length before sync: ${remoteCoreOnB.length}`);
 
-  // Direct replication — both stores; now storeB has BEE-A's core open
+  // Enable downloading — sets core.replicator.downloading=true so _shouldReplicate()
+  // returns true and the core gets attached to the replication stream.
+  remoteCoreOnB.download({ start: 0, end: -1 });
+
+  // Direct replication — both stores; now storeB has BEE-A's core open and downloading
   directReplicate((storeA as any).store, storeBAny.store);
-  await wait(800);
+  await wait(2000);
 
   info(`Remote core length after sync:  ${remoteCoreOnB.length}`);
 

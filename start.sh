@@ -110,13 +110,19 @@ for cfg in "${CONFIGS[@]}"; do
 
     run "Starting API :$port ..."
     tmp_env=$(mktemp /tmp/hive_bee_XXXXXX.env)
-    [ -f .env ] && cat .env >> "$tmp_env"
-    cat "$cfg" >> "$tmp_env"
+    # Append .env then bee config — echo ensures a newline between them even if
+    # .env lacks a trailing newline (otherwise the first bee var merges with the last
+    # .env line, corrupting multi-line values like LLM_API_KEY).
+    [ -f .env ] && { cat .env; echo; } >> "$tmp_env"
+    { cat "$cfg"; echo; } >> "$tmp_env"
     printf '\nHIVE_PORT=%s\nHIVE_DATA_DIR=%s\n' "$port" "$abs_data" >> "$tmp_env"
     [ -n "$BEE_PEER" ] && printf 'HIVE_PEER=%s\n' "$BEE_PEER" >> "$tmp_env"
     [ -n "$EMBEDDER_URL" ] || printf 'EMBEDDER_URL=http://127.0.0.1:%s\n' "$emb_port" >> "$tmp_env"
 
-    ( cd packages/api && nohup node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
+    # Unset LLM vars so --env-file is the sole source of truth (node --env-file
+    # does not override variables already present in the inherited environment).
+    ( cd packages/api && unset LLM_API_KEY LLM_PROVIDER LLM_MODEL && \
+      nohup node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
         > "/tmp/hive_api_${name}.log" 2>&1 & )
   fi
 done

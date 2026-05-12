@@ -6,28 +6,45 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 **Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Current state: v0.2 — bidirectional HTTP sync + Hypercore P2P
+## Current state: v0.2 — HTTP sync working, native Hypercore replication WIP
 
-All modules implemented and working:
+All modules implemented:
 - **Module 1**: Local embeddings (all-MiniLM-L6-v2, ~80MB CPU) + HNSW index
 - **Module 2**: Reactive extractor (arXiv API + CrossRef DOI validation + RSS)
 - **Module 3**: KnowledgeStore on Hypercore + Hyperbee (SESSION_CLOSED fixed)
-- **Module 4**: P2P network — Hyperswarm discovery + native Hypercore replication with core-key exchange
+- **Module 4**: P2P network — Hyperswarm discovery + HTTP sync fallback (see Known Issues)
 - **Module 5**: Vector query API (Fastify)
-- **Module 6**: Web UI with LLM synthesis (Gemini / Claude / OpenAI)
-- **Module 7**: Autonomous extractor (Gemini function calling) + topic tree + claim registry
+- **Module 6**: Web UI with LLM synthesis (Gemini / Claude / OpenAI / Groq)
+- **Module 7**: Autonomous extractor + topic tree + claim registry + aggregator node
 
-## How data flows between BEEs (P2P architecture)
+## ⚠️ Architecture decision: HTTP sync as current transport
+
+**The goal is native Hypercore block replication.** Hypercore is the source of truth and the reason HIVE uses this stack — it provides append-only, cryptographically verifiable, P2P-native storage. The data IS stored in Hypercore on every node.
+
+**Current reality:** Native Corestore block replication between nodes is not yet working. Root cause identified but not fully resolved: `Hypercore.createProtocolStream()` creates its own Protomux internally, conflicting with our custom key-exchange channel. Additionally, `_shouldReplicate()` in Corestore requires `core.replicator.downloading === true`, which requires explicit `core.download()` calls. Both fixes are in place but block delivery is still not confirmed in production.
+
+**What works today:** HTTP sync via `SyncManager`. Every node (BEE and aggregator) pulls fragments from peers via `GET /api/fragments`. Peer discovery is decentralized — when two nodes connect via Hyperswarm, they exchange their HTTP API URLs through the existing Protomux channel (`hive/core-keys/v1`, message index 1). No hardcoded URLs.
+
+**Path forward:** Fix native Hypercore replication. When it works, SyncManager becomes redundant but harmless. See `test_replication.ts` for the test that must pass.
+
+## How data flows between BEEs (current: HTTP sync)
 
 ```
 BEE-A extracts a fragment
-  → saves to its local Hypercore (append-only, signed)
+  → saves to its local Hypercore (append-only, signed) + HNSW embedder
   → Hyperswarm connects BEE-A and BEE-B on the HIVE topic
-  → Protomux channel (hive/core-keys/v1) exchanges 32-byte core public keys
-  → BEE-B opens BEE-A's core read-only in its own Corestore
-  → Corestore replication stream delivers the blocks
-  → watchRemoteCore() detects new frag:* entries via live Hyperbee history stream
-  → POST /add to BEE-B's local embedder → HNSW updated
+  → Protomux channel (hive/core-keys/v1):
+      msg[0] = 32-byte core public key (for future native replication)
+      msg[1] = HTTP API URL of sender  (for current HTTP sync)
+  → BEE-B receives BEE-A's HTTP URL → adds to SyncManager
+  → SyncManager pulls GET /api/fragments from BEE-A every 8s
+  → new fragments → POST /add to BEE-B's embedder → HNSW updated
+
+When native Hypercore replication works, the flow will be:
+  → BEE-B opens BEE-A's core read-only via core key
+  → Corestore replication delivers blocks
+  → watchRemoteCore() drives live Hyperbee history stream → HNSW updated
+```
 ```
 
 **HNSW is a derived index, not a separate store.** It is always reconstructable from Hypercore.
@@ -136,19 +153,29 @@ https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8082.app.github.dev
 - **Append-only storage**: Hypercore never deletes; corrections use supersedes links
 - **HNSW as derived index**: driven by Hypercore history stream, not a parallel store.
   Hypercore = source of truth. HNSW = local search index, always rebuildable from Hypercore.
-- **Native Hypercore replication**: Protomux channel exchanges core public keys on connect;
-  each BEE opens peer's core read-only; Corestore replication delivers blocks automatically.
-- **Multi-provider LLM**: Gemini (default), Claude, or OpenAI — set via `LLM_PROVIDER` + `LLM_API_KEY`
+- **Hypercore as source of truth**: append-only, ed25519-signed, P2P-native. Data lives here regardless of sync transport.
+- **HNSW as derived index**: always rebuildable from Hypercore history on startup.
+- **HTTP sync as transport (temporary)**: SyncManager pulls `/api/fragments` from peers discovered via P2P. Decentralized — HTTP URLs are exchanged via the existing Protomux channel, no hardcoded addresses.
+- **Native Hypercore replication (goal)**: when working, replaces HTTP sync. Code is in place (`watchRemoteCore`, `core.download()`) but block delivery not yet confirmed. See Known Issues.
+- **Multi-provider LLM**: Gemini, Claude, OpenAI, or Groq — set via `LLM_PROVIDER` + `LLM_API_KEY`
+- **Groq default model**: `llama-3.3-70b-versatile` (128K context). Free tier: 100K tokens/day, 6K TPM.
 
-## Known issues
+## Known issues & TODO
 
 | Issue | Impact | Status |
 |-------|--------|--------|
-| SESSION_CLOSED on writes | Hypercore write fails | **Fixed** — ensureOpen() + write queue + per-connection Corestore session |
-| HTTP sync inconsistency between nodes | Different nodes returned different results | **Fixed** — replaced with Hypercore-native replication |
+| SESSION_CLOSED on writes | Hypercore write fails | **Fixed** — ensureOpen() + write queue |
+| Native Hypercore block replication | Blocks don't flow between nodes | **In progress** — root cause: Protomux conflict + `_shouldReplicate` requires `downloading=true`. Fixes applied, unconfirmed. See `test_replication.ts`. |
+| HTTP sync as fallback | Works but not P2P-native | **Intentional temporary** — decentralized URL discovery via Protomux msg[1]. Remove when Hypercore replication is fixed. |
+| No fragment TTL | Stale content stays forever | **TODO** — news fragments should expire ~24h, Wikipedia ~7 days. Track `extracted_at` and purge/supersede on re-extraction. |
+| No cross-cycle dedup | Same article re-indexed each cycle (skipped by HNSW ID check, but wastes LLM tokens) | **TODO** — check `store.has(id)` before calling `index_fragment`. Especially relevant for stable content like Wikipedia. |
+| `supersede()` not wired | KnowledgeStore has supersede() but no code calls it | **TODO** — extractor should call supersede() when re-indexing updated content instead of creating a new fragment with the same topic. |
+| Qdrant `_shouldReplicate` / `search()` API | qdrant-client v1.12+ removed `search()`, replaced with `query_points()` | **Fixed** — qdrant_index.py updated |
+| `doi: "null"` string bug | Fragments stored with string "null" instead of JSON null | **Fixed** — tools_registry.ts sanitizes doi; only stores real DOIs starting with "10." |
+| LLM uses arXiv ID format for non-arXiv content | Fragment IDs like `rock_history_c0` for Wikipedia content | **Fixed** — system prompt now specifies `wiki_*`, `rss_*`, `web_*` prefixes per source type |
 | No replication factor enforcement | Fragments may exist in < 3 BEEs | Planned for v0.4 |
-| `BEE_TOPIC_DOMAIN` sometimes picks wrong domain | If preferred domain is fully claimed | Expected — falls back to next best available |
-| Hyperswarm DHT may be blocked in Codespaces | Peers on different machines can't connect | Only affects cross-machine; same-machine works. Production VMs with open UDP work fine. |
+| `BEE_TOPIC_DOMAIN` sometimes picks wrong domain | If preferred domain is fully claimed | Expected — falls back to next best |
+| Hyperswarm DHT may be blocked in Codespaces | Peers on different machines can't connect | Same-machine works. Production VMs with open UDP work fine. |
 
 ## Running tests
 

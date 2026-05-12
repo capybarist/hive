@@ -121,14 +121,14 @@ class QdrantIndex:
             if conditions:
                 qdrant_filter = Filter(must=conditions)
 
-        hits = self._client.search(
+        result = self._client.query_points(
             collection_name=self._collection,
-            query_vector=vector.astype(np.float32).tolist(),
+            query=vector.astype(np.float32).tolist(),
             limit=k,
             with_payload=True,
             query_filter=qdrant_filter,
         )
-        return [{"score": round(h.score, 4), **(h.payload or {})} for h in hits]
+        return [{"score": round(h.score, 4), **(h.payload or {})} for h in result.points]
 
     def list_all(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """
