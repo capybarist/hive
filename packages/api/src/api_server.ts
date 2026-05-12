@@ -37,27 +37,17 @@ const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 // Pass local HTTP URL so peers can discover us and fetch our core key via HTTP.
 const localApiUrl = `http://127.0.0.1:${PORT}`;
 const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localApiUrl);
-await p2pNode.start();
 
-// Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
-if (!IS_AGGREGATOR) {
-  knowledgeStore.watchFragments(embedderUrl).catch(console.error);
-  console.log(`   Local watch started ✓`);
-}
+// ── Register ALL p2p listeners BEFORE start() ────────────────────────────────
+// Hyperswarm peers can connect and emit events during start()'s flush() window.
+// Any listener registered after start() would miss those early events.
 
 // When a peer's core key is known, start native Hypercore replication.
-// Emitted after we fetch the peer's core key via HTTP (see peer-api handler below).
 p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
   knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
 });
 
 // ── Peer discovery via P2P + native Hypercore replication ────────────────────
-// When a peer connects via Hyperswarm, it sends its HTTP URL via Protomux.
-// We then:
-//   1. Add it to SyncManager for HTTP sync (reliable fallback)
-//   2. Fetch its core key via GET /api/status (clean — no Protomux conflict)
-//   3. Open the core, enable downloading — triggers Corestore's streamTracker
-//      to attach the core to the active replication session automatically
 let syncManager: SyncManager | null = null;
 if (PEER_API) {
   syncManager = new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl);
@@ -66,7 +56,7 @@ if (PEER_API) {
 }
 
 p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
-  // 1. HTTP sync (always works)
+  // 1. HTTP sync fallback
   if (!syncManager) {
     syncManager = new SyncManager(knowledgeStore, identity.nodeId, [], embedderUrl);
     syncManager.start();
@@ -84,8 +74,6 @@ p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
     const remoteCoreKey = Buffer.from(data.coreKey, 'hex');
     const peerCore = (knowledgeStore.corestore as any).get({ key: remoteCoreKey });
     await peerCore.ready();
-    // Enabling download triggers Corestore's ondownloading → streamTracker.attachAll,
-    // which attaches the core to the already-running replicate() session.
     peerCore.download({ start: 0, end: -1 });
     console.log(`[p2p] Core key fetched from ${peerApiUrl} — native replication started`);
     p2pNode.emit('peer-core', remoteCoreKey, peerId);
@@ -93,6 +81,15 @@ p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
     // HTTP fetch failed — HTTP sync still works as fallback
   }
 });
+
+// Start P2P AFTER all listeners are registered so no early peer events are missed
+await p2pNode.start();
+
+// Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
+if (!IS_AGGREGATOR) {
+  knowledgeStore.watchFragments(embedderUrl).catch(console.error);
+  console.log(`   Local watch started ✓`);
+}
 
 // ── Fastify server ───────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
