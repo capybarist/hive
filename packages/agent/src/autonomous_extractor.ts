@@ -81,38 +81,78 @@ export async function runAutonomousExtraction(
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
-  // Reset per-session dedup so a new extraction cycle can re-index previously seen titles
+  // Reset per-session title dedup (prevents same article from two sources in one cycle)
   resetSeenTitles();
 
-  const onFragment = async (frag: { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string }) => {
-    // Save to Hypercore (source of truth + P2P replication via watchFragments)
-    try {
-      await store.save({
-        id: frag.id, text: frag.text, source: frag.source,
-        doi: frag.doi, confidence: frag.confidence, title: frag.title,
-        extracted_at: new Date().toISOString(), node_id: store.nodeId,
-      });
-    } catch (e: any) {
-      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
-    }
-    // Extract arxiv_id from source string (e.g. "arXiv:2605.05576v1" → "2605.05576v1")
+  // TTL by source type — how long before stale content should be superseded
+  const getFragmentTTL = (id: string): number => {
+    const h = 3_600_000;
+    if (id.startsWith('wiki_'))  return 7  * 24 * h;  // Wikipedia: stable, 7 days
+    if (id.startsWith('rss_'))   return 24 * h;         // News/RSS: 24 hours
+    if (id.match(/^\d{4}\.\d/)) return 30 * 24 * h;    // arXiv: immutable, 30 days
+    return 3 * 24 * h;                                   // Other web: 3 days
+  };
+
+  const indexInEmbedder = (id: string, text: string, frag: FragInput) => {
     const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1] ?? null;
-    // Direct HNSW write for immediate local search availability.
-    // watchFragments() handles P2P-replicated fragments and startup replay.
     fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: frag.id, text: frag.text,
+        id, text,
         metadata: {
           source: frag.source, doi: frag.doi ?? null, doi_valid: frag.doi !== null,
           confidence: frag.confidence, title: frag.title ?? null, node_id: store.nodeId,
-          arxiv_id: arxivId,
-          extracted_at: new Date().toISOString(),
+          arxiv_id: arxivId, extracted_at: new Date().toISOString(),
         },
       }),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => {});
+  };
+
+  type FragInput = { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string };
+
+  const onFragment = async (frag: FragInput) => {
+    const input: Parameters<typeof store.save>[0] = {
+      id: frag.id, text: frag.text, source: frag.source,
+      doi: frag.doi, confidence: frag.confidence, title: frag.title,
+      extracted_at: new Date().toISOString(), node_id: store.nodeId,
+    };
+
+    // ── Cross-cycle dedup + TTL ──────────────────────────────────────────────
+    // Hypercore is the source of truth — check it before spending LLM budget.
+    const existing = await store.get(frag.id).catch(() => null);
+    if (existing) {
+      const ageMs = Date.now() - new Date(existing.extracted_at).getTime();
+      const ttlMs = getFragmentTTL(frag.id);
+
+      if (ageMs < ttlMs) {
+        // Fresh content — skip entirely, save tokens
+        console.log(`  [skip] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old, TTL ${ttlMs / 3_600_000}h)`);
+        return;
+      }
+
+      // Stale content — supersede in Hypercore and update embedder
+      console.log(`  [supersede] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old)`);
+      try {
+        const newId = await store.supersede(frag.id, input);
+        indexInEmbedder(newId, frag.text, frag);
+        budget.recordFragments(1);
+        fragmentsIndexed++;
+        onIndexed?.({ id: newId, title: frag.title, source: frag.source });
+      } catch (e: any) {
+        console.warn(`[store] Supersede failed for ${frag.id}: ${e.message}`);
+      }
+      return;
+    }
+
+    // ── New fragment ─────────────────────────────────────────────────────────
+    try {
+      await store.save(input);
+    } catch (e: any) {
+      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
+    }
+    indexInEmbedder(frag.id, frag.text, frag);
     budget.recordFragments(1);
     fragmentsIndexed++;
     console.log(`  [+] Indexed: ${frag.id} | ${frag.source} | conf:${frag.confidence}`);

@@ -167,9 +167,8 @@ https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8082.app.github.dev
 | SESSION_CLOSED on writes | Hypercore write fails | **Fixed** — ensureOpen() + write queue |
 | Native Hypercore block replication | Blocks don't flow between nodes | **Fixed** — root cause was `b.put()` not awaited in KnowledgeStore (Hyperbee v2 batch.put() is async). Hypercore was always empty. All 3 test phases pass. |
 | HTTP sync as fallback | Works but not P2P-native | **Kept as fallback** — decentralized URL discovery via Protomux msg. Remove when confident Hypercore replication is stable in production. |
-| No fragment TTL | Stale content stays forever | **TODO** — news fragments should expire ~24h, Wikipedia ~7 days. Track `extracted_at` and purge/supersede on re-extraction. |
-| No cross-cycle dedup | Same article re-indexed each cycle (skipped by HNSW ID check, but wastes LLM tokens) | **TODO** — check `store.has(id)` before calling `index_fragment`. Especially relevant for stable content like Wikipedia. |
-| `supersede()` not wired | KnowledgeStore has supersede() but no code calls it | **TODO** — extractor should call supersede() when re-indexing updated content instead of creating a new fragment with the same topic. |
+| Fragment TTL + cross-cycle dedup | Stale content stays forever; same article re-indexed wasting tokens | **Fixed** — `onFragment` checks Hypercore before saving. Skip if fresh (wiki 7d, rss 24h, arxiv 30d, web 3d). Supersede if stale. |
+| `supersede()` not wired | KnowledgeStore had supersede() but nothing called it | **Fixed** — extractor calls supersede() for stale content; also fixed missing `await b.put()` in supersede batch. |
 | Qdrant `_shouldReplicate` / `search()` API | qdrant-client v1.12+ removed `search()`, replaced with `query_points()` | **Fixed** — qdrant_index.py updated |
 | `doi: "null"` string bug | Fragments stored with string "null" instead of JSON null | **Fixed** — tools_registry.ts sanitizes doi; only stores real DOIs starting with "10." |
 | LLM uses arXiv ID format for non-arXiv content | Fragment IDs like `rock_history_c0` for Wikipedia content | **Fixed** — system prompt now specifies `wiki_*`, `rss_*`, `web_*` prefixes per source type |

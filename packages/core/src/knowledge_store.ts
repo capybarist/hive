@@ -166,11 +166,11 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      b.put(K.hist(oldId, old.extracted_at), signedOld);
-      b.put(K.frag(oldId), signedOld);
-      b.put(K.frag(newFragment.id), newFragment);
-      b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
-      b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
+      await b.put(K.hist(oldId, old.extracted_at), signedOld);
+      await b.put(K.frag(oldId), signedOld);
+      await b.put(K.frag(newFragment.id), newFragment);
+      await b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
+      await b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
       await this.withTimeout(b.flush(), 8_000, 'supersede flush');
       return newFragment.id;
     });
