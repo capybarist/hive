@@ -8,6 +8,7 @@ on:
       - 'Dockerfile'
       - 'package.json'
       - 'packages/**'
+      - '*.sh'
       - '.github/workflows/publish-docker.yml'
   release:
     types: [published]
