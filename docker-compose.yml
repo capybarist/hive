@@ -11,18 +11,17 @@
 services:
 
   # ── HTTPS reverse proxy (auto-TLS via Let's Encrypt) ─────────────────────────
+  # No config file needed — domain is set via DOMAIN= in .env
   caddy:
     image: caddy:2-alpine
     container_name: hive-caddy
     restart: unless-stopped
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to aggregator:8090
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
-    environment:
-      - DOMAIN=${DOMAIN:-localhost}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
