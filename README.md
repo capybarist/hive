@@ -11,16 +11,31 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge from the
 
 ## Quick start
 
-### From source
+### Option 1 — Docker (recommended)
+
+```bash
+docker run -d \
+  -e LLM_PROVIDER=groq \
+  -e LLM_API_KEY=gsk_your_key_here \
+  -p 8080:8080 -p 7700:7700 \
+  -v hive-data:/root/.hive \
+  ghcr.io/capybarist/hive:latest
+```
+
+Open `http://localhost:8080` — the BEE self-configures and starts indexing.
+
+Get a free Groq key at [console.groq.com](https://console.groq.com).
+
+### Option 2 — From source
 
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
 pip install -r packages/embeddings/requirements.txt
 
-# Set your LLM key (Groq recommended — free tier, no credit card)
+# Set your LLM key
 echo "LLM_PROVIDER=groq" >> .env
-echo "LLM_API_KEY=gsk_your_key_here" >> .env  # console.groq.com
+echo "LLM_API_KEY=gsk_your_key_here" >> .env
 
 bash hive.sh   # single BEE, production mode
 ```
