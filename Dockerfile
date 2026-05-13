@@ -1,7 +1,7 @@
 FROM node:20-slim
 
 # Python for the embeddings server
-RUN apt-get update && apt-get install -y python3 python3-pip curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y python3 python3-pip python-is-python3 curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /hive
 
