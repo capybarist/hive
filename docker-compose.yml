@@ -71,7 +71,7 @@ services:
       - bee2-data:/hive/data
     depends_on:
       bee-1:
-        condition: service_healthy
+        condition: service_started
 
   # ── Aggregator — indexes all BEE fragments into Qdrant ───────────────────────
   aggregator:
@@ -95,9 +95,9 @@ services:
       - aggregator-data:/hive/data
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
       bee-1:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   qdrant-data:
