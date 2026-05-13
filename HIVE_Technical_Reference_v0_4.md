@@ -257,7 +257,7 @@ Hyperswarm for discovery. Protomux for HTTP URL exchange. Native Hypercore repli
 
 ### Module 5 — Vector query API ✅
 
-Fastify with endpoints: `POST /query/text`, `POST /query/vector`, `GET /status`, `GET /fragments/:id`, `GET /api/fragments`, `POST /api/register-peer`. Federated search: if local HNSW has no relevant results, queries peers.
+Fastify with endpoints: `POST /api/query` (text + vector, history, filters), `GET /api/status`, `GET /api/fragments` (paginated list), `GET /api/state`, `GET /api/activity`, `POST /api/register-peer`, `POST /api/config`. Federated search: if local HNSW has no relevant results, queries peers.
 
 ### Module 6 — Human interface ✅
 

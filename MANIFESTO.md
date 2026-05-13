@@ -101,7 +101,7 @@ HIVE v0.4 is a working system — all core modules implemented and running, with
 
 ## How to run a BEE
 
-See [Quick start in the README](./README.md#quick-start) — Docker, npx, or from source. Zero configuration needed: your BEE will find an uncovered area and start extracting on its own.
+See [Quick start in the README](./README.md#quick-start) — from source or via `npx hive-bee` (once published to npm). Zero configuration needed: your BEE will find an uncovered area and start extracting on its own.
 
 ## How to contribute code
 
