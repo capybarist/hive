@@ -2,54 +2,65 @@
 
 ## What this project is
 
-HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge base for LLMs. Each node is called a **BEE**. BEEs autonomously extract knowledge from the internet, sign each fragment with ed25519, store it in Hypercore (append-only, cryptographically verifiable), and sync with other BEEs via native Hypercore replication. LLMs query HIVE via RAG to get up-to-date, source-traceable knowledge.
+HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge base for LLMs. Each node is a **BEE**. BEEs autonomously extract knowledge from the internet, sign each fragment with ed25519, store it in Hypercore (append-only, cryptographically verifiable), and sync with other BEEs via native Hypercore replication. LLMs query HIVE via RAG to get up-to-date, source-traceable knowledge.
 
 **Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Current state: v0.2 — HTTP sync working, native Hypercore replication WIP
+## Current state: v0.4 — native Hypercore replication working
 
-All modules implemented:
-- **Module 1**: Local embeddings (all-MiniLM-L6-v2, ~80MB CPU) + HNSW index
-- **Module 2**: Reactive extractor (arXiv API + CrossRef DOI validation + RSS)
-- **Module 3**: KnowledgeStore on Hypercore + Hyperbee (SESSION_CLOSED fixed)
-- **Module 4**: P2P network — Hyperswarm discovery + HTTP sync fallback (see Known Issues)
-- **Module 5**: Vector query API (Fastify)
-- **Module 6**: Web UI with LLM synthesis (Gemini / Claude / OpenAI / Groq)
-- **Module 7**: Autonomous extractor + topic tree + claim registry + aggregator node
+All 7 modules complete. Native P2P replication fixed in v0.4.
 
-## ⚠️ Architecture decision: HTTP sync as current transport
+| Module | Description | Status |
+|--------|-------------|--------|
+| 1 | Embeddings + HNSW (all-MiniLM-L6-v2, 80MB CPU) | ✅ |
+| 2 | Extractor: arXiv + RSS + web (Wikipedia-first prompt) | ✅ |
+| 3 | KnowledgeStore — Hypercore + Hyperbee, ed25519-signed | ✅ |
+| 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed v0.4 |
+| 5 | Vector query API (Fastify) + federated queries | ✅ |
+| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI) | ✅ |
+| 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
+| — | Aggregator node + Qdrant backend | ✅ added v0.4 |
 
-**The goal is native Hypercore block replication.** Hypercore is the source of truth and the reason HIVE uses this stack — it provides append-only, cryptographically verifiable, P2P-native storage. The data IS stored in Hypercore on every node.
+**NOT in spec that we have:**
+- Aggregator node (not in original spec)
+- Multi-provider LLM: Groq, Gemini, Claude, OpenAI
+- TTL + supersede wired in extractor
 
-**Current reality:** Native Corestore block replication between nodes is not yet working. Root cause identified but not fully resolved: `Hypercore.createProtocolStream()` creates its own Protomux internally, conflicting with our custom key-exchange channel. Additionally, `_shouldReplicate()` in Corestore requires `core.replicator.downloading === true`, which requires explicit `core.download()` calls. Both fixes are in place but block delivery is still not confirmed in production.
+**In spec but NOT yet implemented:**
+- `Autobase` multi-writer (decision: abandoned — single-writer per BEE is simpler and correct for HIVE's model)
+- `IConsensus` — multi-agent fragment quality voting (v0.6)
+- Signature verification on receive (fragments signed but not verified on receipt) — v0.5
+- Factor de replicación ≥ 3 (v0.5)
+- Semantic routing / VecDHT (v0.6)
+- Token economics (v0.7+)
 
-**What works today:** HTTP sync via `SyncManager`. Every node (BEE and aggregator) pulls fragments from peers via `GET /api/fragments`. Peer discovery is decentralized — when two nodes connect via Hyperswarm, they exchange their HTTP API URLs through the existing Protomux channel (`hive/core-keys/v1`, message index 1). No hardcoded URLs.
-
-**Path forward:** Fix native Hypercore replication. When it works, SyncManager becomes redundant but harmless. See `test_replication.ts` for the test that must pass.
-
-## How data flows between BEEs (current: HTTP sync)
+## How data flows
 
 ```
 BEE-A extracts a fragment
-  → saves to its local Hypercore (append-only, signed) + HNSW embedder
-  → Hyperswarm connects BEE-A and BEE-B on the HIVE topic
-  → Protomux channel (hive/core-keys/v1):
-      msg[0] = 32-byte core public key (for future native replication)
-      msg[1] = HTTP API URL of sender  (for current HTTP sync)
-  → BEE-B receives BEE-A's HTTP URL → adds to SyncManager
-  → SyncManager pulls GET /api/fragments from BEE-A every 8s
-  → new fragments → POST /add to BEE-B's embedder → HNSW updated
+  → saves to local Hypercore (append-only, ed25519-signed) + HNSW embedder
+  → Hyperswarm connects BEE-A and BEE-B on HIVE topic
+  → Protomux channel (hive/meta/v1, msg[0]): exchanges HTTP API URLs
+  → HTTP GET /api/status: peer's Hypercore public key
+  → store.get({key}) + core.download({start:0,end:-1})
+      → Corestore streamTracker.attachAll() → native replication active
+  → watchRemoteCore(): live Hyperbee history stream → HNSW updated
+  → SyncManager: HTTP pull from /api/fragments every 8s (fallback)
 
-When native Hypercore replication works, the flow will be:
-  → BEE-B opens BEE-A's core read-only via core key
-  → Corestore replication delivers blocks
-  → watchRemoteCore() drives live Hyperbee history stream → HNSW updated
-```
+Before indexing any fragment:
+  → store.get(id) — check Hypercore for existing fragment
+  → Fresh (within TTL): skip — save LLM tokens
+  → Stale (past TTL): supersede() — marks old, indexes new
+  → New: save() + embedder /add
 ```
 
-**HNSW is a derived index, not a separate store.** It is always reconstructable from Hypercore.
-On startup, `watchFragments()` replays the full Hyperbee history and rebuilds HNSW locally.
-On peer connect, `watchRemoteCore()` watches the peer's replicated core and keeps HNSW in sync.
+**TTL by source:** wiki 7 days · rss 24h · arXiv 30 days · web 3 days
+
+**HNSW is a derived index**, always reconstructable from Hypercore history.
+
+## Autobase decision
+
+The original spec calls for Autobase (multi-writer linealisation). This was removed in v0.2.1 due to `Autobase is closing` concurrent write errors. The current model — each BEE has its own single-writer Hypercore, peers open it read-only — is actually a better fit for HIVE's architecture (each BEE is the sole authority on its own knowledge). Autobase is not planned for reinstatement.
 
 ## File structure
 
@@ -57,144 +68,125 @@ On peer connect, `watchRemoteCore()` watches the peer's replicated core and keep
 hive/
 ├── hive.sh              ← production launcher (zero-config, single BEE)
 ├── start.sh             ← dev launcher (multiple BEEs from bees/*.env)
+├── aggregator.sh        ← aggregator node launcher (starts Qdrant via Docker)
+├── stop.sh              ← kills all processes by port
 ├── bees/                ← dev configs: bee-1.env, bee-2.env, bee-3.env
 ├── data/
-│   ├── topic_tree.json  ← 95-topic knowledge taxonomy (only committed file here)
-│   └── bee-*/           ← runtime data: corestore/, vectors/, identity/ (gitignored)
+│   ├── topic_tree.json  ← 95-topic knowledge taxonomy (committed)
+│   └── bee-*/           ← runtime data (gitignored)
 ├── packages/
 │   ├── core/src/
-│   │   ├── knowledge_store.ts   ← KnowledgeStore (Hypercore + Hyperbee)
-│   │   │                           key methods: save(), watchFragments(), watchRemoteCore()
-│   │   │                           coreKey getter exposes public key for peer exchange
-│   │   ├── p2p_node.ts          ← Hyperswarm + Protomux core-key exchange + replication
-│   │   ├── claim_registry.ts    ← P2P registry: which BEE covers which topic
+│   │   ├── knowledge_store.ts   ← KnowledgeStore: save/get/supersede/watchFragments/watchRemoteCore
+│   │   ├── p2p_node.ts          ← Hyperswarm + Protomux URL exchange + store.replicate()
+│   │   ├── sync_manager.ts      ← HTTP sync fallback (8s interval)
+│   │   ├── claim_registry.ts    ← topic claim coordination via HTTP
 │   │   ├── topic_assignment.ts  ← assigns topic tree leaves to BEEs
-│   │   ├── sync_manager.ts      ← HTTP fallback for UDP-blocked environments; active in Codespaces
 │   │   └── node_identity.ts     ← ed25519 identity per BEE
 │   ├── agent/src/
-│   │   ├── autonomous_extractor.ts ← Gemini agent with tools (main extractor)
-│   │   ├── reactive_extractor.ts   ← manual topic-list extractor (fallback/test)
-│   │   ├── objective_discovery.ts  ← auto-assigns topics by scanning the network
-│   │   ├── tools_registry.ts       ← tools: arxiv_search, rss_fetch, web_fetch...
-│   │   └── budget_controller.ts    ← token/fragment/time limits
+│   │   ├── autonomous_extractor.ts ← LLM agent + dedup/TTL/supersede logic
+│   │   ├── tools_registry.ts       ← arxiv_search, rss_fetch, web_fetch, index_fragment
+│   │   └── budget_controller.ts    ← token/fragment/time limits per cycle
 │   ├── embeddings/
-│   │   └── api_server.py        ← FastAPI Python :7700, HNSW + sentence-transformers
+│   │   ├── api_server.py        ← FastAPI :7700, HNSW + Qdrant backends
+│   │   └── qdrant_index.py      ← Qdrant client (aggregator backend)
 │   ├── api/src/
-│   │   └── api_server.ts        ← Fastify :8080, all endpoints + extraction loop
+│   │   ├── api_server.ts        ← Fastify :8080, all endpoints + extraction loop
+│   │   └── llm_client.ts        ← LLM synthesis for /api/query
 │   └── ui/
 │       └── index.html           ← vanilla JS UI, dark theme
-├── scripts/
-│   └── verify_store.ts          ← KnowledgeStore diagnostic tool
 └── packages/core/src/
-    ├── test_v03.ts              ← SESSION_CLOSED fix tests (4 scenarios)
-    └── test_replication.ts      ← P2P replication tests (3 phases, direct pipes)
+    └── test_replication.ts      ← P2P replication tests (3 phases) — ALL PASS
 ```
 
 ## How to run
 
 ```bash
-# Production (single BEE, zero-config):
+# Production (single BEE):
 bash hive.sh
 
-# Dev (3 BEEs on the same machine):
-bash start.sh                    # starts bee-1, bee-2, bee-3
-bash start.sh bee-1 bee-2        # specific BEEs only
-bash start.sh --clean            # wipe data and restart
+# Dev (3 BEEs):
+bash start.sh
+bash start.sh --clean        # wipe data and restart
+bash stop.sh --force         # kill all processes
+
+# Aggregator (starts Qdrant via Docker automatically):
+bash aggregator.sh
 ```
 
 **Key environment variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | LLM provider: `gemini`, `claude`, or `openai` |
-| `LLM_API_KEY` | — | Required. API key for the chosen provider |
-| `LLM_MODEL` | — | Optional model override (e.g. `gpt-4o-mini`) |
+| `LLM_PROVIDER` | `gemini` | `gemini` · `claude` · `openai` · `groq` |
+| `LLM_API_KEY` | — | Required |
+| `LLM_MODEL` | — | Optional override |
 | `HIVE_PORT` | 8080 | API server port |
 | `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
 | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
-| `BEE_PEER` | — | Bootstrap peer HTTP URL (for claim discovery only, not data sync) |
+| `BEE_PEER` | — | Bootstrap peer HTTP URL |
 | `BEE_TOPIC_DOMAIN` | — | Domain hint (e.g. `current_events`, `health`) |
-| `HIVE_OBJECTIVE` | — | Explicit objective (overrides auto-discovery) |
 | `HIVE_EXTRACT_MAX_FRAGMENTS` | 20 | Fragments per extraction cycle |
 | `HIVE_EXTRACT_INTERVAL_MS` | 300000 | Cycle interval (5 min) |
-
-Note: `BEE_PEER` drives both HTTP claim discovery and data sync fallback.
-Hypercore replication is primary (when Hyperswarm DHT is available).
-
-## Topic auto-discovery flow
-
-1. BEE starts with no `HIVE_OBJECTIVE`
-2. Reads `data/topic_tree.json` (95 leaf topics, 9 domains)
-3. Calls `/api/claims` on peers to see what is already covered
-4. Scores leaves: unclaimed=100, covered by 1=50, already mine=10; +200 if matches `BEE_TOPIC_DOMAIN`
-5. Claims top-N leaves with random jitter (reduces simultaneous-start races)
-6. Extraction cycle every 5 min, ~maxFragments/numTopics fragments per topic
-7. Renews claims (TTL 30 min) to maintain coverage territory
 
 ## Dev BEE ports
 
 | BEE | API | Embedder | Notes |
 |-----|-----|----------|-------|
-| bee-1 | 8080 | 7700 | Seed (no peer) |
+| bee-1 | 8080 | 7700 | Seed — no peer |
 | bee-2 | 8081 | 7701 | Peers with bee-1 |
 | bee-3 | 8082 | 7702 | Peers with bee-1, `BEE_TOPIC_DOMAIN=current_events` |
-
-**Codespace URLs:**
-```
-https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8080.app.github.dev
-https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8081.app.github.dev
-https://vigilant-space-orbit-xrwvjw5v6r6q3pqr7-8082.app.github.dev
-```
+| aggregator | 8090 | 7790 | Read-only, Qdrant backend |
 
 ## Key design decisions
 
-- **Hypercore over GenosDB**: open source, Holepunch ecosystem, production-proven (Pear, Keet)
-- **No agent framework**: own TypeScript extractor + Gemini function calling — cleaner, auditable
-- **Topic-centric, not source-centric**: LLM decides sources per topic at runtime
-- **Append-only storage**: Hypercore never deletes; corrections use supersedes links
-- **HNSW as derived index**: driven by Hypercore history stream, not a parallel store.
-  Hypercore = source of truth. HNSW = local search index, always rebuildable from Hypercore.
-- **Hypercore as source of truth**: append-only, ed25519-signed, P2P-native. Data lives here regardless of sync transport.
-- **HNSW as derived index**: always rebuildable from Hypercore history on startup.
-- **HTTP sync as transport (temporary)**: SyncManager pulls `/api/fragments` from peers discovered via P2P. Decentralized — HTTP URLs are exchanged via the existing Protomux channel, no hardcoded addresses.
-- **Native Hypercore replication (goal)**: when working, replaces HTTP sync. Code is in place (`watchRemoteCore`, `core.download()`) but block delivery not yet confirmed. See Known Issues.
-- **Multi-provider LLM**: Gemini, Claude, OpenAI, or Groq — set via `LLM_PROVIDER` + `LLM_API_KEY`
-- **Groq default model**: `llama-3.3-70b-versatile` (128K context). Free tier: 100K tokens/day, 6K TPM.
+- **Hypercore as source of truth**: append-only, ed25519-signed. Data lives here regardless of sync transport.
+- **Single-writer per BEE**: each BEE owns its Hypercore. Peers open it read-only. No Autobase.
+- **HNSW/Qdrant as derived index**: always rebuildable from Hypercore. HNSW for BEEs, Qdrant for aggregator.
+- **HTTP sync as fallback**: SyncManager pulls `/api/fragments` from peers. Decentralized — HTTP URLs exchanged via Protomux. Kept while native replication stabilises.
+- **Native Hypercore replication**: core key fetched via HTTP after peer URL is known. No Protomux conflict. All test phases pass.
+- **No agent framework**: own TypeScript extractor, cleaner and more auditable than LangChain/LangGraph for this use case.
+- **Topic-centric**: LLM decides sources per topic at runtime. Wikipedia first, then RSS, then arXiv.
+- **Multi-provider LLM**: Groq (recommended), Gemini, Claude, OpenAI.
 
-## Known issues & TODO
+## Known issues & roadmap
 
 | Issue | Impact | Status |
 |-------|--------|--------|
-| SESSION_CLOSED on writes | Hypercore write fails | **Fixed** — ensureOpen() + write queue |
-| Native Hypercore block replication | Blocks don't flow between nodes | **Fixed** — root cause was `b.put()` not awaited in KnowledgeStore (Hyperbee v2 batch.put() is async). Hypercore was always empty. All 3 test phases pass. |
-| HTTP sync as fallback | Works but not P2P-native | **Kept as fallback** — decentralized URL discovery via Protomux msg. Remove when confident Hypercore replication is stable in production. |
-| Fragment TTL + cross-cycle dedup | Stale content stays forever; same article re-indexed wasting tokens | **Fixed** — `onFragment` checks Hypercore before saving. Skip if fresh (wiki 7d, rss 24h, arxiv 30d, web 3d). Supersede if stale. |
-| `supersede()` not wired | KnowledgeStore had supersede() but nothing called it | **Fixed** — extractor calls supersede() for stale content; also fixed missing `await b.put()` in supersede batch. |
-| Qdrant `_shouldReplicate` / `search()` API | qdrant-client v1.12+ removed `search()`, replaced with `query_points()` | **Fixed** — qdrant_index.py updated |
-| `doi: "null"` string bug | Fragments stored with string "null" instead of JSON null | **Fixed** — tools_registry.ts sanitizes doi; only stores real DOIs starting with "10." |
-| LLM uses arXiv ID format for non-arXiv content | Fragment IDs like `rock_history_c0` for Wikipedia content | **Fixed** — system prompt now specifies `wiki_*`, `rss_*`, `web_*` prefixes per source type |
-| No replication factor enforcement | Fragments may exist in < 3 BEEs | Planned for v0.4 |
-| `BEE_TOPIC_DOMAIN` sometimes picks wrong domain | If preferred domain is fully claimed | Expected — falls back to next best |
-| Hyperswarm DHT may be blocked in Codespaces | Peers on different machines can't connect | Same-machine works. Production VMs with open UDP work fine. |
+| `await b.put()` missing in KnowledgeStore | Hypercore was always empty — P2P replication impossible | **Fixed v0.4** |
+| Listeners registered after p2pNode.start() | Aggregator missed early peer events | **Fixed v0.4** |
+| Env trailing newline bug | LLM_API_KEY corrupted in tmp_env | **Fixed v0.4** |
+| `node --env-file` inheritance | Shell env overrides --env-file | **Fixed v0.4** |
+| Native Hypercore replication | test_replication.ts all phases pass | **Fixed v0.4** |
+| HTTP sync as fallback | Works, not P2P-native | **Kept as fallback** |
+| Fragment TTL + cross-cycle dedup | Wasted LLM tokens on stale content | **Fixed v0.4** |
+| `supersede()` not wired | KnowledgeStore method never called | **Fixed v0.4** |
+| Qdrant `search()` API v1.12+ | search() removed, use query_points() | **Fixed v0.4** |
+| doi string "null" bug | String not JSON null | **Fixed v0.4** |
+| Signature verification on receive | Malicious node could inject unsigned data | **TODO v0.5** |
+| Replication factor ≥ 3 | Fragments may exist in < 3 BEEs | **TODO v0.5** |
+| IConsensus — fragment quality voting | No multi-agent validation | **TODO v0.6** |
+| Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.6** |
+| Token economics | No incentive layer | **TODO v0.7+** |
+| Hyperswarm DHT blocked in Codespaces | Cross-machine needs open UDP | Expected — HTTP sync covers Codespaces |
 
 ## Running tests
 
 ```bash
-# SESSION_CLOSED fix + write queue + P2P lifecycle
-packages/core/node_modules/.bin/tsx packages/core/src/test_v03.ts
-
-# Native Hypercore replication (3 phases: baseline, key exchange, live stream)
+# Native Hypercore replication — should show ALL PHASES PASSED
 packages/core/node_modules/.bin/tsx packages/core/src/test_replication.ts
+
+# SESSION_CLOSED fix + write queue
+packages/core/node_modules/.bin/tsx packages/core/src/test_v03.ts
 ```
 
 ## GitHub
 
 ```
 Repo   : https://github.com/capybarist/hive (private)
-Default: main branch
-Push   : requires GITHUB_TOKEN workaround (Codespace env conflict)
+Branch : feature/v04-p2p-replication (current work)
+Push   : requires GITHUB_TOKEN workaround
          TOKEN=$(GITHUB_TOKEN="" gh auth token)
          git remote set-url origin "https://capybarist:${TOKEN}@github.com/capybarist/hive.git"
-         git push origin main
+         git push origin feature/v04-p2p-replication
 ```
 
 ## Developer context
