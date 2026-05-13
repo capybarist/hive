@@ -276,6 +276,59 @@ class OpenAIProvider implements LLMProvider {
   }
 }
 
+// ── Groq ──────────────────────────────────────────────────────────────────────
+// OpenAI-compatible API — reuses toOpenAIMessages and the same request shape.
+
+class GroqProvider implements LLMProvider {
+  private readonly url = 'https://api.groq.com/openai/v1/chat/completions';
+
+  constructor(private readonly apiKey: string, private readonly model = 'llama-3.3-70b-versatile') {}
+
+  private async call(body: unknown): Promise<any> {
+    const res = await fetch(this.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new Error(`Groq error ${res.status}: ${await res.text()}`);
+    return res.json();
+  }
+
+  async generate(messages: LLMMessage[], systemPrompt: string, options: GenerateOptions = {}): Promise<{ text: string; tokensUsed: number }> {
+    const data = await this.call({
+      model: this.model,
+      messages: [{ role: 'system', content: systemPrompt }, ...toOpenAIMessages(messages)],
+      temperature: options.temperature ?? 0.5,
+      max_tokens: options.maxTokens ?? 8192,
+    });
+    return {
+      text: data?.choices?.[0]?.message?.content ?? '(no response)',
+      tokensUsed: data?.usage?.total_tokens ?? 0,
+    };
+  }
+
+  async generateWithTools(messages: LLMMessage[], systemPrompt: string, tools: ToolDef[], options: GenerateOptions = {}): Promise<GenerateResult> {
+    const data = await this.call({
+      model: this.model,
+      messages: [{ role: 'system', content: systemPrompt }, ...toOpenAIMessages(messages)],
+      tools: tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+      tool_choice: 'auto',
+      temperature: options.temperature ?? 0.3,
+      max_tokens: options.maxTokens ?? 2048,
+    });
+    const msg = data?.choices?.[0]?.message;
+    const tokensUsed = data?.usage?.total_tokens ?? 0;
+    const text = (msg?.content as string | null) || undefined;
+    const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((tc: any) => ({
+      id: tc.id,
+      name: tc.function.name,
+      args: JSON.parse(tc.function.arguments ?? '{}'),
+    }));
+    return { text, toolCalls: toolCalls.length ? toolCalls : undefined, tokensUsed };
+  }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createLLMProvider(): LLMProvider {
@@ -289,8 +342,9 @@ export function createLLMProvider(): LLMProvider {
     case 'gemini':  return new GeminiProvider(apiKey, modelOverride ?? 'gemini-2.5-flash');
     case 'claude':  return new ClaudeProvider(apiKey, modelOverride ?? 'claude-sonnet-4-6');
     case 'openai':  return new OpenAIProvider(apiKey, modelOverride ?? 'gpt-4o');
+    case 'groq':    return new GroqProvider(apiKey, modelOverride ?? 'llama-3.3-70b-versatile');
     default:
-      throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai`);
+      throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai, groq`);
   }
 }
 
@@ -328,6 +382,14 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
           body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        break;
+      case 'groq':
+        res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
           signal: AbortSignal.timeout(10_000),
         });
         break;

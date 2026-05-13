@@ -34,30 +34,61 @@ console.log(`   KnowledgeStore ready ✓`);
 
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// Pass local core key so peers can open it for replication
-const p2pNode = new HiveP2PNode(knowledgeStore.corestore, knowledgeStore.coreKey);
+// Pass local HTTP URL so peers can discover us and fetch our core key via HTTP.
+const localApiUrl = `http://127.0.0.1:${PORT}`;
+const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localApiUrl);
+
+// ── Register ALL p2p listeners BEFORE start() ────────────────────────────────
+// Hyperswarm peers can connect and emit events during start()'s flush() window.
+// Any listener registered after start() would miss those early events.
+
+// When a peer's core key is known, start native Hypercore replication.
+p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
+  knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
+});
+
+// ── Peer discovery via P2P + native Hypercore replication ────────────────────
+let syncManager: SyncManager | null = null;
+if (PEER_API) {
+  syncManager = new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl);
+  syncManager.start();
+  console.log(`   HTTP sync → ${PEER_API} ✓`);
+}
+
+p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
+  // 1. HTTP sync fallback
+  if (!syncManager) {
+    syncManager = new SyncManager(knowledgeStore, identity.nodeId, [], embedderUrl);
+    syncManager.start();
+  }
+  syncManager.addPeer(peerApiUrl);
+  syncManager.syncOnce().catch(() => {});
+
+  // 2. Native Hypercore replication: fetch core key via HTTP, then open + download
+  try {
+    const res = await fetch(`${peerApiUrl}/api/status`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return;
+    const data = await res.json() as any;
+    if (!data.coreKey) return;
+
+    const remoteCoreKey = Buffer.from(data.coreKey, 'hex');
+    const peerCore = (knowledgeStore.corestore as any).get({ key: remoteCoreKey });
+    await peerCore.ready();
+    peerCore.download({ start: 0, end: -1 });
+    console.log(`[p2p] Core key fetched from ${peerApiUrl} — native replication started`);
+    p2pNode.emit('peer-core', remoteCoreKey, peerId);
+  } catch {
+    // HTTP fetch failed — HTTP sync still works as fallback
+  }
+});
+
+// Start P2P AFTER all listeners are registered so no early peer events are missed
 await p2pNode.start();
 
 // Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
 if (!IS_AGGREGATOR) {
   knowledgeStore.watchFragments(embedderUrl).catch(console.error);
   console.log(`   Local watch started ✓`);
-}
-
-// When a peer's core key arrives, replicate and index their fragments.
-// Both BEEs and aggregator do this — aggregator does it for ALL peers.
-p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
-  knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
-});
-
-// ── HTTP sync fallback (BEE mode only) ──────────────────────────────────────
-// Aggregator relies exclusively on Hyperswarm P2P — no HTTP sync needed.
-if (!IS_AGGREGATOR) {
-  const syncManager = new SyncManager(
-    knowledgeStore, identity.nodeId, PEER_API ? [PEER_API] : [], embedderUrl,
-  );
-  syncManager.start();
-  if (PEER_API) console.log(`   HTTP sync → ${PEER_API} ✓`);
 }
 
 // ── Fastify server ───────────────────────────────────────────────────────────
@@ -154,8 +185,8 @@ app.get('/api/node-info', async () => ({
 app.post<{ Body: { apiUrl: string } }>('/api/register-peer', async (req) => {
   const { apiUrl } = req.body;
   if (!apiUrl) return { ok: false, error: 'apiUrl required' };
-  syncManager.addPeer(apiUrl);
-  syncManager.syncOnce().catch(() => {});   // immediate pull
+  syncManager?.addPeer(apiUrl);
+  syncManager?.syncOnce().catch(() => {});   // immediate pull
   console.log(`[sync] Peer registered: ${apiUrl}`);
   return { ok: true, nodeId: identity.nodeId };
 });
@@ -225,8 +256,10 @@ app.get('/api/status', async () => {
     model: embedder?.model ?? null,
     backend: (embedder as any)?.backend ?? 'hnsw',
     llm_configured: isLLMConfigured(),
+    llm_ok: llmHealthy,
     llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
     peers: p2pNode.peerCount,
+    coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
   };
 });
 
@@ -316,6 +349,16 @@ if (!IS_AGGREGATOR && resolvedObjective) {
   } catch { /* topic tree not available yet */ }
 }
 
+// ── LLM health tracking ───────────────────────────────────────────────────────
+// null = not yet validated, true = last call succeeded, false = key error
+let llmHealthy: boolean | null = null;
+
+if (isLLMConfigured()) {
+  validateLLMKey(process.env.LLM_PROVIDER ?? 'gemini', process.env.LLM_API_KEY ?? '')
+    .then(err => { llmHealthy = err === null; })
+    .catch(() => { llmHealthy = false; });
+}
+
 // ── Autonomous extraction loop (BEE mode only) ───────────────────────────────
 let extractionLoopRunning = false;
 const MAX_TOPICS_PER_CYCLE = 5;
@@ -360,6 +403,7 @@ const runLoop = async () => {
               knowledgeStore,
               embedderUrl,
               (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
+              (ok) => { llmHealthy = ok; },
             ),
             new Promise<never>((_, rej) =>
               setTimeout(() => rej(new Error(`topic deadline exceeded (${topicMaxMin * 2 + 2}min)`)), topicDeadlineMs)
@@ -417,9 +461,9 @@ function upsertEnvLine(content: string, key: string, value: string): string {
   return re.test(content) ? content.replace(re, line) : (content + (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
 }
 
-app.post<{ Body: { provider: string; apiKey: string } }>('/api/config', async (req, reply) => {
-  const { provider, apiKey } = req.body ?? {};
-  const VALID = ['gemini', 'claude', 'openai'];
+app.post<{ Body: { provider: string; apiKey: string; model?: string } }>('/api/config', async (req, reply) => {
+  const { provider, apiKey, model } = req.body ?? {};
+  const VALID = ['gemini', 'claude', 'openai', 'groq'];
   if (!VALID.includes(provider)) return reply.code(400).send({ error: `Invalid provider. Valid: ${VALID.join(', ')}` });
   if (!apiKey?.trim()) return reply.code(400).send({ error: 'apiKey is required' });
 
@@ -429,13 +473,16 @@ app.post<{ Body: { provider: string; apiKey: string } }>('/api/config', async (r
 
   process.env.LLM_PROVIDER = provider;
   process.env.LLM_API_KEY = apiKey.trim();
+  if (model?.trim()) process.env.LLM_MODEL = model.trim();
+  llmHealthy = true; // validation already passed above
 
-  const envPath = resolve(join(__dirname, '../../../../.env'));
+  const envPath = resolve(join(__dirname, '../../../.env'));
   try {
     let content = '';
     try { content = await readFile(envPath, 'utf8'); } catch {}
     content = upsertEnvLine(content, 'LLM_PROVIDER', provider);
     content = upsertEnvLine(content, 'LLM_API_KEY', apiKey.trim());
+    if (model?.trim()) content = upsertEnvLine(content, 'LLM_MODEL', model.trim());
     await writeFile(envPath, content, 'utf8');
   } catch { /* .env write failed — in-memory update still works for this session */ }
 

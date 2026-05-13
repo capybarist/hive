@@ -106,9 +106,10 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      b.put(K.frag(fragment.id), fragment);
-      b.put(K.src(fragment.source, fragment.id), fragment.id);
-      b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
+      // batch.put() is async in Hyperbee v2 — must be awaited or puts are lost
+      await b.put(K.frag(fragment.id), fragment);
+      await b.put(K.src(fragment.source, fragment.id), fragment.id);
+      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
       await this.withTimeout(b.flush(), 8_000, 'save flush');
       return fragment.id;
     });
@@ -119,9 +120,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      b.put(K.frag(fragment.id), fragment);
-      b.put(K.src(fragment.source, fragment.id), fragment.id);
-      b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
+      await b.put(K.frag(fragment.id), fragment);
+      await b.put(K.src(fragment.source, fragment.id), fragment.id);
+      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
       await this.withTimeout(b.flush(), 8_000, 'saveReplicated flush');
     });
   }
@@ -165,11 +166,11 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      b.put(K.hist(oldId, old.extracted_at), signedOld);
-      b.put(K.frag(oldId), signedOld);
-      b.put(K.frag(newFragment.id), newFragment);
-      b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
-      b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
+      await b.put(K.hist(oldId, old.extracted_at), signedOld);
+      await b.put(K.frag(oldId), signedOld);
+      await b.put(K.frag(newFragment.id), newFragment);
+      await b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
+      await b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
       await this.withTimeout(b.flush(), 8_000, 'supersede flush');
       return newFragment.id;
     });
@@ -251,9 +252,14 @@ export class KnowledgeStore implements IKnowledgeGraph {
    */
   async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string): Promise<void> {
     await this.ready();
-    const remoteSession = this.store.session();
-    const remoteCore = remoteSession.get({ key: remoteCoreKey });
+    // The core was already opened and download()-enabled in api_server.ts before
+    // emitting peer-core. Getting it again is a no-op (Corestore caches by key).
+    const remoteCore = (this.store as any).get({ key: remoteCoreKey });
     await remoteCore.ready();
+    // Ensure download is enabled even if called independently (e.g. tests).
+    remoteCore.download({ start: 0, end: -1 });
+    console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
+
     const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
     await remoteBee.ready();
 

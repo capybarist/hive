@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import Hyperswarm from 'hyperswarm';
-import Protomux from 'protomux';
 import c from 'compact-encoding';
 import type Corestore from 'corestore';
 
@@ -19,7 +18,7 @@ export class HiveP2PNode extends EventEmitter {
 
   constructor(
     private store: Corestore,
-    private localCoreKey?: Buffer,   // public key of our local fragments Hypercore
+    private localApiUrl?: string,  // HTTP URL of this node — sent to peers for sync + core key discovery
   ) {
     super();
     this.swarm = new Hyperswarm();
@@ -34,38 +33,35 @@ export class HiveP2PNode extends EventEmitter {
     this.swarm.on('connection', (socket: any, peerInfo: any) => {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);
 
-      // ── Core-key exchange + Hypercore replication ──────────────────────────
-      // Each BEE has its own Corestore with a unique 'fragments' core key.
-      // Corestore only replicates cores that BOTH sides have open.
-      // Solution: use a Protomux channel to exchange core keys before replication,
-      // then open the peer's core locally so Corestore replication can deliver data.
-      const mux = Protomux.from(socket) || new Protomux(socket);
-      const channel = mux.createChannel({ protocol: 'hive/core-keys/v1' });
-      const keyMessage = channel.addMessage({ encoding: c.raw });
+      // ── Hypercore replication ──────────────────────────────────────────────
+      // store.replicate() creates its own Protomux internally (noiseStream.userData).
+      // We must NOT create a second Protomux on the same socket — that corrupts
+      // both protocols. All custom channels must use replStream.noiseStream.userData.
+      const replStream = (this.store as any).replicate(socket);
 
-      keyMessage.onmessage = async (theirCoreKey: Buffer) => {
-        try {
-          // Open peer's core read-only — Corestore replication will now sync it
-          const peerCore = (this.store as any).get({ key: theirCoreKey });
-          await peerCore.ready();
-          this.emit('peer-core', theirCoreKey, peerId);
-          console.log(`[p2p] Got core key from ${peerId}: ${theirCoreKey.toString('hex').slice(0, 16)}... (len=${peerCore.length})`);
-        } catch (e: any) {
-          console.log(`[p2p] Could not open peer core: ${e.message}`);
-        }
-      };
+      // ── Metadata exchange (HTTP URL only) ─────────────────────────────────
+      // After the noise handshake, add a lightweight channel on CORESTORE'S mux
+      // to exchange HTTP API URLs. Core key exchange intentionally moved to HTTP
+      // (GET /api/status) to avoid any Protomux timing conflicts with replication.
+      replStream.noiseStream.opened.then(() => {
+        const mux: any = replStream.noiseStream.userData;
+        const channel = mux.createChannel({ protocol: 'hive/meta/v1' });
+        if (!channel) return;
 
-      channel.open();
-      if (this.localCoreKey) {
-        keyMessage.send(this.localCoreKey);
-      }
+        const urlMessage = channel.addMessage({ encoding: c.string });
+        urlMessage.onmessage = (theirApiUrl: string) => {
+          if (theirApiUrl) {
+            console.log(`[p2p] Got API URL from ${peerId}: ${theirApiUrl}`);
+            this.emit('peer-api', theirApiUrl, peerId);
+          }
+        };
 
-      // Replication session over the same socket
-      const replSession = (this.store as any).session();
-      replSession.replicate(socket);
+        channel.open();
+        if (this.localApiUrl) urlMessage.send(this.localApiUrl);
+      }).catch(() => {});
 
       socket.on('close', () => {
-        replSession.close().catch(() => {});
+        replStream.destroy?.();
         this._peers.delete(peerId);
         this.emit('peer-left', peerId);
         console.log(`[p2p] Peer left: ${peerId}`);
@@ -78,7 +74,6 @@ export class HiveP2PNode extends EventEmitter {
       console.log(`[p2p] Peer connected: ${peerId} (total: ${this._peers.size})`);
     });
 
-    // Don't let flush() hang the node indefinitely
     await Promise.race([
       this.swarm.flush(),
       new Promise(r => setTimeout(r, 10_000))

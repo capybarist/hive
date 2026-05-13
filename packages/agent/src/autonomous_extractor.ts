@@ -11,34 +11,39 @@ const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
 const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent.
 
-Your mission: given a research objective, extract and index as many relevant scientific papers as possible from arXiv into the HIVE knowledge network.
+STRICT RULE: After EACH fetch tool call, immediately call index_fragment for every relevant item found before making another fetch. Never batch multiple fetches before indexing.
 
-Tools available:
-- arxiv_search(query, limit): search arXiv for scientific papers
-- rss_fetch(url, limit): fetch an RSS/Atom feed, returns articles with title+description
-- web_fetch(url): fetch any webpage and extract text
-- crossref_validate(doi): check if a DOI is real
+Your mission: extract and index relevant knowledge fragments from diverse sources.
+
+Tools:
+- web_fetch(url): fetch a webpage (Wikipedia, articles, blogs)
+- rss_fetch(url, limit): fetch an RSS/Atom feed (max 8 articles)
+- arxiv_search(query, limit): search arXiv (scientific topics only)
 - index_fragment(id, text, source, doi, confidence, title): store ONE fragment
 - finish(summary, fragments_count): end the session
 
-Extraction strategy — maximize coverage:
-1. If the objective mentions RSS feeds or news: use rss_fetch on each URL, then index each article
-2. If the objective is about scientific papers: use arxiv_search
-3. For EVERY item found: immediately call index_fragment
-4. Then explore related sub-topics or feeds mentioned in the content
-5. Keep going until budget runs out
-6. Do NOT call chunk_text or crossref_validate unless you have extra budget — just index directly
+REQUIRED workflow — repeat until budget exhausted:
+  1. Pick ONE source and fetch it
+  2. Call index_fragment for EACH relevant item from that fetch
+  3. Then pick the NEXT source and repeat
+
+Source selection:
+- Facts/history/culture → web_fetch https://en.wikipedia.org/wiki/{Topic}
+- News/tech/events → rss_fetch (BBC: https://feeds.bbci.co.uk/news/rss.xml, ScienceDaily: https://www.sciencedaily.com/rss/all.xml, Nature: https://feeds.nature.com/nature/rss/current)
+- Academic papers → arxiv_search (only for research topics)
 
 Fragment format:
-- id: "{arxiv_id}_c0" (always c0 for abstract-level fragments)
-- text: the full title + ". " + abstract text
-- confidence: 0.95 if DOI present, 0.70 if arXiv-only
+- id: MUST match source type:
+  - Wikipedia → "wiki_{page_slug}"  e.g. "wiki_quantum_mechanics"
+  - RSS/news  → "rss_{outlet}_{title_slug}"  e.g. "rss_bbc_new_particle_found"
+  - arXiv     → "{arxiv_id}_c0"  e.g. "2405.12345v1_c0"  (ONLY for real arXiv papers)
+  - Other web → "web_{domain}_{slug}"
+- text: title + ". " + description/abstract (keep concise)
+- source: the actual URL or "arXiv:{id}" for arXiv papers
+- confidence: 0.9 Wikipedia, 0.85 major news, 0.7 arXiv abstract, 0.6 other
+- doi: null unless the fragment has a real DOI starting with "10." — never pass the string "null"
 
-Domain focus: ONLY index papers directly about the stated objective.
-Reject papers that merely mention the topic in passing.
-If you index something off-topic, you are wasting the budget.
-
-Maximize: papers indexed per token spent. Call finish() when budget is near exhaustion.`;
+Call finish() when budget is near exhaustion or after 3-4 sources.`;
 
 export type { BudgetConfig } from './budget_controller.js';
 
@@ -54,6 +59,7 @@ export async function runAutonomousExtraction(
   existingStore?: KnowledgeStore,
   embedderUrlOverride?: string,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
+  onLLMHealth?: (ok: boolean) => void,
 ): Promise<ExtractionResult> {
   const provider = createLLMProvider();
 
@@ -75,38 +81,78 @@ export async function runAutonomousExtraction(
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
-  // Reset per-session dedup so a new extraction cycle can re-index previously seen titles
+  // Reset per-session title dedup (prevents same article from two sources in one cycle)
   resetSeenTitles();
 
-  const onFragment = async (frag: { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string }) => {
-    // Save to Hypercore (source of truth + P2P replication via watchFragments)
-    try {
-      await store.save({
-        id: frag.id, text: frag.text, source: frag.source,
-        doi: frag.doi, confidence: frag.confidence, title: frag.title,
-        extracted_at: new Date().toISOString(), node_id: store.nodeId,
-      });
-    } catch (e: any) {
-      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
-    }
-    // Extract arxiv_id from source string (e.g. "arXiv:2605.05576v1" → "2605.05576v1")
+  // TTL by source type — how long before stale content should be superseded
+  const getFragmentTTL = (id: string): number => {
+    const h = 3_600_000;
+    if (id.startsWith('wiki_'))  return 7  * 24 * h;  // Wikipedia: stable, 7 days
+    if (id.startsWith('rss_'))   return 24 * h;         // News/RSS: 24 hours
+    if (id.match(/^\d{4}\.\d/)) return 30 * 24 * h;    // arXiv: immutable, 30 days
+    return 3 * 24 * h;                                   // Other web: 3 days
+  };
+
+  const indexInEmbedder = (id: string, text: string, frag: FragInput) => {
     const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1] ?? null;
-    // Direct HNSW write for immediate local search availability.
-    // watchFragments() handles P2P-replicated fragments and startup replay.
     fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: frag.id, text: frag.text,
+        id, text,
         metadata: {
           source: frag.source, doi: frag.doi ?? null, doi_valid: frag.doi !== null,
           confidence: frag.confidence, title: frag.title ?? null, node_id: store.nodeId,
-          arxiv_id: arxivId,
-          extracted_at: new Date().toISOString(),
+          arxiv_id: arxivId, extracted_at: new Date().toISOString(),
         },
       }),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => {});
+  };
+
+  type FragInput = { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string };
+
+  const onFragment = async (frag: FragInput) => {
+    const input: Parameters<typeof store.save>[0] = {
+      id: frag.id, text: frag.text, source: frag.source,
+      doi: frag.doi, confidence: frag.confidence, title: frag.title,
+      extracted_at: new Date().toISOString(), node_id: store.nodeId,
+    };
+
+    // ── Cross-cycle dedup + TTL ──────────────────────────────────────────────
+    // Hypercore is the source of truth — check it before spending LLM budget.
+    const existing = await store.get(frag.id).catch(() => null);
+    if (existing) {
+      const ageMs = Date.now() - new Date(existing.extracted_at).getTime();
+      const ttlMs = getFragmentTTL(frag.id);
+
+      if (ageMs < ttlMs) {
+        // Fresh content — skip entirely, save tokens
+        console.log(`  [skip] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old, TTL ${ttlMs / 3_600_000}h)`);
+        return;
+      }
+
+      // Stale content — supersede in Hypercore and update embedder
+      console.log(`  [supersede] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old)`);
+      try {
+        const newId = await store.supersede(frag.id, input);
+        indexInEmbedder(newId, frag.text, frag);
+        budget.recordFragments(1);
+        fragmentsIndexed++;
+        onIndexed?.({ id: newId, title: frag.title, source: frag.source });
+      } catch (e: any) {
+        console.warn(`[store] Supersede failed for ${frag.id}: ${e.message}`);
+      }
+      return;
+    }
+
+    // ── New fragment ─────────────────────────────────────────────────────────
+    try {
+      await store.save(input);
+    } catch (e: any) {
+      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
+    }
+    indexInEmbedder(frag.id, frag.text, frag);
     budget.recordFragments(1);
     fragmentsIndexed++;
     console.log(`  [+] Indexed: ${frag.id} | ${frag.source} | conf:${frag.confidence}`);
@@ -136,8 +182,11 @@ export async function runAutonomousExtraction(
     let response;
     try {
       response = await provider.generateWithTools(messages, SYSTEM_PROMPT, TOOL_DECLARATIONS);
+      onLLMHealth?.(true);
     } catch (e: any) {
       console.error(`[llm] Error: ${e.message}`);
+      const isAuthError = /401|403|invalid.api.key|invalid_api_key/i.test(e.message);
+      onLLMHealth?.(isAuthError ? false : true);
       break;
     }
     budget.recordTokens(response.tokensUsed);

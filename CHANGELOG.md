@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.0] — 2026-05-13 — *Native P2P replication + stability*
+
+### Fixed — Critical
+- **Hypercore writes were silently failing**: `batch.put()` in Hyperbee v2 is async but was never awaited in `save()`, `saveReplicated()`, and `supersede()`. Every BEE had fragments in HNSW but Hypercore was permanently empty (only the header block). This was the root cause of all P2P replication failures since v0.1. Fixed with `await b.put()` throughout KnowledgeStore.
+- **P2P listeners missed early peers**: `peer-api` and `peer-core` event listeners were registered after `p2pNode.start()`. Hyperswarm peers that connected during `start()`'s flush window emitted events before any listener was registered. Moved all listeners to before `start()`.
+- **Env file corruption**: `cat .env >> tmp_env && cat bee.env >> tmp_env` corrupted `LLM_API_KEY` when `.env` lacked a trailing newline — the first line of the bee config was appended directly to the key value. Fixed with `{ cat .env; echo; } >> tmp_env` in `start.sh` and `aggregator.sh`.
+- **`node --env-file` inheritance**: Shell-inherited env vars override `--env-file`. Fixed with `unset LLM_API_KEY LLM_PROVIDER LLM_MODEL` before launching node.
+- **`/api/config` writing to wrong `.env`**: Path had one `../` too many — was writing to `codespaces-blank/.env` instead of `hive/.env`. Fixed path depth.
+- **`QdrantClient.search()` removed in v1.12+**: Updated `qdrant_index.py` to use `client.query_points()` and `result.points`.
+
+### Added
+- **Groq LLM provider**: `LLM_PROVIDER=groq` with `llama-3.3-70b-versatile` default (128K context). Free tier: 100K tokens/day. Add to `hive/.env` or set via UI modal.
+- **Aggregator node** (`bash aggregator.sh`): dedicated node that connects to all BEEs, indexes all their fragments, and stores them in Qdrant for scalable search. No extraction — read-only from the network's perspective.
+- **Qdrant auto-start**: `aggregator.sh` starts Qdrant via Docker automatically if not running.
+- **Decentralized peer HTTP URL discovery**: when two nodes connect via Hyperswarm, they exchange HTTP API URLs through the existing Protomux channel (`hive/meta/v1`, msg[0]). No hardcoded addresses — any node discovers all peers dynamically.
+- **Native Hypercore replication** (enabled by the `await b.put()` fix): core key fetched via `GET /api/status` after peer URL is known. `store.get({key}) + core.download({start:0,end:-1})` triggers Corestore's `streamTracker.attachAll()`. All 3 phases of `test_replication.ts` pass.
+- **HTTP sync fallback**: `SyncManager` enabled for all nodes including aggregator. Kicks in immediately on connect while native replication warms up.
+- **Cross-cycle dedup + TTL**: `onFragment` checks Hypercore before saving. Skips fresh content (within TTL), supersedes stale content. TTL by source: wiki 7d, rss 24h, arXiv 30d, web 3d.
+- **`supersede()` wired**: extractor calls `store.supersede()` for stale content; also fixed missing `await b.put()` in supersede batch.
+- **LLM health tracking**: `llm_ok` field in `/api/status` — `true`/`false`/`null` based on startup validation and extraction cycle results. UI shows green/yellow/red accordingly.
+- **LLM config modal**: sidebar button shows current provider and connectivity status. Click to open modal and reconfigure provider, key, and model override.
+- **`coreKey` in `/api/status`**: exposes the node's Hypercore public key for peer-to-peer core key exchange without a dedicated channel.
+- **Fragment quality fixes**: `doi` sanitized (string `"null"` → actual `null`, only real DOIs starting with `10.`); source-specific ID prefixes (`wiki_*`, `rss_*`, `web_*`, `{arxiv_id}_c0`).
+- **Multi-source extraction prompt**: Wikipedia first for factual topics, RSS for news, arXiv only for academic papers. Enforces fetch-one→index pattern to prevent token waste.
+
+### Changed
+- `p2p_node.ts`: Protomux channel now only carries HTTP URL (msg[0]); core key exchanged via HTTP. Eliminates timing conflict between Corestore's internal Protomux and our custom channel.
+- `aggregator.sh`: Qdrant starts automatically; `HIVE_PEER` defaults removed — peer discovery is fully decentralized via Hyperswarm.
+- `bees/bee-3.env`: extraction interval reduced from 30min to 5min for dev consistency.
+- Gemini default model updated to `gemini-2.5-flash-lite` (recommended: unlimited RPD).
+
+### Upgrade notes
+Run `bash stop.sh --force && bash start.sh --clean` — existing Hypercore data is empty (the `await b.put()` bug), so a clean start is required.
+
+---
+
 ## [0.2.2] — 2026-05-11
 
 ### Fixed
@@ -21,82 +57,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **System prompt**: Updated to request markdown links for citations and thorough detailed answers.
 - **CLAUDE.md**: Clarified that `sync_manager.ts` is an active HTTP fallback for UDP-blocked environments (Codespaces), not deprecated.
-- **v0.1 Status table**: Renamed to v0.2 Status; documented current module versions and v0.3 roadmap.
-
-### Known Issues Updated
-- Hyperswarm DHT blockage now documented as Codespaces-specific (production VMs with open UDP work correctly).
-- Added: replication factor enforcement deferred to v0.3.
 
 ---
 
 ## [0.2.1] — 2026-05-07
 
 ### Added
-- **Conversational chat**: conversation history sent to Gemini on each query.
-  Follow-up questions ("tell me more", "what about X?") now work correctly.
+- **Conversational chat**: conversation history sent to LLM on each query. Follow-up questions now work correctly.
 - **"New chat" button**: clears history and starts a fresh conversation.
-- **Source chips**: only relevant fragments shown as source chips (not all top-k).
-- **Docker support**: `Dockerfile` and `.dockerignore` for containerised deployment.
-- **npx support**: `npx hive-network` installs and runs a BEE automatically.
-- **Topic tree (95 topics)**: autonomous BEEs assign themselves uncovered topics
-  from a 9-domain knowledge taxonomy without manual configuration.
-- **Claim registry**: P2P coordination of topic coverage. BEEs scan peers before
-  claiming topics to avoid overlap.
-- **`/api/state`**: debug endpoint showing full BEE state (claims, objective, peers).
-- **`/api/claims`**: exposes active topic claims for cross-BEE coordination.
-- **`bash start.sh --clean`**: explicit flag to wipe BEE data (default: preserve).
-- **Cycle cap**: max 5 topics per extraction cycle (prevents 30min stuck cycles).
-- **Extraction `try/finally`**: spinner always resets, never stuck on "Extracting".
-
-### Changed
-- **Relevance threshold**: top-1 score ≥ 0.35 OR keyword-in-title match triggers
-  "In HIVE" mode. Filters noise from small homogeneous HNSW indexes.
-- **Stop-word filtering**: Spanish/English stop words excluded from keyword match
-  (queries like "que sabe de GEMA" → meaningful=["gema"]).
-- **`/api/fragments`**: reads from HNSW instead of Hypercore — fragments always
-  available for sync regardless of Hypercore write failures.
-- **Sync always updates HNSW first**: `addToHNSW()` runs before `saveReplicated()`.
-  Hypercore write failure no longer blocks knowledge propagation.
-- **System prompt**: removed "be concise", added "thorough detailed answers"
-  and "maintain conversational continuity".
-- **BEE naming**: generic `bee-1`, `bee-2`, `bee-3` (was descriptive names).
-- **Data directories**: `data/bee-N/` unified structure (was `data/` + `data_b/`).
+- **Source chips**: only relevant fragments shown as source chips.
+- **Topic tree (95 topics)**: autonomous BEEs assign themselves uncovered topics from a 9-domain knowledge taxonomy without manual configuration.
+- **Claim registry**: P2P coordination of topic coverage.
+- **`bash start.sh --clean`**: wipes BEE data and restarts.
+- **Cycle cap**: max 5 topics per extraction cycle.
 
 ### Fixed
-- `SESSION_CLOSED` crash when Hyperswarm peers disconnect → removed
-  `store.replicate(socket)` from P2P node (HTTP sync used instead).
-- Duplicate fragment indexing: same article from RSS + direct URL indexed once
-  (session-scoped title deduplication in tools_registry).
-- `extracted_at` missing from HNSW metadata causing sync crashes.
-- Race condition on startup: BEEs now wait for peers to register topic claims
-  before starting their own discovery (prevents duplicate topic coverage).
-- `Autobase is closing` concurrent write error → **removed Autobase entirely**,
-  replaced with direct `Hypercore + Hyperbee` (single-writer, stable).
-
-### Known Issues
-- **Hypercore writes**: SESSION_CLOSED errors persist for some writes. Fragments
-  are always indexed to HNSW (search works). Hypercore signature persistence
-  is unreliable. Fix planned for v0.3.
-- **NAT traversal**: HTTP sync requires publicly accessible port. Nodes behind
-  NAT (home routers) need a tunnel (ngrok, Cloudflare) or VPS. Native Hypercore
-  replication with UDP hole-punching is the correct fix (v0.3).
-- **No migration scripts**: breaking data format changes require `--clean`.
+- `SESSION_CLOSED` crash when Hyperswarm peers disconnect → removed `store.replicate(socket)` from P2P node (HTTP sync used instead).
+- Duplicate fragment indexing: same article from RSS + direct URL indexed once.
+- Race condition on startup: BEEs now wait for peers to register topic claims.
+- `Autobase is closing` concurrent write error → **removed Autobase entirely**, replaced with direct `Hypercore + Hyperbee` (single-writer, stable).
 
 ---
 
 ## [0.2.0] — 2026-05-05
 
 ### Added
-- **Autonomous extractor (Module 7)**: Gemini function calling agent that
-  decides what to search, which sources to use, and what to index — no
-  manual topic lists.
+- **Autonomous extractor (Module 7)**: LLM function calling agent that decides what to search, which sources to use, and what to index.
 - **`rss_fetch` tool**: RSS/Atom feed parsing for news and blog sources.
 - **Budget controller**: per-cycle limits on tokens, API calls, fragments, time.
 - **`BUSL-1.1` license and MANIFESTO.md**: public project launch preparation.
 
 ### Changed
-- **Autobase → Hypercore direct** (v0.2.0): removed Autobase multi-writer layer.
-  Each BEE uses its own single-writer Hypercore + Hyperbee. More stable.
+- **Autobase → Hypercore direct**: removed Autobase multi-writer layer. Each BEE uses its own single-writer Hypercore + Hyperbee. More stable.
 
 ---
 
@@ -107,8 +99,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Module 2**: reactive extractor — arXiv API + CrossRef DOI validation + chunking.
 - **Module 3**: `KnowledgeStore` on Hypercore + Hyperbee + Autobase.
 - **Module 4**: P2P network — Hyperswarm peer discovery + HTTP sync between BEEs.
-- **Module 5**: Fastify vector query API with `/api/query`, `/api/fragments`, `/api/status`.
-- **Module 6**: Web UI with Gemini synthesis, fragment provenance badges, BEE activity feed.
+- **Module 5**: Fastify vector query API.
+- **Module 6**: Web UI with LLM synthesis, fragment provenance badges, BEE activity feed.
 - **ed25519 identity**: per-BEE cryptographic identity, signed fragments.
 - **Append-only supersedes**: knowledge corrections modeled as linked events.
 - **Multi-BEE dev setup**: `bees/*.env` + `start.sh` for local multi-node testing.
@@ -117,9 +109,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Upgrade notes
 
-### 0.1.x → 0.2.x
-Data format changed (Autobase removed). Run `bash start.sh --clean` to wipe
-and re-extract. BEE identities are preserved across `--clean`.
+### 0.3.x / 0.2.x → 0.4.x
+Hypercore data from previous versions is empty (the `await b.put()` bug was present since v0.1). Run `bash start.sh --clean` to regenerate. BEE identities are preserved.
 
-### Future: 0.2.x → 0.3.x
-Will restore native Hypercore replication (NAT traversal). Migration guide TBD.
+### 0.1.x → 0.2.x
+Autobase removed. Run `bash start.sh --clean`.
