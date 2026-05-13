@@ -9,7 +9,7 @@
 #   BEE_TOPIC_DOMAIN=health bash hive.sh # soft topic preference
 #
 # Required env:
-#   LLM_PROVIDER=gemini|claude|openai   (default: gemini)
+#   LLM_PROVIDER=gemini|claude|openai|groq   (default: gemini)
 #   LLM_API_KEY=your_api_key_here
 #
 # Optional env:
@@ -38,8 +38,8 @@ alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 # ── Validate ──────────────────────────────────────────────────────────────────
 LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
 case "$LLM_PROVIDER" in
-  gemini|claude|openai) ;;
-  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai" ;;
+  gemini|claude|openai|groq) ;;
+  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq" ;;
 esac
 [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required. Set it in your environment or in a .env file."
 
