@@ -1,14 +1,32 @@
 # HIVE — Full VPS stack
-# 2 BEEs + Aggregator + Qdrant
+# 2 BEEs + Aggregator + Qdrant + Caddy (HTTPS)
 #
 # Usage:
-#   cp .env.example .env && nano .env   # set your LLM key
+#   cp .env.example .env && nano .env   # set LLM_API_KEY and DOMAIN
 #   docker compose up -d
 #
-# Public endpoint: http://your-server:8090  (aggregator — point your domain here)
-# BEEs run internally and sync with the aggregator automatically.
+# Public endpoint: https://your-domain  (Caddy handles HTTPS automatically)
+# Set DOMAIN=hive.yourdomain.com in .env before starting.
 
 services:
+
+  # ── HTTPS reverse proxy (auto-TLS via Let's Encrypt) ─────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: hive-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - aggregator
 
   # ── Vector database (aggregator backend) ─────────────────────────────────────
   qdrant:
@@ -19,11 +37,6 @@ services:
       - qdrant-data:/qdrant/storage
     expose:
       - "6333"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── BEE 1 — seed node (no peer) ─────────────────────────────────────────────
   bee-1:
@@ -43,11 +56,6 @@ services:
       - "8080"
     volumes:
       - bee1-data:/hive/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/status"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
   # ── BEE 2 — peers with BEE 1 ────────────────────────────────────────────────
   bee-2:
@@ -70,8 +78,7 @@ services:
     volumes:
       - bee2-data:/hive/data
     depends_on:
-      bee-1:
-        condition: service_started
+      - bee-1
 
   # ── Aggregator — indexes all BEE fragments into Qdrant ───────────────────────
   aggregator:
@@ -89,18 +96,18 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDER_BACKEND=qdrant
       - HIVE_PEER=http://bee-1:8080
-    ports:
-      - "${AGGREGATOR_PORT:-8090}:8090"
+    expose:
+      - "8090"
     volumes:
       - aggregator-data:/hive/data
     depends_on:
-      qdrant:
-        condition: service_started
-      bee-1:
-        condition: service_started
+      - qdrant
+      - bee-1
 
 volumes:
   qdrant-data:
   bee1-data:
   bee2-data:
   aggregator-data:
+  caddy-data:
+  caddy-config:
