@@ -87,17 +87,26 @@ Decentralized systems are only as good as their trust model. HIVE's approach:
 HIVE v0.5 is a working system — all core modules implemented and running, with native P2P replication operational. See the [README](./README.md) for the full status breakdown.
 
 **What works today:**
-- Autonomous BEEs extracting knowledge from Wikipedia, arXiv, RSS feeds, and the open web
+- Autonomous BEEs extracting knowledge from Wikipedia (full article sections), arXiv, RSS feeds, and the open web
 - Native Hypercore P2P replication between BEEs
 - Aggregator node indexing the full network in Qdrant
-- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI, **Ollama local**)
+- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI, **Ollama local — no API key**)
 - Web UI (light theme) for human queries with source attribution
 - Vector API for machine queries
 - Fully local operation with Ollama — no API keys, no cloud dependency
+- Zero-config Docker deployment: `docker compose up -d` starts everything
 
-**What's next:**
-- v0.6: Signature verification on receive, replication factor ≥ 3, multi-agent consensus
-- v0.7: Semantic routing, QVAC integration, WDK payment layer
+**What's next — v0.6 (Trust & correctness):**
+- **LLM-free verbatim extraction**: tools index source content directly without LLM writing the text — eliminates hallucination in the knowledge base, 10x throughput improvement
+- Signature verification on receive (ed25519 validated before indexing peer fragments)
+- Replication factor ≥ 3 (each fragment confirmed on at least 3 BEEs)
+- Multi-agent consensus (BEEs vote on fragment quality before wide propagation)
+
+**What's next — v0.7 (Scale):**
+- BulkImporter: direct Wikipedia XML dump ingestion — hours, not years
+- Semantic routing (queries route to relevant BEEs only)
+- QVAC integration for on-device inference
+- WDK payment layer (extractors earn USD₮ per query served)
 
 ## How to run a BEE
 
