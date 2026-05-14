@@ -7,12 +7,16 @@
 #
 # Without DOMAIN → HTTP on http://your-vps-ip   (works immediately with bare IP)
 # With DOMAIN    → HTTPS via Let's Encrypt       (needs DNS pointing to this VPS)
+#
+# Direct access (non-standard ports, no HTTPS redirect):
+#   http://your-ip:8080  — BEE 1
+#   http://your-ip:8081  — BEE 2
+#   http://your-ip:8090  — Aggregator API
+#   http://your-ip:6333/dashboard  — Qdrant dashboard
 
 services:
 
   # ── Reverse proxy ─────────────────────────────────────────────────────────────
-  # HTTP mode (no DOMAIN): plain HTTP on port 80, works with bare IP.
-  # HTTPS mode (DOMAIN set): auto-TLS via Let's Encrypt, needs DNS + open 443.
   caddy:
     image: caddy:2-alpine
     container_name: hive-caddy
@@ -42,8 +46,8 @@ services:
     restart: unless-stopped
     volumes:
       - qdrant-data:/qdrant/storage
-    expose:
-      - "6333"
+    ports:
+      - "6333:6333"
 
   # ── BEE 1 — seed node (no peer) ─────────────────────────────────────────────
   bee-1:
@@ -59,8 +63,8 @@ services:
       - HIVE_DATA_DIR=/hive/data
       - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-300000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-20}
-    expose:
-      - "8080"
+    ports:
+      - "8080:8080"
     volumes:
       - bee1-data:/hive/data
 
@@ -80,8 +84,8 @@ services:
       - BEE_TOPIC_DOMAIN=${BEE2_TOPIC_DOMAIN:-current_events}
       - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-300000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-20}
-    expose:
-      - "8081"
+    ports:
+      - "8081:8081"
     volumes:
       - bee2-data:/hive/data
     depends_on:
@@ -103,8 +107,8 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDER_BACKEND=qdrant
       - HIVE_PEER=http://bee-1:8080
-    expose:
-      - "8090"
+    ports:
+      - "8090:8090"
     volumes:
       - aggregator-data:/hive/data
     depends_on:
