@@ -9,7 +9,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
 const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent.
+const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent. You run fully autonomously — NEVER ask for user input, NEVER ask for clarification, NEVER wait for a response. If a tool fails, immediately try the next tool without commenting.
 
 STRICT RULE: After EACH fetch tool call, immediately call index_fragment for every relevant section/item found before making another fetch. Never batch multiple fetches before indexing.
 
@@ -24,20 +24,16 @@ Tools:
 - finish(summary, fragments_count): end the session
 
 REQUIRED workflow — repeat until budget exhausted:
-  1. Pick ONE source and fetch it
-  2. For wikipedia_fetch: call index_fragment for EACH section returned (skip only "References", "See also", "External links")
-  3. For other sources: call index_fragment for each relevant item
-  4. Then pick the NEXT source and repeat
+  1. Start with wikipedia_fetch for the main topic (most reliable source)
+  2. Call index_fragment for EACH section returned (skip only "References", "See also", "External links")
+  3. Then try arxiv_search for academic content
+  4. If a tool fails, silently move to the next tool — do NOT comment on the failure
 
-Source selection:
-- Facts/history/culture → wikipedia_fetch(title) — covers ALL sections of the article
-- News/tech/events → rss_fetch, then web_fetch(link) on important articles for full content
-- Academic papers → arxiv_search (returns full abstracts — index them as-is)
-- Specific URLs → web_fetch(url)
-
-RSS workflow: after rss_fetch, for each article either:
-  a) Index directly if content field is long enough (>200 chars)
-  b) Call web_fetch(link) to get the full article, then index
+Source priority:
+  1. wikipedia_fetch — always start here, covers all sections
+  2. arxiv_search — for scientific/academic topics
+  3. rss_fetch — only if you have a known RSS feed URL (ends in .xml or /rss or /feed)
+  4. web_fetch — for specific article URLs from rss results
 
 Fragment format:
 - id: MUST match source type:
