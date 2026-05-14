@@ -131,3 +131,6 @@ else
   err "BEE failed to start. Check /tmp/hive_api.log"
 fi
 echo ""
+
+# Keep the container alive and stream logs to stdout.
+exec tail -f /tmp/hive_api.log /tmp/hive_embedder.log

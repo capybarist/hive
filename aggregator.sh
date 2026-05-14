@@ -173,3 +173,6 @@ if echo "$STATUS" | grep -q '"ok"'; then
 else
   err "Aggregator failed to start. Check /tmp/hive_aggregator.log"
 fi
+
+# Keep the container alive and stream logs to stdout.
+exec tail -f /tmp/hive_aggregator.log /tmp/hive_embedder.log
