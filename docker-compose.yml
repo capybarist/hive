@@ -58,17 +58,14 @@ services:
     restart: unless-stopped
     environment:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
-    command: >
-      sh -c "ollama serve &
-             until ollama list > /dev/null 2>&1; do sleep 2; done &&
-             ollama pull $$OLLAMA_MODEL || true &&
-             wait"
+    entrypoint: ["/bin/sh", "-c"]
+    command: "/bin/ollama serve & until /bin/ollama list > /dev/null 2>&1; do sleep 2; done && /bin/ollama pull $$OLLAMA_MODEL || true && wait"
     volumes:
       - ollama-data:/root/.ollama
     expose:
       - "11434"
     healthcheck:
-      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/bin/ollama list > /dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 15
