@@ -35,8 +35,19 @@ export const TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'wikipedia_fetch',
+    description: 'Fetch a Wikipedia article split into sections. Returns all sections with titles and content — index each section as a separate fragment. PREFERRED over web_fetch for any Wikipedia page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Wikipedia article title, e.g. "Astrophysics" or "Black hole"' },
+      },
+      required: ['title'],
+    },
+  },
+  {
     name: 'web_fetch',
-    description: 'Fetch the text content of a URL (HTML pages, abstracts, blog posts).',
+    description: 'Fetch the text content of a non-Wikipedia URL (HTML pages, abstracts, blog posts). Do NOT use for Wikipedia — use wikipedia_fetch instead.',
     parameters: {
       type: 'object',
       properties: {
@@ -129,6 +140,49 @@ export async function executeTool(
       return { ok: true, data: { doi: args.doi, valid } };
     }
 
+    case 'wikipedia_fetch': {
+      try {
+        const title = (args.title as string).trim();
+        const encoded = encodeURIComponent(title.replace(/ /g, '_'));
+        const res = await fetch(
+          `https://en.wikipedia.org/api/rest_v1/page/mobile-sections/${encoded}`,
+          {
+            headers: { 'User-Agent': 'HIVE/0.1 (research crawler; mailto:capy@capybaralabs.tech)' },
+            signal: AbortSignal.timeout(15_000),
+          },
+        );
+        if (!res.ok) return { ok: false, error: `Wikipedia API: HTTP ${res.status} for "${title}"` };
+        const data = await res.json() as any;
+
+        const clean = (html: string) =>
+          html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const SKIP_SECTIONS = new Set(['references', 'see also', 'notes', 'external links', 'further reading', 'bibliography', 'footnotes']);
+
+        const sections: { title: string; slug: string; content: string }[] = [];
+
+        // Lead / introduction
+        const leadText = clean(data.lead?.sections?.[0]?.text ?? '').slice(0, 1200);
+        if (leadText.length > 80) {
+          sections.push({ title: 'Introduction', slug: 'intro', content: leadText });
+        }
+
+        // Body sections
+        for (const s of (data.remaining?.sections ?? [])) {
+          const sTitle = clean(s.line ?? '');
+          if (!sTitle || SKIP_SECTIONS.has(sTitle.toLowerCase())) continue;
+          const content = clean(s.text ?? '').slice(0, 1000);
+          if (content.length < 100) continue;
+          const slug = sTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+          sections.push({ title: sTitle, slug, content });
+        }
+
+        return { ok: true, data: { article: title, section_count: sections.length, sections } };
+      } catch (e: any) {
+        return { ok: false, error: e.message };
+      }
+    }
+
     case 'web_fetch': {
       try {
         const res = await fetch(args.url as string, {
@@ -137,8 +191,7 @@ export async function executeTool(
         });
         if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
         const html = await res.text();
-        // Strip HTML tags, collapse whitespace
-        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
         return { ok: true, data: { url: args.url, text } };
       } catch (e: any) {
         return { ok: false, error: e.message };

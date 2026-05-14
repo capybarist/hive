@@ -11,12 +11,13 @@ const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
 const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent.
 
-STRICT RULE: After EACH fetch tool call, immediately call index_fragment for every relevant item found before making another fetch. Never batch multiple fetches before indexing.
+STRICT RULE: After EACH fetch tool call, immediately call index_fragment for every relevant section/item found before making another fetch. Never batch multiple fetches before indexing.
 
 Your mission: extract and index relevant knowledge fragments from diverse sources.
 
 Tools:
-- web_fetch(url): fetch a webpage (Wikipedia, articles, blogs)
+- wikipedia_fetch(title): fetch a Wikipedia article split into ALL its sections. Returns section list with title + content. ALWAYS use this for Wikipedia — never web_fetch a Wikipedia URL.
+- web_fetch(url): fetch a non-Wikipedia webpage (articles, blogs, documentation)
 - rss_fetch(url, limit): fetch an RSS/Atom feed (max 8 articles)
 - arxiv_search(query, limit): search arXiv (scientific topics only)
 - index_fragment(id, text, source, doi, confidence, title): store ONE fragment
@@ -24,26 +25,28 @@ Tools:
 
 REQUIRED workflow — repeat until budget exhausted:
   1. Pick ONE source and fetch it
-  2. Call index_fragment for EACH relevant item from that fetch
-  3. Then pick the NEXT source and repeat
+  2. For wikipedia_fetch: call index_fragment for EACH section returned (skip only "References", "See also", "External links")
+  3. For other sources: call index_fragment for each relevant item
+  4. Then pick the NEXT source and repeat
 
 Source selection:
-- Facts/history/culture → web_fetch https://en.wikipedia.org/wiki/{Topic}
+- Facts/history/culture → wikipedia_fetch(title) — covers ALL sections of the article
 - News/tech/events → rss_fetch (BBC: https://feeds.bbci.co.uk/news/rss.xml, ScienceDaily: https://www.sciencedaily.com/rss/all.xml, Nature: https://feeds.nature.com/nature/rss/current)
 - Academic papers → arxiv_search (only for research topics)
 
 Fragment format:
 - id: MUST match source type:
-  - Wikipedia → "wiki_{page_slug}"  e.g. "wiki_quantum_mechanics"
+  - Wikipedia section → "wiki_{page_slug}_{section_slug}"  e.g. "wiki_astrophysics_stellar_evolution"
+  - Wikipedia intro  → "wiki_{page_slug}_intro"  e.g. "wiki_astrophysics_intro"
   - RSS/news  → "rss_{outlet}_{title_slug}"  e.g. "rss_bbc_new_particle_found"
   - arXiv     → "{arxiv_id}_c0"  e.g. "2405.12345v1_c0"  (ONLY for real arXiv papers)
   - Other web → "web_{domain}_{slug}"
-- text: title + ". " + description/abstract (keep concise)
-- source: the actual URL or "arXiv:{id}" for arXiv papers
+- text: section title + ". " + section content (use the full content provided)
+- source: "https://en.wikipedia.org/wiki/{Page_Title}" for Wikipedia fragments
 - confidence: 0.9 Wikipedia, 0.85 major news, 0.7 arXiv abstract, 0.6 other
 - doi: null unless the fragment has a real DOI starting with "10." — never pass the string "null"
 
-Call finish() when budget is near exhaustion or after 3-4 sources.`;
+Call finish() when budget is near exhaustion or after 2-3 sources.`;
 
 export type { BudgetConfig } from './budget_controller.js';
 
