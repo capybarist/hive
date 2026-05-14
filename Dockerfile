@@ -19,6 +19,10 @@ RUN pip3 install --no-cache-dir -r packages/embeddings/requirements.txt --break-
 # Copy source
 COPY . .
 
+# Keep topic_tree.json outside the data volume so it survives the mount.
+# The code checks resolve(HIVE_DATA_DIR, '../topic_tree.json') = /hive/topic_tree.json.
+RUN cp data/topic_tree.json topic_tree.json
+
 # Runtime data lives in a volume
 VOLUME ["/hive/data"]
 
