@@ -90,6 +90,7 @@ LLM_MODEL=llama-3.3-70b-versatile   # groq default
 LLM_MODEL=gemini-2.5-flash-lite     # gemini default
 LLM_MODEL=claude-sonnet-4-6         # claude default
 LLM_MODEL=gpt-4o                    # openai default
+LLM_MODEL=qwen2.5:1.5b             # ollama default (950MB, fits 4GB VPS)
 
 # Ports
 HIVE_PORT=8080
@@ -105,9 +106,20 @@ HIVE_PEER=http://peer.example.com
 BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
 
 # Extraction tuning
-HIVE_EXTRACT_MAX_FRAGMENTS=20
-HIVE_EXTRACT_INTERVAL_MS=300000   # 5 minutes
+HIVE_EXTRACT_MAX_FRAGMENTS=9        # fragments per cycle, split across claimed topics
+HIVE_EXTRACT_INTERVAL_MS=60000      # pause between cycles (1 min = near-continuous)
+HIVE_EXTRACT_BUDGET_MINUTES=20      # total LLM time per cycle, divided by topic count
 ```
+
+**Throughput guidance:**
+
+| Provider | Fragments/day (1 BEE, 3 topics) | Notes |
+|----------|--------------------------------|-------|
+| Ollama qwen2.5:1.5b on CPU | ~630 | Free. No API key. Small model may paraphrase. |
+| Groq free tier | ~6,400 | 100K tokens/day. Recommended for quality. |
+| Gemini / OpenAI | ~10,000+ | Paid. Highest quality and speed. |
+
+> **Fragment quality note:** Small local models (≤3b) tend to paraphrase source content instead of extracting verbatim, which can introduce inaccuracies. For production use, Groq (free) or Gemini are recommended. v0.6 will fix this architecturally — tools will auto-index verbatim content without LLM involvement in the text path.
 
 ---
 
@@ -133,22 +145,27 @@ docker compose up -d
 
 ### Using Ollama (local LLM, no API key)
 
+Ollama is the **default** in the Docker Compose stack. No config needed — just start:
+
 ```bash
-# In .env:
-LLM_PROVIDER=ollama
-# (comment out or remove LLM_API_KEY)
-
-# Start with Ollama profile (Docker pulls the image automatically)
-docker compose --profile ollama up -d
-
-# Download the AI model once (~1.9GB, persists across restarts)
-docker exec hive-ollama ollama pull qwen2.5:3b
-
-# Restart BEEs to pick up the new provider
-docker compose restart bee-1 bee-2 aggregator
+docker compose up -d
 ```
 
-RAM guide: `qwen2.5:3b` ~1.9GB needs ~4GB total VPS. For tighter RAM use `qwen2.5:1.5b` (~950MB).
+The `ollama-init` container pulls `qwen2.5:1.5b` (~950MB) automatically on first start. If it fails, pull manually:
+
+```bash
+docker exec hive-ollama ollama pull qwen2.5:1.5b
+```
+
+To use a larger model (better quality, needs more RAM):
+
+```bash
+# In .env:
+OLLAMA_MODEL=qwen2.5:3b   # ~1.9GB — needs 4GB+ free RAM
+docker compose up -d --force-recreate ollama-init
+```
+
+RAM guide: `qwen2.5:1.5b` ~950MB → safe on 4GB VPS. `qwen2.5:3b` ~1.9GB → needs 6GB+ VPS.
 
 ---
 
@@ -226,24 +243,27 @@ BEE-A writes fragment → Hypercore (append-only, signed)
 | Module | Description | Status |
 |--------|-------------|--------|
 | 1 | Embeddings + local HNSW (all-MiniLM-L6-v2, 80MB CPU) | ✅ |
-| 2 | Reactive extractor (arXiv + RSS + web fetch) | ✅ |
+| 2 | Extractor: wikipedia_fetch (sections API) + arXiv + RSS + web | ✅ |
 | 3 | KnowledgeStore — Hypercore + Hyperbee, append-only, ed25519-signed | ✅ |
 | 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed in v0.4 |
 | 5 | Vector query API (Fastify) + federated search | ✅ |
-| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) | ✅ |
+| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) — light theme | ✅ |
 | 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
 | — | Aggregator node + Qdrant backend | ✅ added in v0.4 |
-| — | Ollama local LLM + light theme UI | ✅ added in v0.5 |
+| — | Ollama local LLM (no API key, runs on VPS) | ✅ added in v0.5 |
+| — | wikipedia_fetch via Wikipedia REST API (all sections, not just intro) | ✅ added in v0.5 |
 
-**Planned for v0.6:**
+**Planned for v0.6 — Trust & correctness:**
+- **LLM-free verbatim extraction**: tools auto-index content verbatim without LLM writing the text. Fixes hallucination in small models and fulfils the "no fabricated citations" guarantee. 10x throughput improvement.
 - Signature verification on receive (`watchRemoteCore` validates ed25519)
-- Replication factor enforcement (≥ 3 copies per fragment)
+- Replication factor ≥ 3 (auto-replicate until confirmed on 3 BEEs)
 - `IConsensus` — multi-agent voting on fragment quality
-- Semantic routing (query propagation to semantically relevant BEEs)
 
-**Planned for v0.7+:**
-- P2P topic coordination (without HTTP claims)
-- Token economics (extractors rewarded for verified contributions)
+**Planned for v0.7 — Scale:**
+- BulkImporter: direct Wikipedia XML dump ingestion without LLM (enables Wikipedia-scale indexing)
+- Semantic routing (query propagation to relevant BEEs only)
+- QVAC integration (`LLM_PROVIDER=qvac` for on-device inference)
+- Token economics: extractors earn USD₮ per query served (WDK)
 
 ---
 

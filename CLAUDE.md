@@ -6,35 +6,104 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 **Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Current state: v0.5 — Ollama local LLM + light theme UI
+---
 
-All 7 modules complete. Native P2P replication fixed in v0.4. Ollama provider added in v0.5.
+## Current state: v0.5 — Ollama + wikipedia_fetch + light UI
+
+All 7 modules complete. Native P2P replication fixed in v0.4. Ollama + major extraction improvements added in v0.5.
 
 | Module | Description | Status |
 |--------|-------------|--------|
 | 1 | Embeddings + HNSW (all-MiniLM-L6-v2, 80MB CPU) | ✅ |
-| 2 | Extractor: arXiv + RSS + web (Wikipedia-first prompt) | ✅ |
+| 2 | Extractor: wikipedia_fetch (sections API) + rss_fetch + arxiv_search + web_fetch | ✅ |
 | 3 | KnowledgeStore — Hypercore + Hyperbee, ed25519-signed | ✅ |
 | 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed v0.4 |
 | 5 | Vector query API (Fastify) + federated queries | ✅ |
-| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) | ✅ |
+| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) — light theme | ✅ |
 | 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
 | — | Aggregator node + Qdrant backend | ✅ added v0.4 |
-| — | Ollama local LLM provider + light theme UI | ✅ added v0.5 |
+| — | Ollama local LLM provider (no API key) | ✅ added v0.5 |
+| — | wikipedia_fetch tool using Wikipedia sections REST API | ✅ added v0.5 |
+| — | HIVE_EXTRACT_BUDGET_MINUTES — configurable per-topic time budget | ✅ added v0.5 |
 
-**NOT in spec that we have:**
-- Aggregator node (not in original spec)
-- Multi-provider LLM: Groq, Gemini, Claude, OpenAI, **Ollama (local)**
+**Added beyond original spec:**
+- Aggregator node + Qdrant backend
+- Multi-provider LLM: Groq, Gemini, Claude, OpenAI, Ollama (local)
 - TTL + supersede wired in extractor
-- Light theme UI (was dark)
+- Light theme UI
+- `wikipedia_fetch` tool with Wikipedia REST API (sections, not HTML scraping)
+- `HIVE_EXTRACT_BUDGET_MINUTES` env var
 
-**In spec but NOT yet implemented:**
-- `Autobase` multi-writer (decision: abandoned — single-writer per BEE is simpler and correct for HIVE's model)
-- `IConsensus` — multi-agent fragment quality voting (v0.6)
-- Signature verification on receive (fragments signed but not verified on receipt) — v0.5
-- Factor de replicación ≥ 3 (v0.5)
-- Semantic routing / VecDHT (v0.6)
-- Token economics (v0.7+)
+**In original spec, not yet implemented:**
+- `Autobase` multi-writer → **abandoned** (see decision below)
+- `IConsensus` multi-agent fragment quality voting → **v0.6**
+- Signature verification on receive → **v0.6**
+- Replication factor ≥ 3 → **v0.6**
+- LLM-free verbatim extraction → **v0.6** (see architectural decision below)
+- Semantic routing / VecDHT → **v0.7**
+- Token economics (WDK) → **v0.7+**
+
+---
+
+## Roadmap
+
+### v0.6 — Trust & correctness
+The Manifesto guarantees "no fabricated citations". v0.6 closes the gap between the promise and the implementation.
+
+| Item | Why | Notes |
+|------|-----|-------|
+| LLM-free verbatim extraction | Small models hallucinate fragment text — violates "no fabricated citations" | See architectural decision below |
+| Signature verification on receive | Malicious nodes can inject unsigned fragments today | `watchRemoteCore` validates ed25519 before indexing |
+| Replication factor ≥ 3 | Fragments may exist on only 1 BEE — single point of failure | Auto-replicate until ≥ 3 copies confirmed |
+| IConsensus — fragment quality voting | No validation that fragment text matches claimed source | Multiple BEEs vote; outliers rejected |
+
+### v0.7 — Scale & economics
+| Item | Why |
+|------|-----|
+| BulkImporter — Wikipedia dump | LLM-per-fragment is too slow for Wikipedia-scale (~46 years on Ollama CPU). Direct chunking of Wikipedia XML dumps, no LLM, into Hypercore. |
+| Semantic routing / VecDHT | All BEEs reply to all queries; should route to relevant nodes only |
+| QVAC integration | `LLM_PROVIDER=qvac` for on-device inference without Ollama overhead |
+| Token economics (WDK) | Extractors earn USD₮ per query served; consumers pay per query |
+| Topic tree expansion | 95 topics → 5000+ for meaningful coverage |
+
+---
+
+## Critical architectural decision: LLM-free extraction (v0.6)
+
+### The problem
+Currently the extraction agent uses an LLM to:
+1. Decide **what** to fetch (correct — this requires intelligence)
+2. **Write the text** of each fragment (wrong — small models hallucinate)
+
+With qwen2.5:1.5b, the LLM paraphrases or invents content instead of extracting verbatim. The ed25519 signature only guarantees "node X said this" — it does NOT guarantee the fragment text matches the source URL. This violates the Manifesto's "no fabricated citations" guarantee.
+
+### The fix (v0.6)
+Separate orchestration from extraction:
+
+```
+Current (v0.5):
+  LLM → web_fetch(url) → sees 8000 chars → writes fragment text → index_fragment()
+  Problem: LLM invents / paraphrases the text
+
+Target (v0.6):
+  LLM → wikipedia_fetch(title) → tool auto-indexes sections verbatim → returns "indexed N sections"
+  LLM only decides WHAT to fetch and WHEN to move to the next source
+  Fragment text = verbatim from source API, never LLM-generated
+```
+
+`wikipedia_fetch`, `rss_fetch`, and `arxiv_search` tools will call `onFragment()` internally with verbatim content, bypassing the LLM for text generation entirely. The LLM receives only a summary ("indexed 12 sections of Astrophysics") and decides next steps.
+
+Benefits: zero hallucination, 10x+ throughput (no LLM per fragment), source fidelity guaranteed.
+
+The LLM remains responsible for: topic selection, source discovery, query synthesis in `/api/query`.
+
+---
+
+## Autobase decision
+
+The original spec calls for Autobase (multi-writer linearisation). Removed in v0.2.1 — `Autobase is closing` concurrent write errors were unresolvable. The current model (each BEE owns its single-writer Hypercore, peers open it read-only) is architecturally cleaner for HIVE: each BEE is the sole authority on its own knowledge. Not planned for reinstatement.
+
+---
 
 ## How data flows
 
@@ -51,7 +120,7 @@ BEE-A extracts a fragment
 
 Before indexing any fragment:
   → store.get(id) — check Hypercore for existing fragment
-  → Fresh (within TTL): skip — save LLM tokens
+  → Fresh (within TTL): skip
   → Stale (past TTL): supersede() — marks old, indexes new
   → New: save() + embedder /add
 ```
@@ -60,91 +129,94 @@ Before indexing any fragment:
 
 **HNSW is a derived index**, always reconstructable from Hypercore history.
 
-## Autobase decision
-
-The original spec calls for Autobase (multi-writer linealisation). This was removed in v0.2.1 due to `Autobase is closing` concurrent write errors. The current model — each BEE has its own single-writer Hypercore, peers open it read-only — is actually a better fit for HIVE's architecture (each BEE is the sole authority on its own knowledge). Autobase is not planned for reinstatement.
+---
 
 ## File structure
 
 ```
 hive/
 ├── hive.sh              ← production launcher (zero-config, single BEE)
-├── start.sh             ← dev launcher (multiple BEEs from bees/*.env)
 ├── aggregator.sh        ← aggregator node launcher (starts Qdrant via Docker)
+├── start.sh             ← dev launcher (multiple BEEs from bees/*.env)
 ├── stop.sh              ← kills all processes by port
+├── docker-compose.yml   ← full VPS stack (Caddy + BEE + Aggregator + Qdrant + Ollama)
 ├── bees/                ← dev configs: bee-1.env, bee-2.env, bee-3.env
 ├── data/
 │   ├── topic_tree.json  ← 95-topic knowledge taxonomy (committed)
 │   └── bee-*/           ← runtime data (gitignored)
-├── packages/
-│   ├── core/src/
-│   │   ├── knowledge_store.ts   ← KnowledgeStore: save/get/supersede/watchFragments/watchRemoteCore
-│   │   ├── p2p_node.ts          ← Hyperswarm + Protomux URL exchange + store.replicate()
-│   │   ├── sync_manager.ts      ← HTTP sync fallback (8s interval)
-│   │   ├── claim_registry.ts    ← topic claim coordination via HTTP
-│   │   ├── topic_assignment.ts  ← assigns topic tree leaves to BEEs
-│   │   └── node_identity.ts     ← ed25519 identity per BEE
-│   ├── agent/src/
-│   │   ├── autonomous_extractor.ts ← LLM agent + dedup/TTL/supersede logic
-│   │   ├── tools_registry.ts       ← arxiv_search, rss_fetch, web_fetch, index_fragment
-│   │   └── budget_controller.ts    ← token/fragment/time limits per cycle
-│   ├── embeddings/
-│   │   ├── api_server.py        ← FastAPI :7700, HNSW + Qdrant backends
-│   │   └── qdrant_index.py      ← Qdrant client (aggregator backend)
-│   ├── api/src/
-│   │   ├── api_server.ts        ← Fastify :8080, all endpoints + extraction loop
-│   │   └── llm_client.ts        ← LLM synthesis for /api/query
-│   └── ui/
-│       └── index.html           ← vanilla JS UI, dark theme
-└── packages/core/src/
-    └── test_replication.ts      ← P2P replication tests (3 phases) — ALL PASS
+└── packages/
+    ├── core/src/
+    │   ├── knowledge_store.ts   ← KnowledgeStore: save/get/supersede/watchFragments/watchRemoteCore
+    │   ├── p2p_node.ts          ← Hyperswarm + Protomux URL exchange + store.replicate()
+    │   ├── sync_manager.ts      ← HTTP sync fallback (8s interval)
+    │   ├── claim_registry.ts    ← topic claim coordination via HTTP
+    │   ├── topic_assignment.ts  ← assigns topic tree leaves to BEEs
+    │   └── node_identity.ts     ← ed25519 identity per BEE
+    ├── agent/src/
+    │   ├── autonomous_extractor.ts ← LLM orchestration agent + dedup/TTL/supersede logic
+    │   ├── tools_registry.ts       ← wikipedia_fetch, arxiv_search, rss_fetch, web_fetch, index_fragment
+    │   ├── budget_controller.ts    ← token/fragment/time limits per cycle
+    │   └── text_chunker.ts         ← overlapping chunk splitting utility
+    ├── embeddings/
+    │   ├── api_server.py        ← FastAPI :7700, HNSW + Qdrant backends
+    │   └── qdrant_index.py      ← Qdrant client (aggregator backend)
+    ├── api/src/
+    │   ├── api_server.ts        ← Fastify :8080, all endpoints + extraction loop
+    │   └── llm_client.ts        ← LLM synthesis for /api/query
+    └── ui/
+        └── index.html           ← vanilla JS UI, light theme
 ```
+
+---
 
 ## How to run
 
 ```bash
-# Production (single BEE):
+# Docker — full stack (recommended for VPS):
+docker compose up -d
+# Model pulls automatically on first start via ollama-init container
+
+# Production (single BEE, from source):
 bash hive.sh
 
-# Dev (3 BEEs):
+# Dev (3 BEEs, from source):
 bash start.sh
 bash start.sh --clean        # wipe data and restart
 bash stop.sh --force         # kill all processes
 
-# Aggregator (starts Qdrant via Docker automatically):
+# Aggregator (from source, starts Qdrant via Docker automatically):
 bash aggregator.sh
 ```
 
-**Key environment variables:**
+---
+
+## Key environment variables
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | `gemini` · `claude` · `openai` · `groq` · `ollama` |
+| `LLM_PROVIDER` | `ollama` (Docker) / `gemini` (shell) | `gemini` · `claude` · `openai` · `groq` · `ollama` |
 | `LLM_API_KEY` | — | Required for cloud providers. Not needed for `ollama`. |
-| `LLM_MODEL` | — | Optional override (e.g. `qwen2.5:1.5b` for Ollama on low RAM) |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL. In Docker: `http://ollama:11434` |
+| `LLM_MODEL` | — | Optional override (e.g. `qwen2.5:1.5b`) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server. In Docker Compose: `http://ollama:11434` |
+| `OLLAMA_MODEL` | `qwen2.5:1.5b` | Model to pull on first start (Docker only) |
 | `HIVE_PORT` | 8080 | API server port |
 | `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
 | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
-| `BEE_PEER` | — | Bootstrap peer HTTP URL |
+| `HIVE_PEER` | — | Bootstrap peer HTTP URL |
 | `BEE_TOPIC_DOMAIN` | — | Domain hint (e.g. `current_events`, `health`) |
-| `HIVE_EXTRACT_MAX_FRAGMENTS` | 20 | Fragments per extraction cycle |
-| `HIVE_EXTRACT_INTERVAL_MS` | 300000 | Cycle interval (5 min) |
+| `HIVE_EXTRACT_MAX_FRAGMENTS` | 9 (Docker) / 10 (shell) | Max fragments per extraction cycle |
+| `HIVE_EXTRACT_INTERVAL_MS` | 60000 (Docker) / 1800000 (shell) | Pause between cycles (ms) |
+| `HIVE_EXTRACT_BUDGET_MINUTES` | 20 (Docker) / 8 (shell) | Total LLM time budget per cycle, split across topics |
 
-**LLM architecture note:** HIVE uses ONE `LLM_PROVIDER` for both extraction (autonomous agent, tool calls) and query synthesis (RAG answers). The embeddings model (all-MiniLM-L6-v2) is separate and always runs locally via Python — it was never a cloud LLM.
+**LLM architecture note:** ONE `LLM_PROVIDER` for both extraction orchestration and query synthesis. The embeddings model (all-MiniLM-L6-v2, ~80MB) always runs locally via Python — never a cloud LLM.
 
-**Ollama setup (Docker):**
-```bash
-# Start with Ollama profile
-docker compose --profile ollama up -d
+**Throughput guidance with Ollama:**
+- `qwen2.5:1.5b` on CPU: ~5-10 tokens/sec → ~630 fragments/day (1 BEE, 3 topics)
+- `qwen2.5:3b` on CPU: slower, needs 4GB+ free RAM
+- Groq free tier: ~500 tokens/sec → ~6,400 fragments/day
+- Fragment quality warning: small models (1.5b) paraphrase instead of extracting verbatim. Use Groq/Gemini for production quality. v0.6 will fix this architecturally.
 
-# Pull model once (persists in ollama-data volume)
-docker exec hive-ollama ollama pull qwen2.5:3b
-
-# In .env:
-# LLM_PROVIDER=ollama
-# OLLAMA_URL=http://ollama:11434  (already the default in docker-compose.yml)
-```
-RAM guidance: `qwen2.5:3b` ~1.9GB (recommended for 4GB VPS). Use `qwen2.5:1.5b` ~950MB for tighter RAM.
+---
 
 ## Dev BEE ports
 
@@ -155,37 +227,43 @@ RAM guidance: `qwen2.5:3b` ~1.9GB (recommended for 4GB VPS). Use `qwen2.5:1.5b` 
 | bee-3 | 8082 | 7702 | Peers with bee-1, `BEE_TOPIC_DOMAIN=current_events` |
 | aggregator | 8090 | 7790 | Read-only, Qdrant backend |
 
+---
+
 ## Key design decisions
 
 - **Hypercore as source of truth**: append-only, ed25519-signed. Data lives here regardless of sync transport.
 - **Single-writer per BEE**: each BEE owns its Hypercore. Peers open it read-only. No Autobase.
 - **HNSW/Qdrant as derived index**: always rebuildable from Hypercore. HNSW for BEEs, Qdrant for aggregator.
-- **HTTP sync as fallback**: SyncManager pulls `/api/fragments` from peers. Decentralized — HTTP URLs exchanged via Protomux. Kept while native replication stabilises.
-- **Native Hypercore replication**: core key fetched via HTTP after peer URL is known. No Protomux conflict. All test phases pass.
-- **No agent framework**: own TypeScript extractor, cleaner and more auditable than LangChain/LangGraph for this use case.
-- **Topic-centric**: LLM decides sources per topic at runtime. Wikipedia first, then RSS, then arXiv.
-- **Multi-provider LLM**: Groq (recommended), Gemini, Claude, OpenAI.
+- **HTTP sync as fallback**: SyncManager pulls `/api/fragments` from peers every 8s. Kept while native replication stabilises.
+- **Native Hypercore replication**: core key fetched via HTTP after peer URL is known. All test phases pass.
+- **No agent framework**: own TypeScript extractor — cleaner and more auditable than LangChain for this use case.
+- **Topic-centric extraction**: LLM picks sources per topic. wikipedia_fetch → rss_fetch → arxiv_search priority.
+- **LLM for orchestration only (v0.6 target)**: LLM decides what to fetch, tools do the verbatim extraction.
 
-## Known issues & roadmap
+---
+
+## Known issues
 
 | Issue | Impact | Status |
 |-------|--------|--------|
-| `await b.put()` missing in KnowledgeStore | Hypercore was always empty — P2P replication impossible | **Fixed v0.4** |
+| `await b.put()` missing in KnowledgeStore | Hypercore always empty — P2P replication impossible | **Fixed v0.4** |
 | Listeners registered after p2pNode.start() | Aggregator missed early peer events | **Fixed v0.4** |
-| Env trailing newline bug | LLM_API_KEY corrupted in tmp_env | **Fixed v0.4** |
-| `node --env-file` inheritance | Shell env overrides --env-file | **Fixed v0.4** |
 | Native Hypercore replication | test_replication.ts all phases pass | **Fixed v0.4** |
-| HTTP sync as fallback | Works, not P2P-native | **Kept as fallback** |
-| Fragment TTL + cross-cycle dedup | Wasted LLM tokens on stale content | **Fixed v0.4** |
-| `supersede()` not wired | KnowledgeStore method never called | **Fixed v0.4** |
-| Qdrant `search()` API v1.12+ | search() removed, use query_points() | **Fixed v0.4** |
-| doi string "null" bug | String not JSON null | **Fixed v0.4** |
-| Signature verification on receive | Malicious node could inject unsigned data | **TODO v0.5** |
-| Replication factor ≥ 3 | Fragments may exist in < 3 BEEs | **TODO v0.5** |
+| Qdrant `search()` API v1.12+ | Replaced with query_points() | **Fixed v0.4** |
+| ollama-init TTY error | `ollama pull` CLI requires TTY — switched to HTTP API | **Fixed v0.5** |
+| web_fetch 2000-char truncation | Only article intro indexed — missed 95% of content | **Fixed v0.5** (wikipedia_fetch) |
+| RSS 300-char teaser | Useless teasers indexed instead of article content | **Fixed v0.5** (content:encoded) |
+| arXiv 500-char abstract | Abstract cut mid-sentence | **Fixed v0.5** (2000 chars) |
+| LLM writes fragment text | Small models hallucinate/paraphrase — violates "no fabricated citations" | **TODO v0.6** (LLM-free extraction) |
+| Signature verification on receive | Malicious node could inject unsigned data | **TODO v0.6** |
+| Replication factor ≥ 3 | Fragments may exist on < 3 BEEs | **TODO v0.6** |
 | IConsensus — fragment quality voting | No multi-agent validation | **TODO v0.6** |
-| Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.6** |
+| Peer HTTP URL in Docker (127.0.0.1) | Aggregator advertises loopback — HTTP sync fallback fails cross-container | **Known** — native Hypercore replication still works |
+| Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.7** |
 | Token economics | No incentive layer | **TODO v0.7+** |
-| Hyperswarm DHT blocked in Codespaces | Cross-machine needs open UDP | Expected — HTTP sync covers Codespaces |
+| Hyperswarm DHT in Codespaces | Cross-machine needs open UDP | Expected — HTTP sync covers Codespaces |
+
+---
 
 ## Running tests
 
@@ -197,22 +275,26 @@ packages/core/node_modules/.bin/tsx packages/core/src/test_replication.ts
 packages/core/node_modules/.bin/tsx packages/core/src/test_v03.ts
 ```
 
+---
+
 ## GitHub
 
 ```
 Repo   : https://github.com/capybarist/hive (private)
-Branch : feature/v04-p2p-replication (current work)
+Branch : main
 Push   : requires GITHUB_TOKEN workaround
          TOKEN=$(GITHUB_TOKEN="" gh auth token)
          git remote set-url origin "https://capybarist:${TOKEN}@github.com/capybarist/hive.git"
-         git push origin feature/v04-p2p-replication
+         git push origin main
 ```
+
+---
 
 ## Developer context
 
-- Background: Java/enterprise (Windows Financial Services)
+- Background: Java/enterprise (Financial Services)
 - Learning distributed systems and AI
-- Project serves as both portfolio and real product
+- Project is both portfolio and real product
 - Communicates in Spanish
 - All code comments and logs must be in English
 - `Bash(*)` is pre-approved in `.claude/settings.json`
