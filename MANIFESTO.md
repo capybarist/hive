@@ -50,7 +50,7 @@ HIVE is built on battle-tested P2P infrastructure, local-first systems, and the 
 - **[Hyperswarm](https://github.com/holepunchto/hyperswarm)** — P2P DHT for node discovery and NAT hole-punching
 - **[Qdrant](https://qdrant.tech/)** — vector database for scalable search across the full network (aggregator)
 - **[sentence-transformers](https://github.com/UKPLab/sentence-transformers)** — local semantic embeddings (~80MB, runs on CPU)
-- **LLM with function calling** — autonomous extraction agent (Groq, Gemini, Claude, OpenAI, or any compatible API)
+- **LLM with function calling** — autonomous extraction agent (Groq, Gemini, Claude, OpenAI, or Ollama for fully local inference)
 
 ### Tether ecosystem integration (planned)
 
@@ -82,22 +82,22 @@ Decentralized systems are only as good as their trust model. HIVE's approach:
 - **Multi-agent consensus (planned):** multiple BEEs vote on fragment quality before it propagates widely. Reduces spam and misinformation without centralized moderation.
 - **Source traceability:** every fragment links to its original source (arXiv paper, DOI, news article). The chain of provenance is always visible.
 
-## Current state: v0.4
+## Current state: v0.5
 
-HIVE v0.4 is a working system — all core modules implemented and running, with native P2P replication operational. See the [README](./README.md) for the full status breakdown.
+HIVE v0.5 is a working system — all core modules implemented and running, with native P2P replication operational. See the [README](./README.md) for the full status breakdown.
 
 **What works today:**
 - Autonomous BEEs extracting knowledge from Wikipedia, arXiv, RSS feeds, and the open web
 - Native Hypercore P2P replication between BEEs
 - Aggregator node indexing the full network in Qdrant
-- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI)
-- Web UI for human queries with source attribution
+- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI, **Ollama local**)
+- Web UI (light theme) for human queries with source attribution
 - Vector API for machine queries
+- Fully local operation with Ollama — no API keys, no cloud dependency
 
 **What's next:**
-- v0.5: Signature verification on receive, replication factor ≥ 3
-- v0.6: Multi-agent consensus, semantic routing, QVAC integration
-- v0.7: WDK payment layer, API monetization
+- v0.6: Signature verification on receive, replication factor ≥ 3, multi-agent consensus
+- v0.7: Semantic routing, QVAC integration, WDK payment layer
 
 ## How to run a BEE
 

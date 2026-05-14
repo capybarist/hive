@@ -54,18 +54,24 @@ bash stop.sh --force    # kill everything
 
 ## LLM Providers
 
-| Provider | Free tier | Model | Notes |
+| Provider | Cost | Model | Notes |
 |---|---|---|---|
-| **Groq** | 100K tokens/day, unlimited RPD on some models | `llama-3.3-70b-versatile` | Recommended for dev. Get key at console.groq.com |
-| **Gemini** | Limited free tier | `gemini-2.5-flash-lite` | Unlimited RPD on flash-lite. aistudio.google.com |
+| **Ollama** | Free, local | `qwen2.5:3b` | No API key. Runs on your machine. Recommended for VPS. |
+| **Groq** | Free tier 100K tokens/day | `llama-3.3-70b-versatile` | Best quality for free. Get key at console.groq.com |
+| **Gemini** | Free tier available | `gemini-2.5-flash` | aistudio.google.com |
 | **Claude** | Paid | `claude-sonnet-4-6` | console.anthropic.com |
 | **OpenAI** | Paid | `gpt-4o` | platform.openai.com |
 
+HIVE uses **one provider for everything** — both autonomous extraction and query synthesis. The embeddings model (all-MiniLM-L6-v2, ~80MB) always runs locally and is not an LLM.
+
 ```bash
-# Set in hive/.env (persists across restarts)
+# Cloud provider — set in hive/.env
 LLM_PROVIDER=groq
 LLM_API_KEY=gsk_your_key
-LLM_MODEL=llama-3.3-70b-versatile   # optional override
+
+# Or Ollama (local, no key needed) — requires --profile ollama
+LLM_PROVIDER=ollama
+# OLLAMA_URL=http://ollama:11434   ← default, no need to set this
 ```
 
 Or configure at runtime via the UI — click the provider button in the sidebar.
@@ -76,8 +82,8 @@ Or configure at runtime via the UI — click the provider button in the sidebar.
 
 ```bash
 # Provider
-LLM_PROVIDER=groq            # groq | gemini | claude | openai
-LLM_API_KEY=your_key
+LLM_PROVIDER=groq            # groq | gemini | claude | openai | ollama
+LLM_API_KEY=your_key         # not needed for ollama
 
 # Optional model override (defaults shown)
 LLM_MODEL=llama-3.3-70b-versatile   # groq default
@@ -102,6 +108,47 @@ BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
 HIVE_EXTRACT_MAX_FRAGMENTS=20
 HIVE_EXTRACT_INTERVAL_MS=300000   # 5 minutes
 ```
+
+---
+
+## Full VPS stack (Docker Compose)
+
+The recommended production setup runs everything with a single command.
+
+```bash
+# 1. Copy and edit config
+cp .env.example .env
+nano .env          # set LLM_PROVIDER + LLM_API_KEY (or use ollama, see below)
+
+# 2. Start the full stack (Caddy + 2 BEEs + Aggregator + Qdrant)
+docker compose up -d
+
+# Access points:
+#   http://your-ip        → Aggregator (via Caddy)
+#   http://your-ip:8080   → BEE 1 directly
+#   http://your-ip:8081   → BEE 2 directly
+#   http://your-ip:8090   → Aggregator directly
+#   http://your-ip:6333/dashboard → Qdrant
+```
+
+### Using Ollama (local LLM, no API key)
+
+```bash
+# In .env:
+LLM_PROVIDER=ollama
+# (comment out or remove LLM_API_KEY)
+
+# Start with Ollama profile (Docker pulls the image automatically)
+docker compose --profile ollama up -d
+
+# Download the AI model once (~1.9GB, persists across restarts)
+docker exec hive-ollama ollama pull qwen2.5:3b
+
+# Restart BEEs to pick up the new provider
+docker compose restart bee-1 bee-2 aggregator
+```
+
+RAM guide: `qwen2.5:3b` ~1.9GB needs ~4GB total VPS. For tighter RAM use `qwen2.5:1.5b` (~950MB).
 
 ---
 
@@ -152,7 +199,7 @@ packages/
   agent/       — Autonomous extractor (LLM function calling), budget controller
   embeddings/  — Python: all-MiniLM-L6-v2 + HNSW + Qdrant backend
   api/         — Fastify API + UI server
-  ui/          — Web UI (vanilla HTML/JS, dark theme)
+  ui/          — Web UI (vanilla HTML/JS, light theme)
 
 data/
   topic_tree.json   — knowledge taxonomy (95 topics, 9 domains)
@@ -174,7 +221,7 @@ BEE-A writes fragment → Hypercore (append-only, signed)
 
 ---
 
-## v0.4 Status — May 2026
+## v0.5 Status — May 2026
 
 | Module | Description | Status |
 |--------|-------------|--------|
@@ -183,25 +230,24 @@ BEE-A writes fragment → Hypercore (append-only, signed)
 | 3 | KnowledgeStore — Hypercore + Hyperbee, append-only, ed25519-signed | ✅ |
 | 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed in v0.4 |
 | 5 | Vector query API (Fastify) + federated search | ✅ |
-| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI) | ✅ |
+| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) | ✅ |
 | 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
 | — | Aggregator node + Qdrant backend | ✅ added in v0.4 |
+| — | Ollama local LLM + light theme UI | ✅ added in v0.5 |
 
-**Planned for v0.5:**
+**Planned for v0.6:**
 - Signature verification on receive (`watchRemoteCore` validates ed25519)
 - Replication factor enforcement (≥ 3 copies per fragment)
-- Cross-machine test on real VMs with open UDP
-- README installation guide and `hive.sh` polish
-
-**Planned for v0.6+:**
 - `IConsensus` — multi-agent voting on fragment quality
 - Semantic routing (query propagation to semantically relevant BEEs)
+
+**Planned for v0.7+:**
 - P2P topic coordination (without HTTP claims)
 - Token economics (extractors rewarded for verified contributions)
 
 ---
 
-## Known issues (v0.4)
+## Known issues (v0.5)
 
 - **Signature verification on receive**: fragments are signed when saved but signatures are not verified when received from peers. A malicious node could inject unsigned data. Fix planned for v0.5.
 - **Replication factor not enforced**: fragments may exist in fewer than 3 BEEs. No automatic re-replication yet.
