@@ -38,10 +38,10 @@ alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 # ── Validate ──────────────────────────────────────────────────────────────────
 LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
 case "$LLM_PROVIDER" in
-  gemini|claude|openai|groq) ;;
-  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq" ;;
+  gemini|claude|openai|groq|ollama) ;;
+  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq, ollama" ;;
 esac
-[ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required. Set it in your environment or in a .env file."
+[ "$LLM_PROVIDER" != "ollama" ] && [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required. Set it in your environment or in a .env file."
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT="${HIVE_PORT:-8080}"

@@ -72,10 +72,10 @@ fi
 # ── Validate ──────────────────────────────────────────────────────────────────
 LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
 case "$LLM_PROVIDER" in
-  gemini|claude|openai|groq) ;;
-  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq" ;;
+  gemini|claude|openai|groq|ollama) ;;
+  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq, ollama" ;;
 esac
-[ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required (used for synthesis queries)."
+[ "$LLM_PROVIDER" != "ollama" ] && [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required (used for synthesis queries)."
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
