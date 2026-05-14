@@ -69,19 +69,18 @@ services:
 
   # Pulls the model once on first start via Ollama HTTP API (no TTY needed), then exits
   ollama-init:
-    image: ollama/ollama:latest
+    image: curlimages/curl:latest
     container_name: hive-ollama-init
     restart: "no"
     environment:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      MODEL=$${OLLAMA_MODEL:-qwen2.5:1.5b}
-      echo "Pulling $$MODEL via Ollama API (this may take a few minutes)..."
+      echo "Pulling $${OLLAMA_MODEL} via Ollama API (this may take a few minutes)..."
       curl -f -m 1200 http://ollama:11434/api/pull \
         -H 'Content-Type: application/json' \
-        -d '{"name":"'$$MODEL'","stream":false}' || { echo "ERROR: model pull failed"; exit 1; }
-      echo "Model $$MODEL ready"
+        -d '{"name":"'"$${OLLAMA_MODEL}"'","stream":false}' || { echo "ERROR: model pull failed"; exit 1; }
+      echo "Model $${OLLAMA_MODEL} ready"
     depends_on:
       ollama:
         condition: service_healthy
