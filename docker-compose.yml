@@ -145,9 +145,12 @@ services:
     restart: unless-stopped
     command: ["bash", "aggregator.sh"]
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
+      # Aggregator uses a fast cloud LLM for query synthesis (public-facing, latency matters).
+      # Set AGGREGATOR_LLM_PROVIDER + AGGREGATOR_LLM_API_KEY in .env for the aggregator only.
+      # Groq free tier recommended (console.groq.com) — <2s responses vs 20s with Ollama.
+      - LLM_PROVIDER=${AGGREGATOR_LLM_PROVIDER:-groq}
+      - LLM_API_KEY=${AGGREGATOR_LLM_API_KEY:-}
+      - LLM_MODEL=${AGGREGATOR_LLM_MODEL:-}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_MODE=aggregator
       - HIVE_PORT=8090
