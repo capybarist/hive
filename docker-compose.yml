@@ -1,18 +1,20 @@
 # HIVE — Full VPS stack
-# 2 BEEs + Aggregator + Qdrant + Caddy (reverse proxy)
 #
 # Usage:
-#   cp .env.example .env && nano .env   # set LLM_API_KEY (and optionally DOMAIN)
-#   docker compose up -d
+#   cp .env.example .env && nano .env   # set LLM_PROVIDER (default: ollama, no key needed)
+#   docker compose up -d               # starts everything, pulls AI model automatically
 #
-# Without DOMAIN → HTTP on http://your-vps-ip   (works immediately with bare IP)
-# With DOMAIN    → HTTPS via Let's Encrypt       (needs DNS pointing to this VPS)
+# Access points (no domain needed):
+#   http://your-ip        → Aggregator (via Caddy)
+#   http://your-ip:8080   → BEE directly
+#   http://your-ip:8090   → Aggregator directly
+#   http://your-ip:6333/dashboard → Qdrant
 #
-# Direct access (non-standard ports, no HTTPS redirect):
-#   http://your-ip:8080  — BEE 1
-#   http://your-ip:8081  — BEE 2
-#   http://your-ip:8090  — Aggregator API
-#   http://your-ip:6333/dashboard  — Qdrant dashboard
+# To use a cloud LLM instead of Ollama:
+#   LLM_PROVIDER=groq  LLM_API_KEY=your_key   (in .env)
+#
+# To add a second BEE:
+#   docker compose up -d bee-2
 
 services:
 
@@ -39,7 +41,7 @@ services:
     depends_on:
       - aggregator
 
-  # ── Vector database (aggregator backend) ─────────────────────────────────────
+  # ── Vector database ───────────────────────────────────────────────────────────
   qdrant:
     image: qdrant/qdrant:v1.9.2
     container_name: hive-qdrant
@@ -49,15 +51,38 @@ services:
     ports:
       - "6333:6333"
 
-  # ── BEE 1 — seed node (no peer) ─────────────────────────────────────────────
+  # ── Ollama — local LLM (starts automatically, pulls model on first run) ───────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hive-ollama
+    restart: unless-stopped
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
+    command: >
+      sh -c "ollama serve &
+             until ollama list > /dev/null 2>&1; do sleep 2; done &&
+             ollama pull $$OLLAMA_MODEL || true &&
+             wait"
+    volumes:
+      - ollama-data:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # ── BEE — extracts and indexes knowledge ──────────────────────────────────────
   bee-1:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-1
     restart: unless-stopped
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8080
       - HIVE_EMBEDDER_PORT=7700
@@ -68,16 +93,20 @@ services:
       - "8080:8080"
     volumes:
       - bee1-data:/hive/data
+    depends_on:
+      ollama:
+        condition: service_healthy
 
-  # ── BEE 2 — peers with BEE 1 ────────────────────────────────────────────────
+  # ── Optional second BEE (start with: docker compose up -d bee-2) ─────────────
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
+    profiles: ["bee-2"]
     restart: unless-stopped
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8081
       - HIVE_EMBEDDER_PORT=7701
@@ -91,7 +120,10 @@ services:
     volumes:
       - bee2-data:/hive/data
     depends_on:
-      - bee-1
+      ollama:
+        condition: service_healthy
+      bee-1:
+        condition: service_started
 
   # ── Aggregator — indexes all BEE fragments into Qdrant ───────────────────────
   aggregator:
@@ -100,8 +132,9 @@ services:
     restart: unless-stopped
     command: ["bash", "aggregator.sh"]
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
-      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_MODE=aggregator
       - HIVE_PORT=8090
@@ -115,21 +148,12 @@ services:
     volumes:
       - aggregator-data:/hive/data
     depends_on:
-      - qdrant
-      - bee-1
-
-  # ── Ollama — local LLM (optional, activate with --profile ollama) ─────────────
-  # Usage: docker compose --profile ollama up -d
-  # Then pull model once: docker exec hive-ollama ollama pull qwen2.5:3b
-  ollama:
-    image: ollama/ollama:latest
-    container_name: hive-ollama
-    profiles: ["ollama"]
-    restart: unless-stopped
-    volumes:
-      - ollama-data:/root/.ollama
-    expose:
-      - "11434"
+      qdrant:
+        condition: service_started
+      bee-1:
+        condition: service_started
+      ollama:
+        condition: service_healthy
 
 volumes:
   qdrant-data:
