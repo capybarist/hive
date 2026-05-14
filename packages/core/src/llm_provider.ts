@@ -334,15 +334,15 @@ class GroqProvider implements LLMProvider {
 export function createLLMProvider(): LLMProvider {
   const providerName = process.env.LLM_PROVIDER ?? 'gemini';
   const apiKey = process.env.LLM_API_KEY ?? '';
-  const modelOverride = process.env.LLM_MODEL;
+  const modelOverride = process.env.LLM_MODEL || '';
 
   if (!apiKey) throw new Error(`LLM_API_KEY not set (LLM_PROVIDER=${providerName})`);
 
   switch (providerName) {
-    case 'gemini':  return new GeminiProvider(apiKey, modelOverride ?? 'gemini-2.5-flash');
-    case 'claude':  return new ClaudeProvider(apiKey, modelOverride ?? 'claude-sonnet-4-6');
-    case 'openai':  return new OpenAIProvider(apiKey, modelOverride ?? 'gpt-4o');
-    case 'groq':    return new GroqProvider(apiKey, modelOverride ?? 'llama-3.3-70b-versatile');
+    case 'gemini':  return new GeminiProvider(apiKey, modelOverride || 'gemini-2.5-flash');
+    case 'claude':  return new ClaudeProvider(apiKey, modelOverride || 'claude-sonnet-4-6');
+    case 'openai':  return new OpenAIProvider(apiKey, modelOverride || 'gpt-4o');
+    case 'groq':    return new GroqProvider(apiKey, modelOverride || 'llama-3.3-70b-versatile');
     default:
       throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai, groq`);
   }
