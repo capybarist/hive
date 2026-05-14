@@ -1,22 +1,30 @@
 # HIVE — Full VPS stack
-# 2 BEEs + Aggregator + Qdrant + Caddy (HTTPS)
+# 2 BEEs + Aggregator + Qdrant + Caddy (reverse proxy)
 #
 # Usage:
-#   cp .env.example .env && nano .env   # set LLM_API_KEY and DOMAIN
+#   cp .env.example .env && nano .env   # set LLM_API_KEY (and optionally DOMAIN)
 #   docker compose up -d
 #
-# Public endpoint: https://your-domain  (Caddy handles HTTPS automatically)
-# Set DOMAIN=hive.yourdomain.com in .env before starting.
+# Without DOMAIN → HTTP on http://your-vps-ip   (works immediately with bare IP)
+# With DOMAIN    → HTTPS via Let's Encrypt       (needs DNS pointing to this VPS)
 
 services:
 
-  # ── HTTPS reverse proxy (auto-TLS via Let's Encrypt) ─────────────────────────
-  # No config file needed — domain is set via DOMAIN= in .env
+  # ── Reverse proxy ─────────────────────────────────────────────────────────────
+  # HTTP mode (no DOMAIN): plain HTTP on port 80, works with bare IP.
+  # HTTPS mode (DOMAIN set): auto-TLS via Let's Encrypt, needs DNS + open 443.
   caddy:
     image: caddy:2-alpine
     container_name: hive-caddy
     restart: unless-stopped
-    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to aggregator:8090
+    command: >
+      sh -c "if [ -n \"$$DOMAIN\" ]; then
+        exec caddy reverse-proxy --from $$DOMAIN --to aggregator:8090;
+      else
+        exec caddy reverse-proxy --from :80 --to aggregator:8090;
+      fi"
+    environment:
+      - DOMAIN=${DOMAIN:-}
     ports:
       - "80:80"
       - "443:443"

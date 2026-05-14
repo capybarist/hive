@@ -64,6 +64,7 @@ if [ ! -f ".env" ]; then
   [ -n "$LLM_API_KEY"   ] && sed -i "s|LLM_API_KEY=.*|LLM_API_KEY=${LLM_API_KEY}|" .env
   [ -n "$LLM_PROVIDER"  ] && sed -i "s|LLM_PROVIDER=.*|LLM_PROVIDER=${LLM_PROVIDER}|" .env
   [ -n "$LLM_MODEL"     ] && sed -i "s|# LLM_MODEL=.*|LLM_MODEL=${LLM_MODEL}|" .env
+  [ -n "$DOMAIN"        ] && sed -i "s|# DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
   ok ".env created"
 fi
 
@@ -77,24 +78,32 @@ ok "Images ready"
 run "Starting HIVE stack (bee-1, bee-2, aggregator, qdrant)..."
 docker compose up -d
 
-# ── Wait for aggregator ───────────────────────────────────────────────────────
+# ── Wait for aggregator (via Caddy on :80) ───────────────────────────────────
 echo -n "  Waiting for aggregator"
 for i in $(seq 1 60); do
-  curl -s --max-time 2 "http://localhost:8090/api/status" 2>/dev/null | grep -q '"ok"' && break
+  curl -s --max-time 2 "http://localhost/api/status" 2>/dev/null | grep -q '"ok"' && break
   echo -n "."; sleep 3
 done
 echo ""
 
-STATUS=$(curl -s http://localhost:8090/api/status 2>/dev/null)
+STATUS=$(curl -s http://localhost/api/status 2>/dev/null)
+PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo 'YOUR_IP')
+DOMAIN_VAL=$(grep -E '^DOMAIN=' .env 2>/dev/null | cut -d= -f2)
+if [ -n "$DOMAIN_VAL" ]; then
+  PUBLIC_URL="https://${DOMAIN_VAL}"
+else
+  PUBLIC_URL="http://${PUBLIC_IP}"
+fi
+
 if echo "$STATUS" | grep -q '"ok"'; then
   INDEXED=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('indexed',0))" 2>/dev/null)
   PEERS=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('peers',0))" 2>/dev/null)
   ok "Aggregator running — indexed=${INDEXED} peers=${PEERS}"
   echo ""
-  info "Aggregator API: http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):8090"
-  info "Qdrant dashboard: http://localhost:6333/dashboard (localhost only)"
+  info "Public API: ${PUBLIC_URL}"
+  info "Qdrant:     http://localhost:6333/dashboard  (local only)"
   echo ""
-  info "Add NEXT_PUBLIC_HIVE_AGGREGATOR_URL=http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):8090"
+  info "Add NEXT_PUBLIC_HIVE_AGGREGATOR_URL=${PUBLIC_URL}"
   info "to your capybarahome .env.local to enable the live widget."
 else
   err "Aggregator not responding. Check: docker compose logs aggregator"

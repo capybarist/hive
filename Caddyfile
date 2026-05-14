@@ -1,3 +1,8 @@
-{$DOMAIN} {
+# Used when running Caddy standalone (not via docker-compose).
+# docker-compose generates the reverse-proxy config dynamically from $DOMAIN.
+#
+# HTTP mode (no DOMAIN):  caddy run --config Caddyfile
+# HTTPS mode (with domain): set DOMAIN=hive.example.com before running
+{$DOMAIN::80} {
     reverse_proxy aggregator:8090
 }
