@@ -78,9 +78,9 @@ services:
     command: |
       MODEL=$${OLLAMA_MODEL:-qwen2.5:1.5b}
       echo "Pulling $$MODEL via Ollama API (this may take a few minutes)..."
-      curl -sf -m 1200 http://ollama:11434/api/pull \
+      curl -f -m 1200 http://ollama:11434/api/pull \
         -H 'Content-Type: application/json' \
-        -d '{"name":"'$$MODEL'","stream":false}'
+        -d '{"name":"'$$MODEL'","stream":false}' || { echo "ERROR: model pull failed"; exit 1; }
       echo "Model $$MODEL ready"
     depends_on:
       ollama:
