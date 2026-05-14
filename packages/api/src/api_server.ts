@@ -22,6 +22,7 @@ const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
 const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
 const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
 const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 10);
+const EXTRACT_BUDGET_MINUTES = Number(process.env.HIVE_EXTRACT_BUDGET_MINUTES ?? 8);
 
 // ── Bootstrap node & P2P ────────────────────────────────────────────────────
 const identity = loadOrCreateIdentity(IDENTITY_DIR);
@@ -391,7 +392,7 @@ const runLoop = async () => {
         }
 
         logEvent('start', `Topic: ${claim.topicId}`);
-        const topicMaxMin = Math.ceil(8 / activeClaims.length);
+        const topicMaxMin = Math.ceil(EXTRACT_BUDGET_MINUTES / activeClaims.length);
         // Hard timeout: 2× budget + 2 min buffer for in-flight operations.
         // Guards against store.save() or b.flush() hanging beyond their own timeouts.
         const topicDeadlineMs = (topicMaxMin * 2 + 2) * 60_000;

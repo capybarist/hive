@@ -67,16 +67,21 @@ services:
       retries: 15
       start_period: 30s
 
-  # Pulls the model once on first start, then exits (restart: no)
+  # Pulls the model once on first start via Ollama HTTP API (no TTY needed), then exits
   ollama-init:
     image: ollama/ollama:latest
     container_name: hive-ollama-init
     restart: "no"
     environment:
-      - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
     entrypoint: ["/bin/sh", "-c"]
-    command: "ollama pull $${OLLAMA_MODEL:-qwen2.5:1.5b}"
+    command: |
+      MODEL=$${OLLAMA_MODEL:-qwen2.5:1.5b}
+      echo "Pulling $$MODEL via Ollama API (this may take a few minutes)..."
+      curl -sf -m 1200 http://ollama:11434/api/pull \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"'$$MODEL'","stream":false}'
+      echo "Model $$MODEL ready"
     depends_on:
       ollama:
         condition: service_healthy
@@ -94,8 +99,9 @@ services:
       - HIVE_PORT=8080
       - HIVE_EMBEDDER_PORT=7700
       - HIVE_DATA_DIR=/hive/data
-      - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-300000}
-      - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-20}
+      - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-900000}
+      - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-9}
+      - HIVE_EXTRACT_BUDGET_MINUTES=${HIVE_EXTRACT_BUDGET_MINUTES:-20}
     ports:
       - "8080:8080"
     volumes:
