@@ -329,6 +329,65 @@ class GroqProvider implements LLMProvider {
   }
 }
 
+// ── Ollama ────────────────────────────────────────────────────────────────────
+// OpenAI-compatible local inference — no API key required.
+// Set OLLAMA_URL to point at the Ollama server (default: http://localhost:11434).
+
+class OllamaProvider implements LLMProvider {
+  private readonly url: string;
+
+  constructor(private readonly model = 'qwen2.5:3b') {
+    const base = (process.env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/+$/, '');
+    this.url = `${base}/v1/chat/completions`;
+  }
+
+  private async call(body: unknown): Promise<any> {
+    const res = await fetch(this.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ollama' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) throw new Error(`Ollama error ${res.status}: ${await res.text()}`);
+    return res.json();
+  }
+
+  async generate(messages: LLMMessage[], systemPrompt: string, options: GenerateOptions = {}): Promise<{ text: string; tokensUsed: number }> {
+    const data = await this.call({
+      model: this.model,
+      messages: [{ role: 'system', content: systemPrompt }, ...toOpenAIMessages(messages)],
+      temperature: options.temperature ?? 0.5,
+      max_tokens: options.maxTokens ?? 4096,
+      stream: false,
+    });
+    return {
+      text: data?.choices?.[0]?.message?.content ?? '(no response)',
+      tokensUsed: data?.usage?.total_tokens ?? 0,
+    };
+  }
+
+  async generateWithTools(messages: LLMMessage[], systemPrompt: string, tools: ToolDef[], options: GenerateOptions = {}): Promise<GenerateResult> {
+    const data = await this.call({
+      model: this.model,
+      messages: [{ role: 'system', content: systemPrompt }, ...toOpenAIMessages(messages)],
+      tools: tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+      tool_choice: 'auto',
+      temperature: options.temperature ?? 0.3,
+      max_tokens: options.maxTokens ?? 2048,
+      stream: false,
+    });
+    const msg = data?.choices?.[0]?.message;
+    const tokensUsed = data?.usage?.total_tokens ?? 0;
+    const text = (msg?.content as string | null) || undefined;
+    const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((tc: any) => ({
+      id: tc.id ?? nextId(),
+      name: tc.function.name,
+      args: (() => { try { return JSON.parse(tc.function.arguments ?? '{}'); } catch { return {}; } })(),
+    }));
+    return { text, toolCalls: toolCalls.length ? toolCalls : undefined, tokensUsed };
+  }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createLLMProvider(): LLMProvider {
@@ -336,19 +395,24 @@ export function createLLMProvider(): LLMProvider {
   const apiKey = process.env.LLM_API_KEY ?? '';
   const modelOverride = process.env.LLM_MODEL || '';
 
-  if (!apiKey) throw new Error(`LLM_API_KEY not set (LLM_PROVIDER=${providerName})`);
+  if (providerName !== 'ollama' && !apiKey) {
+    throw new Error(`LLM_API_KEY not set (LLM_PROVIDER=${providerName})`);
+  }
 
   switch (providerName) {
     case 'gemini':  return new GeminiProvider(apiKey, modelOverride || 'gemini-2.5-flash');
     case 'claude':  return new ClaudeProvider(apiKey, modelOverride || 'claude-sonnet-4-6');
     case 'openai':  return new OpenAIProvider(apiKey, modelOverride || 'gpt-4o');
     case 'groq':    return new GroqProvider(apiKey, modelOverride || 'llama-3.3-70b-versatile');
+    case 'ollama':  return new OllamaProvider(modelOverride || 'qwen2.5:3b');
     default:
-      throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai, groq`);
+      throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai, groq, ollama`);
   }
 }
 
 export function isLLMConfigured(): boolean {
+  const provider = process.env.LLM_PROVIDER ?? 'gemini';
+  if (provider === 'ollama') return true;
   return Boolean(process.env.LLM_API_KEY);
 }
 
@@ -393,6 +457,11 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
           signal: AbortSignal.timeout(10_000),
         });
         break;
+      case 'ollama': {
+        const base = (process.env.OLLAMA_URL ?? 'http://localhost:11434').replace(/\/+$/, '');
+        res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(10_000) });
+        break;
+      }
       default:
         return `Unknown provider: ${provider}`;
     }

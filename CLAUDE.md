@@ -6,9 +6,9 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 **Analogy:** What Wikipedia is for humans, but optimised to be consumed by LLMs.
 
-## Current state: v0.4 — native Hypercore replication working
+## Current state: v0.5 — Ollama local LLM + light theme UI
 
-All 7 modules complete. Native P2P replication fixed in v0.4.
+All 7 modules complete. Native P2P replication fixed in v0.4. Ollama provider added in v0.5.
 
 | Module | Description | Status |
 |--------|-------------|--------|
@@ -17,14 +17,16 @@ All 7 modules complete. Native P2P replication fixed in v0.4.
 | 3 | KnowledgeStore — Hypercore + Hyperbee, ed25519-signed | ✅ |
 | 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed v0.4 |
 | 5 | Vector query API (Fastify) + federated queries | ✅ |
-| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI) | ✅ |
+| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) | ✅ |
 | 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
 | — | Aggregator node + Qdrant backend | ✅ added v0.4 |
+| — | Ollama local LLM provider + light theme UI | ✅ added v0.5 |
 
 **NOT in spec that we have:**
 - Aggregator node (not in original spec)
-- Multi-provider LLM: Groq, Gemini, Claude, OpenAI
+- Multi-provider LLM: Groq, Gemini, Claude, OpenAI, **Ollama (local)**
 - TTL + supersede wired in extractor
+- Light theme UI (was dark)
 
 **In spec but NOT yet implemented:**
 - `Autobase` multi-writer (decision: abandoned — single-writer per BEE is simpler and correct for HIVE's model)
@@ -116,9 +118,10 @@ bash aggregator.sh
 **Key environment variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | `gemini` · `claude` · `openai` · `groq` |
-| `LLM_API_KEY` | — | Required |
-| `LLM_MODEL` | — | Optional override |
+| `LLM_PROVIDER` | `gemini` | `gemini` · `claude` · `openai` · `groq` · `ollama` |
+| `LLM_API_KEY` | — | Required for cloud providers. Not needed for `ollama`. |
+| `LLM_MODEL` | — | Optional override (e.g. `qwen2.5:1.5b` for Ollama on low RAM) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL. In Docker: `http://ollama:11434` |
 | `HIVE_PORT` | 8080 | API server port |
 | `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
 | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
@@ -126,6 +129,22 @@ bash aggregator.sh
 | `BEE_TOPIC_DOMAIN` | — | Domain hint (e.g. `current_events`, `health`) |
 | `HIVE_EXTRACT_MAX_FRAGMENTS` | 20 | Fragments per extraction cycle |
 | `HIVE_EXTRACT_INTERVAL_MS` | 300000 | Cycle interval (5 min) |
+
+**LLM architecture note:** HIVE uses ONE `LLM_PROVIDER` for both extraction (autonomous agent, tool calls) and query synthesis (RAG answers). The embeddings model (all-MiniLM-L6-v2) is separate and always runs locally via Python — it was never a cloud LLM.
+
+**Ollama setup (Docker):**
+```bash
+# Start with Ollama profile
+docker compose --profile ollama up -d
+
+# Pull model once (persists in ollama-data volume)
+docker exec hive-ollama ollama pull qwen2.5:3b
+
+# In .env:
+# LLM_PROVIDER=ollama
+# OLLAMA_URL=http://ollama:11434  (already the default in docker-compose.yml)
+```
+RAM guidance: `qwen2.5:3b` ~1.9GB (recommended for 4GB VPS). Use `qwen2.5:1.5b` ~950MB for tighter RAM.
 
 ## Dev BEE ports
 

@@ -1,4 +1,5 @@
 data/
+!data/topic_tree.json
 node_modules/
 **/__pycache__/
 **/*.pyc

@@ -7,20 +7,20 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #09090f;
-      --sidebar-bg: #0c0c14;
-      --surface: #12121e;
-      --surface2: #1a1a2a;
-      --border: #22223a;
+      --bg: #f8fafc;
+      --sidebar-bg: #ffffff;
+      --surface: #ffffff;
+      --surface2: #f1f5f9;
+      --border: #e2e8f0;
       --accent: #6366f1;
       --accent2: #4f46e5;
-      --accent-glow: rgba(99,102,241,.18);
-      --green: #10b981;
-      --yellow: #f59e0b;
-      --red: #ef4444;
-      --purple: #a855f7;
-      --text: #e8e8f2;
-      --muted: #6b7280;
+      --accent-glow: rgba(99,102,241,.10);
+      --green: #059669;
+      --yellow: #d97706;
+      --red: #dc2626;
+      --purple: #7c3aed;
+      --text: #0f172a;
+      --muted: #64748b;
       --radius: 10px;
     }
     html, body { height: 100%; overflow: hidden; }
@@ -80,13 +80,13 @@
 
     /* Modal */
     .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(2px);
+      position: fixed; inset: 0; background: rgba(15,23,42,.35); backdrop-filter: blur(3px);
       display: flex; align-items: center; justify-content: center; z-index: 100;
     }
     .modal {
       background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
       padding: 22px 22px 18px; width: 340px; max-width: calc(100vw - 32px);
-      box-shadow: 0 24px 60px rgba(0,0,0,.6);
+      box-shadow: 0 8px 32px rgba(15,23,42,.12), 0 1px 4px rgba(15,23,42,.06);
     }
     .modal-header {
       display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;
@@ -168,7 +168,7 @@
     }
     .welcome.hidden { display: none; }
     .welcome-glyph { font-size: 52px; margin-bottom: 4px; filter: drop-shadow(0 0 20px rgba(99,102,241,.4)); }
-    .welcome-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, var(--text) 40%, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .welcome-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #312e81 0%, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
     .welcome-sub { font-size: 14px; color: var(--muted); max-width: 380px; line-height: 1.6; }
     .welcome-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px; }
     .chip {
@@ -187,7 +187,7 @@
     }
     .conv-question::before { content: 'Q'; font-size: 11px; font-weight: 800; background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(99,102,241,.3); border-radius: 5px; padding: 2px 7px; flex-shrink: 0; margin-top: 1px; }
     .conv-answer-text { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; padding-left: 32px; margin-bottom: 12px; }
-    .conv-answer-text strong { font-weight: 600; color: #c7d2fe; }
+    .conv-answer-text strong { font-weight: 600; color: var(--accent2); }
     .conv-sources { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 32px; margin-bottom: 8px; }
     .conv-source-chip { font-size: 11px; padding: 3px 10px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
     .conv-source-chip.local { border-color: rgba(99,102,241,.3); color: var(--accent); }
@@ -307,7 +307,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px">
       <span class="node-label" id="node-id-label">node: —</span>
-      <span id="mode-badge" class="hidden" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 10px;border-radius:20px;background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3)">AGGREGATOR</span>
+      <span id="mode-badge" class="hidden" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 10px;border-radius:20px;background:var(--accent-glow);color:var(--accent2);border:1px solid rgba(99,102,241,.3)">AGGREGATOR</span>
     </div>
     <div class="topbar-pills">
       <div class="pill"><span class="dot peer" id="peer-dot"></span><span id="peer-text">0 peers</span></div>
@@ -381,11 +381,18 @@
         <option value="groq">Groq — free tier</option>
         <option value="claude">Claude (Anthropic)</option>
         <option value="openai">OpenAI</option>
+        <option value="ollama">Ollama (local — no key needed)</option>
       </select>
     </div>
-    <div class="modal-field">
+    <div class="modal-field" id="key-field">
       <label class="modal-label" for="cfg-key">API Key</label>
       <input type="password" id="cfg-key" class="modal-input" placeholder="Paste key here…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="modal-field hidden" id="ollama-info">
+      <div style="font-size:12px;color:var(--green);background:rgba(5,150,105,.08);border:1px solid rgba(5,150,105,.25);border-radius:7px;padding:9px 11px;line-height:1.5">
+        No API key needed — uses your local Ollama instance.<br>
+        <span style="color:var(--muted)">Pull model once:</span> <code style="font-size:11px;color:var(--text)">docker exec hive-ollama ollama pull qwen2.5:3b</code>
+      </div>
     </div>
     <div class="modal-field">
       <label class="modal-label" for="cfg-model">Model <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
@@ -407,12 +414,14 @@ const PROVIDER_HINTS = {
   groq:   'Get a free key at console.groq.com — 500K tokens/day free (llama-3.1-8b-instant).',
   claude: 'Get a key at console.anthropic.com.',
   openai: 'Get a key at platform.openai.com.',
+  ollama: 'Runs fully local — no tokens spent, no API key needed. Requires docker compose --profile ollama up -d',
 };
 const PROVIDER_DEFAULTS = {
   gemini: 'gemini-2.5-flash',
   groq:   'llama-3.1-8b-instant',
   claude: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
+  ollama: 'qwen2.5:3b',
 };
 
 function openCfgModal() {
@@ -433,6 +442,9 @@ function updateProviderHint() {
   const p = document.getElementById('cfg-provider').value;
   document.getElementById('cfg-hint').textContent = PROVIDER_HINTS[p] ?? '';
   document.getElementById('cfg-model').placeholder = PROVIDER_DEFAULTS[p] ?? '';
+  const isOllama = p === 'ollama';
+  document.getElementById('key-field').classList.toggle('hidden', isOllama);
+  document.getElementById('ollama-info').classList.toggle('hidden', !isOllama);
 }
 document.getElementById('cfg-provider').addEventListener('change', updateProviderHint);
 updateProviderHint();
@@ -445,7 +457,7 @@ async function saveConfig() {
   const saveBtn  = document.getElementById('cfg-save');
 
   msgEl.className = 'cfg-msg hidden';
-  if (!apiKey) { msgEl.textContent = 'API key is required.'; msgEl.className = 'cfg-msg error'; return; }
+  if (!apiKey && provider !== 'ollama') { msgEl.textContent = 'API key is required.'; msgEl.className = 'cfg-msg error'; return; }
 
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving…';
@@ -626,7 +638,7 @@ function setLoading(on) {
   document.getElementById('ask-btn').disabled = on;
 }
 
-function scoreColor(s) { return s >= .5 ? '#10b981' : s >= .3 ? '#f59e0b' : '#6b7280'; }
+function scoreColor(s) { return s >= .5 ? '#059669' : s >= .3 ? '#d97706' : '#94a3b8'; }
 
 function sourceIcon(source) {
   if (!source) return '📄';

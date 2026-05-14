@@ -135,7 +135,7 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?
     if (!use_llm) return { fragments, has_hive_data, embedder_online, answer: null, mode: 'raw' };
 
     if (!isLLMConfigured()) {
-      return reply.code(503).send({ error: 'No LLM API key configured (set GEMINI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY)' });
+      return reply.code(503).send({ error: 'LLM not configured — set LLM_PROVIDER + LLM_API_KEY, or LLM_PROVIDER=ollama for local inference' });
     }
 
     try {
@@ -463,16 +463,16 @@ function upsertEnvLine(content: string, key: string, value: string): string {
 
 app.post<{ Body: { provider: string; apiKey: string; model?: string } }>('/api/config', async (req, reply) => {
   const { provider, apiKey, model } = req.body ?? {};
-  const VALID = ['gemini', 'claude', 'openai', 'groq'];
+  const VALID = ['gemini', 'claude', 'openai', 'groq', 'ollama'];
   if (!VALID.includes(provider)) return reply.code(400).send({ error: `Invalid provider. Valid: ${VALID.join(', ')}` });
-  if (!apiKey?.trim()) return reply.code(400).send({ error: 'apiKey is required' });
+  if (provider !== 'ollama' && !apiKey?.trim()) return reply.code(400).send({ error: 'apiKey is required' });
 
-  // Validate key before saving — catches typos and invalid keys immediately
-  const validationError = await validateLLMKey(provider, apiKey.trim());
-  if (validationError) return reply.code(400).send({ error: `Key validation failed: ${validationError}` });
+  // Validate key before saving — for ollama, validates that the server is reachable
+  const validationError = await validateLLMKey(provider, provider === 'ollama' ? '' : apiKey.trim());
+  if (validationError) return reply.code(400).send({ error: `Validation failed: ${validationError}` });
 
   process.env.LLM_PROVIDER = provider;
-  process.env.LLM_API_KEY = apiKey.trim();
+  if (provider !== 'ollama') process.env.LLM_API_KEY = apiKey.trim();
   if (model?.trim()) process.env.LLM_MODEL = model.trim();
   llmHealthy = true; // validation already passed above
 

@@ -58,6 +58,7 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8080
       - HIVE_EMBEDDER_PORT=7700
       - HIVE_DATA_DIR=/hive/data
@@ -77,6 +78,7 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8081
       - HIVE_EMBEDDER_PORT=7701
       - HIVE_DATA_DIR=/hive/data
@@ -100,6 +102,7 @@ services:
     environment:
       - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - LLM_API_KEY=${LLM_API_KEY}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_MODE=aggregator
       - HIVE_PORT=8090
       - HIVE_EMBEDDER_PORT=7790
@@ -115,6 +118,19 @@ services:
       - qdrant
       - bee-1
 
+  # ── Ollama — local LLM (optional, activate with --profile ollama) ─────────────
+  # Usage: docker compose --profile ollama up -d
+  # Then pull model once: docker exec hive-ollama ollama pull qwen2.5:3b
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hive-ollama
+    profiles: ["ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    expose:
+      - "11434"
+
 volumes:
   qdrant-data:
   bee1-data:
@@ -122,3 +138,4 @@ volumes:
   aggregator-data:
   caddy-data:
   caddy-config:
+  ollama-data:
