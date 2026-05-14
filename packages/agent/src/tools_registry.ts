@@ -129,7 +129,7 @@ export async function executeTool(
     case 'arxiv_search': {
       try {
         const papers = await fetchPapers(args.query as string, (args.limit as number) ?? 5);
-        return { ok: true, data: papers.map(p => ({ arxiv_id: p.arxiv_id, title: p.title, abstract: p.abstract.slice(0, 500), doi: p.doi, source: p.source })) };
+        return { ok: true, data: papers.map(p => ({ arxiv_id: p.arxiv_id, title: p.title, abstract: p.abstract.slice(0, 2000), doi: p.doi, source: p.source })) };
       } catch (e: any) {
         return { ok: false, error: e.message };
       }
@@ -191,7 +191,7 @@ export async function executeTool(
         });
         if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
         const html = await res.text();
-        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
+        const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8000);
         return { ok: true, data: { url: args.url, text } };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -217,12 +217,18 @@ export async function executeTool(
         const rawItems = channel?.item ?? channel?.entry ?? [];
         const items: any[] = Array.isArray(rawItems) ? rawItems : [rawItems];
         const limit = (args.limit as number) ?? 15;
-        const articles = items.slice(0, Math.min(limit, 8)).map((item: any) => ({
-          title: (typeof item.title === 'string' ? item.title : item.title?.['#text'] ?? item.title?.['_'] ?? '').trim(),
-          description: (typeof item.description === 'string' ? item.description : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 300),
-          link: item.link?.['@_href'] ?? (typeof item.link === 'string' ? item.link : '') ?? item.id ?? '',
-          pubDate: item.pubDate ?? item.updated ?? item.published ?? '',
-        })).filter(a => a.title);
+        const articles = items.slice(0, Math.min(limit, 15)).map((item: any) => {
+          // Prefer content:encoded (full article) over description (teaser)
+          const fullContent = item['content:encoded'] ?? item.content?.['#text'] ?? item.content ?? '';
+          const description = typeof item.description === 'string' ? item.description : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '';
+          const bodyText = (fullContent || description).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          return {
+            title: (typeof item.title === 'string' ? item.title : item.title?.['#text'] ?? item.title?.['_'] ?? '').trim(),
+            content: bodyText.slice(0, 1500),
+            link: item.link?.['@_href'] ?? (typeof item.link === 'string' ? item.link : '') ?? item.id ?? '',
+            pubDate: item.pubDate ?? item.updated ?? item.published ?? '',
+          };
+        }).filter(a => a.title);
         return { ok: true, data: { feed_url: args.url, count: articles.length, articles } };
       } catch (e: any) {
         return { ok: false, error: e.message };

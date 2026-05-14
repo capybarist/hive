@@ -31,8 +31,13 @@ REQUIRED workflow — repeat until budget exhausted:
 
 Source selection:
 - Facts/history/culture → wikipedia_fetch(title) — covers ALL sections of the article
-- News/tech/events → rss_fetch (BBC: https://feeds.bbci.co.uk/news/rss.xml, ScienceDaily: https://www.sciencedaily.com/rss/all.xml, Nature: https://feeds.nature.com/nature/rss/current)
-- Academic papers → arxiv_search (only for research topics)
+- News/tech/events → rss_fetch, then web_fetch(link) on important articles for full content
+- Academic papers → arxiv_search (returns full abstracts — index them as-is)
+- Specific URLs → web_fetch(url)
+
+RSS workflow: after rss_fetch, for each article either:
+  a) Index directly if content field is long enough (>200 chars)
+  b) Call web_fetch(link) to get the full article, then index
 
 Fragment format:
 - id: MUST match source type:
@@ -41,10 +46,11 @@ Fragment format:
   - RSS/news  → "rss_{outlet}_{title_slug}"  e.g. "rss_bbc_new_particle_found"
   - arXiv     → "{arxiv_id}_c0"  e.g. "2405.12345v1_c0"  (ONLY for real arXiv papers)
   - Other web → "web_{domain}_{slug}"
-- text: section title + ". " + section content (use the full content provided)
-- source: "https://en.wikipedia.org/wiki/{Page_Title}" for Wikipedia fragments
-- confidence: 0.9 Wikipedia, 0.85 major news, 0.7 arXiv abstract, 0.6 other
-- doi: null unless the fragment has a real DOI starting with "10." — never pass the string "null"
+- text: USE THE ACTUAL TEXT FROM THE SOURCE verbatim or near-verbatim. Do NOT paraphrase or summarize. Include as much of the provided content as fits.
+- title: the article or section title
+- source: the actual URL or "arXiv:{id}" for arXiv
+- confidence: 0.9 Wikipedia, 0.85 major news, 0.7 arXiv, 0.6 other
+- doi: null unless a real DOI starting with "10." — never the string "null"
 
 Call finish() when budget is near exhaustion or after 2-3 sources.`;
 
