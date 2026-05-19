@@ -8,11 +8,32 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.5.1 — HIVE_API_URL fix + auto-deploy + systemd recovery
+## Current state: v0.6.0 — LLM-free verbatim extraction
 
-v0.5.1 is an operational hardening release on top of v0.5: same features,
-but the P2P replication actually works cross-container, the stack survives
-reboots, and pushes to main auto-deploy to the server.
+v0.6.0 is the architectural fix promised in the v0.5 changelog: the LLM
+stops writing fragment text. Fetch tools (`wikipedia_fetch`, `arxiv_search`,
+`rss_fetch`, `web_fetch`) now call `onFragment` internally with content
+taken byte-for-byte from the source API. The agent's LLM is reduced to
+orchestration (choosing what to fetch). Expected throughput jumps from
+~5-10 fragments/hour on Ollama CPU to hundreds, because one LLM turn
+now produces 5-50 fragments instead of one.
+
+The Manifesto's "no fabricated citations" promise is finally enforceable:
+the ed25519 signature now actually backs verbatim source content, not a
+paraphrase the LLM invented.
+
+### What v0.6.0 changed (see CHANGELOG for full detail)
+
+- `packages/agent/src/tools_registry.ts` — all four fetch tools call
+  `onFragment(...)` internally with verbatim content; their return value
+  to the LLM is a short summary (`indexed_count`, titles), never raw text.
+- `packages/agent/src/autonomous_extractor.ts` — `SYSTEM_PROMPT` rewritten.
+  Old workflow ("after each fetch, call `index_fragment` for every
+  section") is explicitly forbidden. The LLM only sees counts and titles,
+  not text. `index_fragment` is kept as a legacy/manual path but the
+  prompt steers the agent away from it.
+
+### Carried over from v0.5.1
 
 ### What v0.5.1 shipped
 

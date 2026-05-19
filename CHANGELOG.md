@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-05-19 — *LLM-free verbatim extraction*
+
+Architectural fix for the "no fabricated citations" promise. The LLM stops
+writing fragment text — fetch tools index verbatim content directly from
+the source API. The agent's LLM role shrinks to orchestration only
+(picking what to fetch). Expected ~10× throughput because one LLM call
+now decides 5-50 fragments instead of one fragment per call.
+
+### Changed
+
+- **`packages/agent/src/tools_registry.ts`** — `wikipedia_fetch`, `arxiv_search`, `rss_fetch`, and `web_fetch` now call `onFragment(...)` internally with verbatim content from the source API. They return a small summary to the LLM (`indexed_count` + titles) — no raw text. IDs are generated deterministically by the tool from the source slug, so the LLM never sees or composes them.
+  - `wikipedia_fetch` emits one fragment per section (verbatim from Wikipedia REST API), skipping References / See also / etc.
+  - `arxiv_search` emits one fragment per paper with the full verbatim abstract.
+  - `rss_fetch` emits one fragment per article, preferring `content:encoded` over `description`.
+  - `web_fetch` chunks the page text (200-token chunks, 40-token overlap via existing `text_chunker.ts`) and emits each chunk verbatim.
+  - `index_fragment` is preserved as a legacy/manual path for rare cases where the agent has non-source-derived text, but `SYSTEM_PROMPT` no longer instructs the agent to use it.
+- **`packages/agent/src/autonomous_extractor.ts` SYSTEM_PROMPT** rewritten. Old prompt instructed "after every fetch, call index_fragment for each item". New prompt explicitly forbids that path and tells the agent it only sees counts + titles, never raw text. Confidence levels (0.9 Wikipedia, 0.85 RSS, 0.7 arXiv/web) are now assigned by the tools, not by the LLM.
+- **`package.json`** bumped to 0.6.0.
+
+### Why this matters (Manifesto + correctness)
+
+The v0.5 path had the LLM read 8000 chars of source text and then write a "fragment". With qwen2.5:1.5b that means paraphrasing, sometimes inventing. The ed25519 signature was technically valid but only proved "node X said this", not "this is what Wikipedia said". v0.6 closes that gap: the signed text is byte-for-byte from the source API, so the signature now actually backs the citation chain.
+
+### Performance side-effect
+
+Each extraction cycle used to consume ~3-4k LLM tokens per fragment (one call to read + paraphrase 8 KB of text). It now consumes ~200-400 tokens for a fetch decision plus an explicit `finish` — independent of how many fragments the tool produces. A single Wikipedia call indexes 10-30 sections from one LLM turn. Expected steady-state ingestion on the same Ollama host: well into the hundreds of fragments per hour vs the ~5-10 we were seeing.
+
+### Migration / compatibility
+
+- Aggregator and bee require the same image version. No data migration: existing Hypercore entries continue to replicate. New fragments will have stable source-derived IDs.
+- `chunk_text` tool was removed from the TOOL_DECLARATIONS (the LLM never called it directly anyway; chunking is internal to `web_fetch`).
+
+---
+
 ## [0.5.1] — 2026-05-19 — *cross-container P2P fix + auto-deploy + boot recovery*
 
 Operational hardening release. Same v0.5 features, but the deployed stack
