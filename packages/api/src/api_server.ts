@@ -35,8 +35,15 @@ console.log(`   KnowledgeStore ready ✓`);
 
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// Pass local HTTP URL so peers can discover us and fetch our core key via HTTP.
-const localApiUrl = `http://127.0.0.1:${PORT}`;
+// URL we advertise to peers so they can fetch our coreKey via HTTP and then
+// start the native Hypercore replication. Defaults to loopback for shell
+// development (single host). In Docker / cross-host setups you MUST set
+// HIVE_API_URL to a value the peer can reach — e.g. `http://bee-1:8080` for
+// docker-compose, or `https://hive.example.com` for public deployment.
+// Wrong value here means peers receive a URL that resolves to nothing on
+// their end → HTTP /api/status fails → coreKey never exchanged → native
+// Hypercore replication never starts → fragments don't propagate.
+const localApiUrl = process.env.HIVE_API_URL ?? `http://127.0.0.1:${PORT}`;
 const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localApiUrl);
 
 // ── Register ALL p2p listeners BEFORE start() ────────────────────────────────
@@ -175,7 +182,7 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
 app.get('/api/node-info', async () => ({
   nodeId: identity.nodeId,
   port: PORT,
-  apiUrl: `http://127.0.0.1:${PORT}`,
+  apiUrl: localApiUrl,
 }));
 
 // ── POST /api/register-peer ──────────────────────────────────────────────────
@@ -544,7 +551,7 @@ if (PEER_API) {
   fetch(`${PEER_API}/api/register-peer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiUrl: `http://127.0.0.1:${PORT}` }),
+    body: JSON.stringify({ apiUrl: localApiUrl }),
     signal: AbortSignal.timeout(5_000),
   })
     .then(r => { if (r.ok) console.log(`[sync] Announced to bootstrap peer ${PEER_API}`); })

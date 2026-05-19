@@ -57,3 +57,5 @@ GEMINI.md
 tmp_test_history.js
 packages/core/test-hypercore.cjs
 packages/core/test_watch.mjs
+
+runDocker.info

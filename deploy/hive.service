@@ -1,0 +1,30 @@
+# systemd unit for the HIVE stack — boot recovery + reboot survival
+# Install: sudo cp deploy/hive.service /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now hive
+#
+# What this fixes vs `restart=unless-stopped` alone:
+#   - At server boot, this unit runs `docker compose up -d` even if the
+#     containers were removed (docker prune, manual rm, fresh volume) —
+#     restart=unless-stopped only revives EXISTING containers.
+#   - `ExecStartPre=-docker compose pull` keeps the deployed image current
+#     on each boot. The `-` prefix tolerates transient pull failures
+#     (offline boot, GHCR hiccup): if a local image exists, ExecStart
+#     still runs.
+
+[Unit]
+Description=HIVE — Decentralized P2P knowledge base
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/hive
+ExecStartPre=-/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
