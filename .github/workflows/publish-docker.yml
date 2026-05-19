@@ -74,7 +74,10 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          platforms: linux/amd64,linux/arm64
+          # amd64 only — server is x86 (Hetzner CPX22). arm64 cross-build via
+          # QEMU emulation on GH Actions x86 runners adds ~10× build time
+          # (1-2 min → 13+ min) for a target we don't deploy to.
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
