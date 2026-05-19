@@ -8,7 +8,29 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.5 — Ollama + wikipedia_fetch + light UI
+## Current state: v0.5.1 — HIVE_API_URL fix + auto-deploy + systemd recovery
+
+v0.5.1 is an operational hardening release on top of v0.5: same features,
+but the P2P replication actually works cross-container, the stack survives
+reboots, and pushes to main auto-deploy to the server.
+
+### What v0.5.1 shipped
+
+| Item | Why | Where |
+|------|-----|-------|
+| `HIVE_API_URL` env var | bee was hardcoding `http://127.0.0.1:${PORT}` as its peer-reachable URL. In Docker that resolves to *the peer's* loopback, so neither HTTP sync nor the HTTP-bootstrap of native Hypercore replication ever connected cross-container → aggregator stayed at 655 fragments while bee climbed to 2,294+ over 2 days | `packages/api/src/api_server.ts` + 3 places in `docker-compose.yml` |
+| Auto-deploy on push to main | Mirror of what cAPY has. Workflow SSHes to server (dedicated `DEPLOY_SSH_KEY` secret), pulls image, recreates stack, verifies `/api/status` | `.github/workflows/publish-docker.yml` |
+| `deploy/hive.service` systemd unit | Stack returns at boot even if containers were removed (the outage we hit: `restart=unless-stopped` doesn't save you from missing containers, only from crashed ones). `ExecStartPre=-docker compose pull` tolerates GHCR hiccups | `deploy/hive.service` |
+
+### Empirical validation after the v0.5.1 fix (2026-05-19)
+
+Before fix: aggregator `peers=0`, `[sync] Peer http://127.0.0.1:8080 unreachable` looping forever in logs, Qdrant stuck at **655** for days.
+After fix (within 90s of redeploy): `[p2p] Peer connected: b70fdf81575eab07 (total: 1)`, `Got API URL from b70fdf81575eab07: http://bee-1:8080`, `Core key fetched ... native replication started`. Qdrant went **655 → 1540** in the first 90 seconds as the backlog drained over Hypercore replication. Continues catching up live thereafter.
+
+### What v0.5.1 did NOT fix
+
+- **Indexing rate stays ~5-10 fragments/hour on Ollama CPU**. Tried switching bee-1 to Groq free tier as an acceleration, but free-tier Groq is unsuitable for this workload because (1) `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` have only 6k-12k TPM on free tier, and (2) the bee and aggregator share the same API key → they share the TPM bucket → the aggregator's query traffic eats into the bee's extraction budget, every extractor cycle 429s on rate limits. Reverted bee-1 to Ollama. The real fix is v0.6 (LLM-free extraction), not throwing more LLM at it.
+- **Aggregator's `(unhealthy)` status in `docker ps`** is cosmetic — the Dockerfile `HEALTHCHECK` curls `127.0.0.1:8080` which doesn't exist inside the aggregator container. The aggregator itself is fully operational (peers=1, replication active, queries served). Leave it; fixing the healthcheck doesn't change behaviour.
 
 All 7 modules complete. Native P2P replication fixed in v0.4. Ollama + major extraction improvements added in v0.5.
 
@@ -258,7 +280,9 @@ bash aggregator.sh
 | Signature verification on receive | Malicious node could inject unsigned data | **TODO v0.6** |
 | Replication factor ≥ 3 | Fragments may exist on < 3 BEEs | **TODO v0.6** |
 | IConsensus — fragment quality voting | No multi-agent validation | **TODO v0.6** |
-| Peer HTTP URL in Docker (127.0.0.1) | Aggregator advertises loopback — HTTP sync fallback fails cross-container | **Known** — native Hypercore replication still works |
+| ~~Peer HTTP URL in Docker (127.0.0.1)~~ | ~~Aggregator advertises loopback — HTTP sync fallback fails cross-container~~ | **Fixed v0.5.1** — `HIVE_API_URL` env var. Note: also broke native replication, not just HTTP sync — the bootstrap of native replication requires the same HTTP exchange to fetch the peer's `coreKey`. Previous docs claimed native still worked; empirically it didn't (0 `native replication started` logs before the fix). |
+| Free-tier Groq for bee extraction | bee + aggregator share the API key → share the TPM bucket. Aggregator's queries leave the bee with ~1-2k usable TPM/min, can't complete extraction cycles | **Won't fix at this layer** — real fix is v0.6 LLM-free extraction. Alternatives: separate API key per node, paid Groq Dev tier, or another provider with higher free TPM |
+| Aggregator `(unhealthy)` in `docker ps` | Dockerfile HEALTHCHECK curls `127.0.0.1:8080` which isn't bound in the aggregator container | Cosmetic — aggregator works correctly. Will tidy when touching the Dockerfile next |
 | Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.7** |
 | Token economics | No incentive layer | **TODO v0.7+** |
 | Hyperswarm DHT in Codespaces | Cross-machine needs open UDP | Expected — HTTP sync covers Codespaces |

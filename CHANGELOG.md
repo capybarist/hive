@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.1] — 2026-05-19 — *cross-container P2P fix + auto-deploy + boot recovery*
+
+Operational hardening release. Same v0.5 features, but the deployed stack
+actually works end-to-end and survives reboots without manual intervention.
+
+### Fixed
+
+- **bee advertised hardcoded `http://127.0.0.1:${PORT}` to peers.** This silently broke replication cross-container: the aggregator received the loopback URL, couldn't reach the bee, never completed the HTTP bootstrap that fetches the peer's `coreKey` — so neither HTTP sync nor native Hypercore replication ever started. Diagnosed empirically (0 `[p2p] native replication started` log entries before the fix; Qdrant stuck at 655 fragments for 2 days while the bee climbed to 2,294). Fix: `localApiUrl` now reads `process.env.HIVE_API_URL`, falls back to loopback only for shell development. `docker-compose.yml` sets it explicitly for bee-1, bee-2, and the aggregator.
+- **Previous claim in CLAUDE.md ("native Hypercore replication still works")** was wrong — corrected. The native path also depends on the HTTP bootstrap to fetch the peer's `coreKey`, so the same bug broke both.
+
+### Added
+
+- **`.github/workflows/publish-docker.yml` deploy job**: after a successful build on a push to main, SSHes to `$DEPLOY_HOST` with `$DEPLOY_SSH_KEY` (dedicated deploy key, separate from operator's personal key), runs `docker compose pull && up -d`, then curls `/api/status` to verify the aggregator came back up. ~60-90 seconds from push to live.
+- **`deploy/hive.service` systemd unit**: at server boot, runs `docker compose up -d`, recreating containers if they were removed. `ExecStartPre=-docker compose pull` (with `-` prefix) tolerates a transient GHCR error. Closes the gap that `restart=unless-stopped` leaves — that policy only restarts crashed containers, not missing ones (the HIVE outage we hit).
+
+### Tried and rejected
+
+- **bee-1 switched to Groq free tier for indexing acceleration**: 429 rate limits on every model tried (`llama-3.3-70b-versatile` 12k TPM, `llama-3.1-8b-instant` 6k TPM, `gemma2-9b-it` decommissioned). Root cause: bee and aggregator share the API key → share the TPM bucket → aggregator's query traffic consumes most of it. Reverted. Real fix is v0.6 LLM-free extraction; alternative is paying Groq Dev tier (~$30/mo) but not worth it at this stage.
+
+### Notes
+
+- Aggregator shows `(unhealthy)` in `docker ps`. Cosmetic — Dockerfile `HEALTHCHECK` curls `127.0.0.1:8080` which the aggregator container doesn't bind. The service itself is fully operational. Tracked as a Known Issue, will fix when next touching the Dockerfile.
+
+---
+
 ## [0.5.0] — 2026-05-14 — *Ollama local LLM + light theme UI*
 
 ### Added
