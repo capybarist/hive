@@ -8,7 +8,28 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.6.0 — LLM-free verbatim extraction
+## Current state: v0.6.1 — Wikipedia spider (persistent crawl queue)
+
+v0.6.1 turns the bee into an indefinite crawler. Every `wikipedia_fetch`
+emits the internal `/wiki/` links it finds into a persistent queue
+(`crawl_queue.jsonl` in the data volume). Each cycle dequeues a batch of
+5 titles from the head and processes them. The LLM stops choosing topics
+— it now just walks the queue. `topic_tree.json` is only the seed; once
+seeded, growth is geometric.
+
+`/api/crawl` exposes `queue_size`, `visited_size`, `next_in_queue`, and
+`recent_visited` for the dashboard.
+
+### Two modes inside `runAutonomousExtraction`
+
+- **Crawl mode** (default, queue non-empty): user prompt is "fetch these
+  titles in order: A, B, C, D, E". No exploration. No LLM creativity.
+  Just walk the spider's BFS frontier.
+- **Seed mode** (queue empty, first boot or post-wipe): LLM uses
+  `wikipedia_search` to find 5-10 seed titles, fetches them, finishes.
+  The fetches populate the queue → next cycle is in crawl mode.
+
+## Previous state: v0.6.0 — LLM-free verbatim extraction
 
 v0.6.0 is the architectural fix promised in the v0.5 changelog: the LLM
 stops writing fragment text. Fetch tools (`wikipedia_fetch`, `arxiv_search`,

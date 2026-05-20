@@ -35,6 +35,14 @@ export type FragInput = {
 
 export type OnFragment = (frag: FragInput) => Promise<void>;
 
+/**
+ * Optional callback fired by tools that discover new article titles worth
+ * crawling later (e.g. wikipedia_fetch extracts internal /wiki/ links).
+ * Implementation in the agent layer typically pushes them onto a CrawlQueue
+ * for processing in the next cycle.
+ */
+export type OnCrawlEnqueue = (titles: string[]) => void;
+
 // ── Tool definitions for the LLM (function-calling schema) ─────────────────
 // `as const` would over-narrow; we want the literal 'object' on `type` so
 // the array satisfies ToolDef[] from llm_provider.ts. Done via the helper.
@@ -70,6 +78,18 @@ export const TOOL_DECLARATIONS: _TDLiteral[] = [
         doi: { type: 'string', description: 'DOI to validate (e.g. "10.1038/s41586-021-03380-7")' },
       },
       required: ['doi'],
+    },
+  },
+  {
+    name: 'wikipedia_search',
+    description: 'Find Wikipedia articles related to a query — returns a list of candidate article titles to feed back into wikipedia_fetch. Use this FIRST when a topic is broad (e.g. "biodiversity") so you can explore multiple sub-articles instead of just the meta-article. Does NOT index anything by itself.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query, e.g. "biodiversity hotspots" or "stellar evolution"' },
+        limit: { type: 'number', description: 'Max related titles to return (1-15)', default: 10 },
+      },
+      required: ['query'],
     },
   },
   {
@@ -178,9 +198,11 @@ export async function executeTool(
   options: {
     embedderUrl: string;
     onFragment?: OnFragment;
+    onCrawlEnqueue?: OnCrawlEnqueue;
   },
 ): Promise<ToolResult> {
   const emit = options.onFragment ?? (async () => {});
+  const enqueueCrawl = options.onCrawlEnqueue ?? (() => {});
 
   switch (name) {
     // ─── arxiv_search: auto-indexes each paper's full abstract ───────────────
@@ -219,6 +241,40 @@ export async function executeTool(
       return { ok: true, data: { doi: args.doi, valid } };
     }
 
+    // ─── wikipedia_search: discover related articles for a query ─────────────
+    // Returns candidate titles only — does not index. The agent calls this
+    // first to enumerate sub-topics, then calls wikipedia_fetch on each title
+    // to actually index. This lets one topic produce 5-10 articles' worth of
+    // content instead of just the meta-article.
+    case 'wikipedia_search': {
+      try {
+        const query = (args.query as string).trim();
+        const limit = Math.min((args.limit as number) ?? 10, 15);
+        const encoded = encodeURIComponent(query);
+        const res = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encoded}&srlimit=${limit}&format=json&origin=*`,
+          {
+            headers: { 'User-Agent': 'HIVE/0.6 (research crawler; mailto:capy@capybaralabs.tech)' },
+            signal: AbortSignal.timeout(10_000),
+          },
+        );
+        if (!res.ok) return { ok: false, error: `Wikipedia search API: HTTP ${res.status}` };
+        const data = await res.json() as any;
+        const results = (data?.query?.search ?? []) as Array<{ title: string; snippet?: string }>;
+        const titles = results.map(r => r.title).slice(0, limit);
+        return {
+          ok: true,
+          data: {
+            query,
+            count: titles.length,
+            titles,
+          },
+        };
+      } catch (e: any) {
+        return { ok: false, error: e.message };
+      }
+    }
+
     // ─── wikipedia_fetch: auto-indexes each section verbatim ─────────────────
     case 'wikipedia_fetch': {
       try {
@@ -237,6 +293,25 @@ export async function executeTool(
         const clean = (html: string) =>
           html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+        // Extract Wikipedia internal article titles from the raw HTML BEFORE
+        // we strip tags (the spider's source of new URLs). Matches:
+        //   <a href="/wiki/Some_Title" ...>  → "Some Title"
+        // Filters out auxiliary namespaces (File:, Help:, Special:, etc.)
+        // and citation/disambiguation pages.
+        const extractLinks = (html: string): string[] => {
+          const out = new Set<string>();
+          const re = /href="\/wiki\/([^"#:?]+)"/g;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(html)) !== null) {
+            const raw = decodeURIComponent(m[1]).replace(/_/g, ' ').trim();
+            // Skip empties, anchors, list/portal pages
+            if (!raw || raw.length > 120) continue;
+            if (/^(File|Image|Template|Category|Help|Portal|Special|Wikipedia|Talk|User|Draft):/i.test(raw)) continue;
+            out.add(raw);
+          }
+          return [...out];
+        };
+
         const SKIP_SECTIONS = new Set([
           'references', 'see also', 'notes', 'external links',
           'further reading', 'bibliography', 'footnotes',
@@ -245,9 +320,12 @@ export async function executeTool(
         const articleSlug = slugify(title);
         const articleUrl = `https://en.wikipedia.org/wiki/${encoded}`;
         const indexed: string[] = [];
+        const linkAccumulator = new Set<string>();
 
         // Lead / introduction
-        const leadText = clean(data.lead?.sections?.[0]?.text ?? '').slice(0, 1200);
+        const leadHtml = data.lead?.sections?.[0]?.text ?? '';
+        for (const t of extractLinks(leadHtml)) linkAccumulator.add(t);
+        const leadText = clean(leadHtml).slice(0, 1200);
         if (leadText.length > 80) {
           await emit({
             id: `wiki_${articleSlug}_intro`,
@@ -264,7 +342,9 @@ export async function executeTool(
         for (const s of (data.remaining?.sections ?? [])) {
           const sTitle = clean(s.line ?? '');
           if (!sTitle || SKIP_SECTIONS.has(sTitle.toLowerCase())) continue;
-          const content = clean(s.text ?? '').slice(0, 1000);
+          const sectionHtml = s.text ?? '';
+          for (const t of extractLinks(sectionHtml)) linkAccumulator.add(t);
+          const content = clean(sectionHtml).slice(0, 1000);
           if (content.length < 100) continue;
           const slug = slugify(sTitle);
           await emit({
@@ -278,12 +358,19 @@ export async function executeTool(
           indexed.push(sTitle);
         }
 
+        // Feed links into the crawl queue (don't include the article we just
+        // fetched). The agent layer's CrawlQueue dedupes vs already-visited.
+        linkAccumulator.delete(title);
+        const linksFound = [...linkAccumulator];
+        enqueueCrawl(linksFound);
+
         return {
           ok: true,
           data: {
             article: title,
             indexed_count: indexed.length,
             section_titles: indexed,
+            links_discovered: linksFound.length,
           },
         };
       } catch (e: any) {

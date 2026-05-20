@@ -271,6 +271,51 @@ app.get('/api/status', async () => {
   };
 });
 
+// ── GET /api/crawl — Wikipedia spider state ─────────────────────────────────
+// Reads the persistent queue + visited files maintained by the extractor.
+// Cheap (file stat + line count) so it's safe to poll from the dashboard.
+app.get('/api/crawl', async () => {
+  const { promises: fsP } = await import('node:fs');
+  const queuePath = join(DATA_DIR, 'crawl_queue.jsonl');
+  const visitedPath = join(DATA_DIR, 'crawl_visited.jsonl');
+  async function lineCount(p: string): Promise<number> {
+    try {
+      const s = await fsP.readFile(p, 'utf8');
+      return s.split('\n').filter(l => l.trim().length > 0).length;
+    } catch {
+      return 0;
+    }
+  }
+  async function headLines(p: string, n: number): Promise<string[]> {
+    try {
+      const s = await fsP.readFile(p, 'utf8');
+      return s.split('\n').filter(l => l.trim().length > 0).slice(0, n);
+    } catch {
+      return [];
+    }
+  }
+  async function tailLines(p: string, n: number): Promise<string[]> {
+    try {
+      const s = await fsP.readFile(p, 'utf8');
+      return s.split('\n').filter(l => l.trim().length > 0).slice(-n).reverse();
+    } catch {
+      return [];
+    }
+  }
+  const [queueSize, visitedSize, nextInQueue, recentVisited] = await Promise.all([
+    lineCount(queuePath),
+    lineCount(visitedPath),
+    headLines(queuePath, 10),    // queue is FIFO — first lines are next to process
+    tailLines(visitedPath, 10),  // visited grows append — last lines are most recent
+  ]);
+  return {
+    queue_size: queueSize,
+    visited_size: visitedSize,
+    next_in_queue: nextInQueue,
+    recent_visited: recentVisited,
+  };
+});
+
 // ── GET /api/stats — aggregator summary (fragment/BEE/topic counts) ──────────
 app.get('/api/stats', async () => {
   try {
