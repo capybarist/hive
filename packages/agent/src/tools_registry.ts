@@ -276,12 +276,14 @@ export async function executeTool(
     }
 
     // ─── wikipedia_fetch: auto-indexes each section verbatim ─────────────────
+    // Uses the MediaWiki Action API (?action=parse) — the REST v1
+    // mobile-sections endpoint was decommissioned in 2026 (phab T328036).
     case 'wikipedia_fetch': {
       try {
         const title = (args.title as string).trim();
-        const encoded = encodeURIComponent(title.replace(/ /g, '_'));
+        const encodedQs = encodeURIComponent(title);
         const res = await fetch(
-          `https://en.wikipedia.org/api/rest_v1/page/mobile-sections/${encoded}`,
+          `https://en.wikipedia.org/w/api.php?action=parse&page=${encodedQs}&prop=sections%7Ctext&format=json&redirects=1&formatversion=2`,
           {
             headers: { 'User-Agent': 'HIVE/0.6 (research crawler; mailto:capy@capybaralabs.tech)' },
             signal: AbortSignal.timeout(15_000),
@@ -289,22 +291,27 @@ export async function executeTool(
         );
         if (!res.ok) return { ok: false, error: `Wikipedia API: HTTP ${res.status} for "${title}"` };
         const data = await res.json() as any;
+        if (data.error) return { ok: false, error: `Wikipedia API: ${data.error.code} ${data.error.info}` };
+
+        const parse = data.parse;
+        if (!parse?.text) return { ok: false, error: `No content for "${title}"` };
+        // formatversion=2 returns text as string directly; v1 wrapped it in {"*": ...}
+        const fullHtml: string = typeof parse.text === 'string' ? parse.text : (parse.text['*'] ?? '');
+        const sections: Array<{ line: string; anchor: string; index: string }> = parse.sections ?? [];
+        const resolvedTitle: string = parse.title ?? title;
 
         const clean = (html: string) =>
-          html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 
         // Extract Wikipedia internal article titles from the raw HTML BEFORE
         // we strip tags (the forager's source of new URLs). Matches:
         //   <a href="/wiki/Some_Title" ...>  → "Some Title"
-        // Filters out auxiliary namespaces (File:, Help:, Special:, etc.)
-        // and citation/disambiguation pages.
         const extractLinks = (html: string): string[] => {
           const out = new Set<string>();
           const re = /href="\/wiki\/([^"#:?]+)"/g;
           let m: RegExpExecArray | null;
           while ((m = re.exec(html)) !== null) {
             const raw = decodeURIComponent(m[1]).replace(/_/g, ' ').trim();
-            // Skip empties, anchors, list/portal pages
             if (!raw || raw.length > 120) continue;
             if (/^(File|Image|Template|Category|Help|Portal|Special|Wikipedia|Talk|User|Draft):/i.test(raw)) continue;
             out.add(raw);
@@ -317,14 +324,19 @@ export async function executeTool(
           'further reading', 'bibliography', 'footnotes',
         ]);
 
-        const articleSlug = slugify(title);
-        const articleUrl = `https://en.wikipedia.org/wiki/${encoded}`;
+        const articleSlug = slugify(resolvedTitle);
+        const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(resolvedTitle.replace(/ /g, '_'))}`;
         const indexed: string[] = [];
         const linkAccumulator = new Set<string>();
+        for (const t of extractLinks(fullHtml)) linkAccumulator.add(t);
 
-        // Lead / introduction
-        const leadHtml = data.lead?.sections?.[0]?.text ?? '';
-        for (const t of extractLinks(leadHtml)) linkAccumulator.add(t);
+        // Split the HTML by H2 boundaries. Everything before the first H2 is
+        // the lead. Each subsequent chunk is one top-level section. We
+        // deliberately ignore H3+ subsections to keep fragment count
+        // manageable — the chunk for a section will include its sub-headings
+        // inline.
+        const parts = fullHtml.split(/<h2[^>]*>/);
+        const leadHtml = parts[0] ?? '';
         const leadText = clean(leadHtml).slice(0, 1200);
         if (leadText.length > 80) {
           await emit({
@@ -333,18 +345,22 @@ export async function executeTool(
             source: articleUrl,
             doi: null,
             confidence: 0.9,
-            title: `${title} — Introduction`,
+            title: `${resolvedTitle} — Introduction`,
           });
           indexed.push('Introduction');
         }
 
-        // Body sections
-        for (const s of (data.remaining?.sections ?? [])) {
-          const sTitle = clean(s.line ?? '');
+        // Map remaining chunks to top-level section titles. `sections` from
+        // the API is a flat list across H2/H3/H4; pick the toclevel=1 entries
+        // (top-level) which correspond to the H2 splits we just made.
+        const topLevel = sections.filter((s: any) => s.toclevel === 1);
+        for (let i = 0; i < parts.length - 1; i++) {
+          const chunk = parts[i + 1];
+          const sectionMeta = topLevel[i];
+          if (!sectionMeta) continue;
+          const sTitle = clean(sectionMeta.line ?? '');
           if (!sTitle || SKIP_SECTIONS.has(sTitle.toLowerCase())) continue;
-          const sectionHtml = s.text ?? '';
-          for (const t of extractLinks(sectionHtml)) linkAccumulator.add(t);
-          const content = clean(sectionHtml).slice(0, 1000);
+          const content = clean(chunk).slice(0, 1000);
           if (content.length < 100) continue;
           const slug = slugify(sTitle);
           await emit({
@@ -353,13 +369,13 @@ export async function executeTool(
             source: articleUrl,
             doi: null,
             confidence: 0.9,
-            title: `${title} — ${sTitle}`,
+            title: `${resolvedTitle} — ${sTitle}`,
           });
           indexed.push(sTitle);
         }
 
-        // Feed links into the crawl queue (don't include the article we just
-        // fetched). The agent layer's CrawlQueue dedupes vs already-visited.
+        // Feed links into the crawl queue (drop the article we just fetched).
+        linkAccumulator.delete(resolvedTitle);
         linkAccumulator.delete(title);
         const linksFound = [...linkAccumulator];
         enqueueCrawl(linksFound);
@@ -367,7 +383,7 @@ export async function executeTool(
         return {
           ok: true,
           data: {
-            article: title,
+            article: resolvedTitle,
             indexed_count: indexed.length,
             section_titles: indexed,
             links_discovered: linksFound.length,
