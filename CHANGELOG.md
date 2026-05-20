@@ -5,10 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.6.1] — 2026-05-19 — *Wikipedia spider: persistent crawl queue*
+## [0.6.1] — 2026-05-19 — *Wikipedia forager: persistent crawl queue*
 
 Turns the bee from a "process my assigned topics once" extractor into an
-indefinite crawler — like the spider of a search engine. Each indexed
+indefinite crawler — like the forager of a search engine. Each indexed
 Wikipedia article emits its internal links into a persistent queue, and
 every subsequent cycle drains a batch from the head of that queue. The
 topic_tree.json is now just the seed; once seeded, the bee grows
@@ -22,14 +22,14 @@ indefinitely without needing more LLM creativity to think up topics.
   Deliberately NOT in Hypercore: this is local bookkeeping, not source-of-truth content. Losing it just means re-discovering links (cheap). Max size capped at 50k titles by default so memory doesn't grow unbounded.
 - **`wikipedia_fetch`** now parses every internal `/wiki/<title>` link out of the article's HTML (lead + body sections) and emits them via the new `onCrawlEnqueue` callback. Filters out auxiliary namespaces (File:, Help:, Special:, Category:, etc.).
 - **`wikipedia_search`** tool — search the Wikipedia API for related titles to a query. Returns title list only (does not index). Used in "seed mode" to populate the queue when it's empty at first boot.
-- **`/api/crawl`** endpoint — reports `queue_size`, `visited_size`, `next_in_queue`, `recent_visited`. The capybarahome dashboard polls this to show spider progress.
+- **`/api/crawl`** endpoint — reports `queue_size`, `visited_size`, `next_in_queue`, `recent_visited`. The capybarahome dashboard polls this to show forager progress.
 
 ### Changed
 
 - **`runAutonomousExtraction`** has two modes:
   - **Crawl mode** (default once the queue has content): dequeue up to 5 titles, build the user prompt as "fetch these in order", and let the LLM walk through them. The LLM no longer decides what to fetch — it follows the queue.
   - **Seed mode** (only when the queue is empty — first boot / fresh wipe): the LLM uses `wikipedia_search` to discover seed titles, then `wikipedia_fetch` on each. Subsequent cycles automatically transition to crawl mode.
-- **`SYSTEM_PROMPT`** rewritten to reflect spider semantics: "drain the queue, do not deviate, do not search if the queue already has work."
+- **`SYSTEM_PROMPT`** rewritten to reflect forager semantics: "drain the queue, do not deviate, do not search if the queue already has work."
 - **`executeTool` signature** extended with optional `onCrawlEnqueue: (titles: string[]) => void`. Currently only `wikipedia_fetch` uses it. `arxiv_search` and `rss_fetch` don't (their domains aren't browseable graphs).
 
 ### Why this matters

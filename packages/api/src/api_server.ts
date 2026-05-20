@@ -271,7 +271,7 @@ app.get('/api/status', async () => {
   };
 });
 
-// ── GET /api/crawl — Wikipedia spider state ─────────────────────────────────
+// ── GET /api/crawl — Wikipedia forager state ─────────────────────────────────
 // On a bee: reads the local persistent queue + visited files.
 // On the aggregator: proxies to the peer bee (the aggregator itself doesn't
 // crawl — it only ingests fragments via Hypercore replication). This lets

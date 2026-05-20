@@ -1,43 +1,24 @@
-import { KnowledgeStore, loadOrCreateIdentity, createLLMProvider } from '@hive/core';
-import type { LLMMessage, MessagePart } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
-import { TOOL_DECLARATIONS, executeTool, resetSeenTitles } from './tools_registry.js';
+import { executeTool, resetSeenTitles } from './tools_registry.js';
 import { CrawlQueue } from './crawl_queue.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
 const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-const SYSTEM_PROMPT = `You are HIVE's autonomous knowledge extraction agent. You run fully autonomously — NEVER ask for user input, NEVER ask for clarification, NEVER wait for a response. If a tool fails, immediately try the next tool without commenting.
-
-You operate as a Wikipedia-style spider. Each cycle the runtime hands you a small queue of article titles to process. Your job is to call wikipedia_fetch on each one, in order, until the queue is drained OR your budget is near exhausted. Every fetched article automatically adds its internal Wikipedia links to a persistent crawl queue that future cycles will consume — that is how HIVE grows indefinitely. You do not have to plan exploration; the queue does it for you.
-
-You only deviate from queue-draining in two cases:
-  1. Queue is empty (rare — only at first boot or after a wipe). Then call wikipedia_search(topic_keywords, limit=10) to seed 5-10 starting titles, then wikipedia_fetch each one.
-  2. The topic is scientific. After the queue is drained you MAY call arxiv_search(query) once to add academic depth.
-
-Tools (the fetch ones do their own indexing — you never write text):
-- wikipedia_fetch(title): fetches a Wikipedia article, indexes every section verbatim, AND enqueues every internal link it finds for future cycles. This is your primary tool — call it once per queued title.
-- wikipedia_search(query, limit): SEARCH-only. Returns related Wikipedia titles. Does NOT index. Use only to seed when the queue is empty.
-- arxiv_search(query, limit): searches arXiv and indexes each paper's abstract verbatim. Use after queue drained for scientific topics.
-- rss_fetch(url, limit): RSS/Atom feed → indexes each article verbatim. Only if a known feed URL is supplied.
-- web_fetch(url): non-Wikipedia URL → indexes chunks verbatim. Avoid unless you need a very specific page.
-- finish(summary, fragments_count): end the session when budget exhausts.
-
-What you DO NOT do:
-  - Do NOT call wikipedia_search if the queue already has titles to process — drain it first.
-  - Do NOT call index_fragment after a fetch — the fetch tools index automatically.
-  - Do NOT read the section text from the fetch response — you only see counts + titles + links_discovered.
-  - Do NOT skip queue items "because the topic looks unrelated". The spider crawls; the embedder filters at query time.
-  - Do NOT generate IDs or paraphrase text — the tools generate stable IDs from the source.
-
-Workflow per turn:
-  - Pick the next queued title (provided in the user message)
-  - Call wikipedia_fetch(that title)
-  - Move on to the next title without commentary
-  - When all queued titles are done OR budget is near exhausted, call finish()`;
+// HIVE forager — a bee that goes out to bring knowledge back to the colmena.
+//
+// In v0.6.1 we removed the LLM from this loop entirely. The previous design
+// asked the LLM (qwen2.5:1.5b in our deployment) to orchestrate "look at the
+// queue, fetch the next title, repeat". Empirically it would call
+// wikipedia_search and then narrate "Please proceed with the next cycle"
+// instead of actually fetching, or pass arrays where wikipedia_fetch wanted
+// a string. The crawl flow is purely mechanical — drain queue → fetch →
+// enqueue links — so we now run it as straight code. The LLM is reserved for
+// /api/query synthesis (a different code path in the aggregator).
 
 export type { BudgetConfig } from './budget_controller.js';
 
@@ -53,9 +34,12 @@ export async function runAutonomousExtraction(
   existingStore?: KnowledgeStore,
   embedderUrlOverride?: string,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
+  // onLLMHealth kept in signature for backwards-compat with old callers
+  // (api_server.ts passes it). We always report "ok" since this path no
+  // longer touches the LLM.
   onLLMHealth?: (ok: boolean) => void,
 ): Promise<ExtractionResult> {
-  const provider = createLLMProvider();
+  onLLMHealth?.(true);
 
   const effectiveEmbedderUrl = embedderUrlOverride ?? EMBEDDER_URL;
   const budget = new BudgetController({ ...DEFAULT_BUDGET, ...budgetConfig });
@@ -78,7 +62,7 @@ export async function runAutonomousExtraction(
   // Reset per-session title dedup (prevents same article from two sources in one cycle)
   resetSeenTitles();
 
-  // ── Persistent crawl queue (Wikipedia spider) ───────────────────────────────
+  // ── Persistent crawl queue (Wikipedia forager) ───────────────────────────────
   // Loaded once per cycle. We pull a small batch off the head, hand those to
   // the LLM as the cycle's work, and any new links wikipedia_fetch discovers
   // get enqueued for future cycles. The queue dedupes against the visited set
@@ -164,48 +148,78 @@ export async function runAutonomousExtraction(
     onIndexed?.({ id: frag.id, title: frag.title, source: frag.source });
   };
 
-  // Build the user message. If the queue has work, the queue is the
-  // objective — the LLM just walks through titles. If empty, fall back
-  // to the agent's natural-language objective (seed-mode).
-  const objectiveText = batchTitles.length > 0
-    ? [
-        `Crawl queue has ${queueSummary.queue} pending Wikipedia titles after this batch was reserved for you.`,
-        `Visited so far: ${queueSummary.visited} unique titles.`,
-        ``,
-        `Process THESE TITLES IN ORDER by calling wikipedia_fetch on each one.`,
-        `Do not search, do not deviate — just fetch:`,
-        ...batchTitles.map(t => `  - ${t}`),
-        ``,
-        `Each wikipedia_fetch automatically indexes verbatim and grows the crawl`,
-        `queue. When you've processed all titles above, call finish().`,
-      ].join('\n')
-    : [
-        `The crawl queue is empty (first-boot or post-wipe). Seed it.`,
-        ``,
-        `Research objective for SEEDING ONLY: ${objective}`,
-        ``,
-        `Step 1: call wikipedia_search(query, limit=10) ONCE to discover seed titles.`,
-        `Step 2: call wikipedia_fetch on each returned title.`,
-        `Step 3: call finish(). Subsequent cycles will use the populated queue.`,
-      ].join('\n');
-
-  const messages: LLMMessage[] = [
-    { role: 'user', parts: [{ type: 'text', text: objectiveText }] },
-  ];
-
-  console.log(`\n🤖 Autonomous extractor starting`);
-  if (batchTitles.length > 0) {
-    console.log(`   Crawl mode — batch: ${batchTitles.length} titles | queue: ${queueSummary.queue} | visited: ${queueSummary.visited}`);
-  } else {
-    console.log(`   Seed mode (queue empty) — Objective: ${objective}`);
-  }
-  console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min\n`);
-
   // Crawler callback: tools (mainly wikipedia_fetch) feed discovered titles here.
   const onCrawlEnqueue = (titles: string[]) => {
     const added = crawlQueue.enqueueMany(titles);
     if (added > 0) console.log(`  [queue] +${added} new titles (size now ${crawlQueue.size()})`);
   };
+
+  // ── Direct-mode crawler (NO LLM) ────────────────────────────────────────────
+  // The 1.5B Ollama model was unreliable as an orchestrator: it called
+  // wikipedia_search, then narrated about "next cycle" instead of fetching,
+  // or passed wrong argument shapes to wikipedia_fetch. The crawler is purely
+  // mechanical (drain queue → fetch each → enqueue links) so we run it
+  // deterministically and skip the LLM altogether. Query synthesis still uses
+  // the LLM in the aggregator — that's a different code path.
+  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM)`);
+  if (batchTitles.length === 0) {
+    console.log(`   Queue empty — seeding via wikipedia_search("${objective.slice(0, 60)}...")`);
+    const seedResult = await executeTool('wikipedia_search', { query: objective, limit: 10 }, {
+      embedderUrl: effectiveEmbedderUrl,
+      onFragment,
+      onCrawlEnqueue,
+    });
+    if (seedResult.ok && (seedResult.data as any)?.titles) {
+      const titles = (seedResult.data as any).titles as string[];
+      crawlQueue.enqueueMany(titles);
+      console.log(`   Seeded queue with ${titles.length} titles from search`);
+    } else {
+      console.warn(`   Seed search failed: ${seedResult.error ?? 'no results'}`);
+    }
+    // Now refill our batch from the freshly-seeded queue
+    const seededBatch = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
+    batchTitles.push(...seededBatch);
+  }
+
+  console.log(`   Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
+  console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min\n`);
+
+  // Drain the batch deterministically — one wikipedia_fetch per title.
+  for (const title of batchTitles) {
+    const check = budget.exhausted();
+    if (check.yes) {
+      console.log(`[budget] Exhausted: ${check.reason}`);
+      finalSummary = `Budget exhausted (${check.reason}). Indexed ${fragmentsIndexed} fragments.`;
+      break;
+    }
+    console.log(`  [fetch] wikipedia_fetch("${title}")`);
+    try {
+      const result = await executeTool('wikipedia_fetch', { title }, {
+        embedderUrl: effectiveEmbedderUrl,
+        onFragment,
+        onCrawlEnqueue,
+      });
+      if (!result.ok) {
+        console.warn(`  [fetch] failed for "${title}": ${result.error}`);
+      } else {
+        const d = result.data as any;
+        console.log(`  [fetch] "${title}" → indexed ${d?.indexed_count ?? 0} sections, discovered ${d?.links_discovered ?? 0} links`);
+      }
+    } catch (e: any) {
+      console.warn(`  [fetch] exception for "${title}": ${e.message}`);
+    }
+  }
+
+  if (!finalSummary) {
+    finalSummary = `Crawl cycle complete. Indexed ${fragmentsIndexed} new fragments. Queue: ${crawlQueue.size()}, visited: ${crawlQueue.visitedSize()}.`;
+  }
+  console.log(`\n[done] ${finalSummary}`);
+
+  await crawlQueue.flush();
+  if (ownStore) await store.close();
+  return { fragmentsIndexed, summary: finalSummary, budget: budget.summary() };
+}
+
 
   let iterations = 0;
   const MAX_ITERATIONS = 20;

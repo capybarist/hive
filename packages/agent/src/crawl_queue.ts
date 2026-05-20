@@ -4,7 +4,7 @@
  * The autonomous extractor uses this to crawl Wikipedia indefinitely:
  * each indexed article emits its internal links into the queue, and on
  * each cycle the agent dequeues a batch and fetches them. Like a search
- * engine spider, with `topic_tree.json` as the initial seed.
+ * engine forager, with `topic_tree.json` as the initial seed.
  *
  * Storage model — deliberately simple, not Hypercore:
  *   - In-memory Set<string> of titles, ordered by insertion.

@@ -294,7 +294,7 @@ export async function executeTool(
           html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
         // Extract Wikipedia internal article titles from the raw HTML BEFORE
-        // we strip tags (the spider's source of new URLs). Matches:
+        // we strip tags (the forager's source of new URLs). Matches:
         //   <a href="/wiki/Some_Title" ...>  → "Some Title"
         // Filters out auxiliary namespaces (File:, Help:, Special:, etc.)
         // and citation/disambiguation pages.

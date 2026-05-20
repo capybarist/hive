@@ -8,7 +8,7 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.6.1 — Wikipedia spider (persistent crawl queue)
+## Current state: v0.6.1 — Wikipedia forager (persistent crawl queue)
 
 v0.6.1 turns the bee into an indefinite crawler. Every `wikipedia_fetch`
 emits the internal `/wiki/` links it finds into a persistent queue
@@ -24,7 +24,7 @@ seeded, growth is geometric.
 
 - **Crawl mode** (default, queue non-empty): user prompt is "fetch these
   titles in order: A, B, C, D, E". No exploration. No LLM creativity.
-  Just walk the spider's BFS frontier.
+  Just walk the forager's BFS frontier.
 - **Seed mode** (queue empty, first boot or post-wipe): LLM uses
   `wikipedia_search` to find 5-10 seed titles, fetches them, finishes.
   The fetches populate the queue → next cycle is in crawl mode.
