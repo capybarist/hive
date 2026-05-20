@@ -163,8 +163,14 @@ export async function runAutonomousExtraction(
   // the LLM in the aggregator — that's a different code path.
   console.log(`\n🤖 Autonomous extractor starting (direct, no LLM)`);
   if (batchTitles.length === 0) {
-    console.log(`   Queue empty — seeding via wikipedia_search("${objective.slice(0, 60)}...")`);
-    const seedResult = await executeTool('wikipedia_search', { query: objective, limit: 10 }, {
+    // Objectives are verbose LLM prompts like `Find recent content about
+    // "Biodiversity and Conservation" (...)`. Wikipedia's search wants a
+    // short noun phrase — extract the quoted topic name, or fall back to
+    // the first ~50 chars if no quotes are present.
+    const quoted = objective.match(/"([^"]+)"/);
+    const searchQuery = quoted ? quoted[1] : objective.slice(0, 60);
+    console.log(`   Queue empty — seeding via wikipedia_search("${searchQuery}")`);
+    const seedResult = await executeTool('wikipedia_search', { query: searchQuery, limit: 10 }, {
       embedderUrl: effectiveEmbedderUrl,
       onFragment,
       onCrawlEnqueue,
