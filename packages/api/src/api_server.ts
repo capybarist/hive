@@ -272,9 +272,30 @@ app.get('/api/status', async () => {
 });
 
 // ── GET /api/crawl — Wikipedia spider state ─────────────────────────────────
-// Reads the persistent queue + visited files maintained by the extractor.
-// Cheap (file stat + line count) so it's safe to poll from the dashboard.
+// On a bee: reads the local persistent queue + visited files.
+// On the aggregator: proxies to the peer bee (the aggregator itself doesn't
+// crawl — it only ingests fragments via Hypercore replication). This lets
+// the public dashboard query one URL regardless of where the crawler is.
 app.get('/api/crawl', async () => {
+  // Aggregator → proxy to peer bee
+  if (HIVE_MODE === 'aggregator') {
+    const peerUrl = process.env.HIVE_PEER ?? '';
+    if (!peerUrl) {
+      return { error: 'no peer configured', mode: HIVE_MODE };
+    }
+    try {
+      const res = await fetch(`${peerUrl}/api/crawl`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return { error: `peer ${res.status}`, mode: HIVE_MODE };
+      const data = await res.json() as object;
+      return { ...data, source_peer: peerUrl };
+    } catch (e: any) {
+      return { error: e.message, mode: HIVE_MODE };
+    }
+  }
+
+  // Bee → read local queue files
   const { promises: fsP } = await import('node:fs');
   const queuePath = join(DATA_DIR, 'crawl_queue.jsonl');
   const visitedPath = join(DATA_DIR, 'crawl_visited.jsonl');
