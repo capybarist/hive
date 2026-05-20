@@ -18,11 +18,31 @@ class VectorIndex:
         self._next_label = 0
 
     def add(self, id: str, vector: np.ndarray, metadata: dict | None = None) -> None:
+        # Upsert semantics: if this id was already indexed (re-hydration after
+        # container restart, supersede, or forager bootstrap re-fetch), update
+        # the metadata but skip re-adding to usearch — the index already has
+        # the vector under the old label, and usearch refuses duplicate keys.
+        existing_label = self._id_to_label.get(id)
+        if existing_label is not None:
+            self._meta[existing_label] = {"id": id, **(metadata or {})}
+            return
+        # Pick the next free label. If the underlying usearch index was loaded
+        # from disk while _next_label was reset to 0 (meta.json missing or
+        # out of sync), the C++ index will reject the label as duplicate.
+        # Retry with larger labels until usearch accepts.
         label = self._next_label
+        for _ in range(5):
+            try:
+                self._index.add(label, vector.astype(np.float32))
+                break
+            except Exception as e:
+                if "Duplicate" in str(e):
+                    label = max(label + 1, len(self._index))
+                    continue
+                raise
         self._id_to_label[id] = label
         self._meta[label] = {"id": id, **(metadata or {})}
-        self._index.add(label, vector.astype(np.float32))
-        self._next_label += 1
+        self._next_label = label + 1
 
     def query(self, vector: np.ndarray, k: int = 5) -> list[dict]:
         if self._next_label == 0:
