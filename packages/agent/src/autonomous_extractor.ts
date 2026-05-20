@@ -175,16 +175,28 @@ export async function runAutonomousExtraction(
       onFragment,
       onCrawlEnqueue,
     });
+    let seedTitles: string[] = [];
     if (seedResult.ok && (seedResult.data as any)?.titles) {
-      const titles = (seedResult.data as any).titles as string[];
-      crawlQueue.enqueueMany(titles);
-      console.log(`   Seeded queue with ${titles.length} titles from search`);
+      seedTitles = (seedResult.data as any).titles as string[];
+      const added = crawlQueue.enqueueMany(seedTitles);
+      console.log(`   Seeded queue with ${added}/${seedTitles.length} new titles (rest already visited)`);
     } else {
       console.warn(`   Seed search failed: ${seedResult.error ?? 'no results'}`);
     }
     // Now refill our batch from the freshly-seeded queue
     const seededBatch = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
     batchTitles.push(...seededBatch);
+
+    // Fallback: if seed returned only visited titles, the BFS frontier is
+    // stuck. Re-fetch one of the seeded (visited) articles anyway — its
+    // outgoing /wiki/ links are the lifeline that unblocks the queue.
+    // wikipedia_fetch's onFragment dedups by id so re-indexing is harmless;
+    // the side-effect we want is link discovery via enqueueCrawl.
+    if (batchTitles.length === 0 && seedTitles.length > 0) {
+      const bootstrap = seedTitles[0];
+      console.log(`   All ${seedTitles.length} seed titles already visited — bootstrap re-fetch of "${bootstrap}" to discover new links`);
+      batchTitles.push(bootstrap);
+    }
   }
 
   console.log(`   Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
