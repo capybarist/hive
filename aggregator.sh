@@ -42,22 +42,50 @@ DATA_DIR="${HIVE_DATA_DIR:-$HOME/.hive-aggregator}"
 BOOTSTRAP="${HIVE_PEER:-}"
 QDRANT_URL="${QDRANT_URL:-}"
 
-# ── Qdrant — start via Docker if not already running ─────────────────────────
+# ── Qdrant — wait for it instead of falling back silently ───────────────────
+# v0.6.4.4: if QDRANT_URL was set explicitly (Docker Compose path, env-driven
+# deployment) we wait up to 60s for it to become ready. Falling back to HNSW
+# silently in that case loses the persistent index (the bug we hit when the
+# aggregator restarted faster than Qdrant on Hetzner).
+#
+# If QDRANT_URL is empty, we use the legacy auto-start path: try localhost,
+# auto-launch via docker if available, otherwise HNSW.
+QDRANT_URL_EXPLICIT="${QDRANT_URL:-}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
-if curl -s --max-time 2 "$QDRANT_URL/healthz" &>/dev/null; then
+
+qdrant_ready() {
+  # /readyz returns 200 only when storage is fully open. /healthz is too eager.
+  curl -s --max-time 2 -o /dev/null -w '%{http_code}' "$QDRANT_URL/readyz" 2>/dev/null | grep -q '^200$' \
+    || curl -s --max-time 2 "$QDRANT_URL/healthz" 2>/dev/null | grep -q 'healthz check passed'
+}
+
+if qdrant_ready; then
   ok "Qdrant already running at $QDRANT_URL"
+elif [ -n "$QDRANT_URL_EXPLICIT" ]; then
+  # Explicit URL — wait, don't auto-start, don't fall back silently.
+  echo -n "  Waiting for Qdrant at $QDRANT_URL"
+  for i in $(seq 1 60); do
+    qdrant_ready && break
+    echo -n "."; sleep 1
+  done
+  echo ""
+  if qdrant_ready; then
+    ok "Qdrant ready"
+  else
+    err "Qdrant at $QDRANT_URL never became ready after 60s — aborting to avoid losing the persistent index"
+  fi
 elif command -v docker &>/dev/null; then
   run "Starting Qdrant via Docker..."
   docker run -d --rm -p 6333:6333 qdrant/qdrant > /dev/null 2>&1
   echo -n "  Waiting for Qdrant"
   for i in $(seq 1 20); do
-    curl -s --max-time 1 "$QDRANT_URL/healthz" &>/dev/null && break
+    qdrant_ready && break
     echo -n "."; sleep 1
   done
   echo ""
-  curl -s --max-time 1 "$QDRANT_URL/healthz" &>/dev/null \
+  qdrant_ready \
     && ok "Qdrant ready" \
-    || { err "Qdrant failed to start — falling back to HNSW"; QDRANT_URL=""; }
+    || { run "Qdrant failed to start — falling back to HNSW"; QDRANT_URL=""; }
 else
   run "Docker not available — using HNSW backend (set QDRANT_URL to use Qdrant)"
   QDRANT_URL=""

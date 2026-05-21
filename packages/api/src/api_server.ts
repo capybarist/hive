@@ -3,7 +3,6 @@ import cors from '@fastify/cors';
 import staticPlugin from '@fastify/static';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
 import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry, isLLMConfigured, validateLLMKey } from '@hive/core';
@@ -36,6 +35,29 @@ const LEGACY_PEER_API = process.env.HIVE_PEER ?? '';
 if (LEGACY_PEER_API) {
   console.warn(`[deprecated] HIVE_PEER=${LEGACY_PEER_API} ignored since v0.6.4 — discovery is Hyperswarm-only. Unset this env var to silence this warning.`);
 }
+// Runtime overrides set via `POST /api/config`. Stored under the data volume
+// so they survive container recreates. Loaded before any LLM check so the
+// /api/config-set provider takes effect immediately on next boot without
+// needing to edit the host's .env. See v0.6.4.3.
+const RUNTIME_ENV_PATH = join(DATA_DIR, '.runtime.env');
+try {
+  const fs = await import('node:fs');
+  if (fs.existsSync(RUNTIME_ENV_PATH)) {
+    const raw = fs.readFileSync(RUNTIME_ENV_PATH, 'utf8');
+    let applied = 0;
+    for (const line of raw.split('\n')) {
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (!m) continue;
+      const [, key, value] = m;
+      // Only override LLM-related keys — anything else stays under host control.
+      if (!/^LLM_/.test(key)) continue;
+      process.env[key] = value;
+      applied++;
+    }
+    if (applied > 0) console.log(`[config] Applied ${applied} runtime override(s) from ${RUNTIME_ENV_PATH}`);
+  }
+} catch { /* runtime env load failed — fall back to docker env */ }
+
 const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
 const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
 const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
@@ -547,15 +569,22 @@ app.post<{ Body: { provider: string; apiKey: string; model?: string } }>('/api/c
   if (model?.trim()) process.env.LLM_MODEL = model.trim();
   llmHealthy = true; // validation already passed above
 
-  const envPath = resolve(join(__dirname, '../../../.env'));
+  // Persist under the data volume (mounted) instead of /hive/.env (ephemeral).
+  // Loaded automatically on next boot — see the RUNTIME_ENV_PATH loader at
+  // the top of this file. Fixes the bug where UI-set provider was lost on
+  // container recreate (v0.6.4.3).
   try {
+    const fs = await import('node:fs/promises');
     let content = '';
-    try { content = await readFile(envPath, 'utf8'); } catch {}
+    try { content = await fs.readFile(RUNTIME_ENV_PATH, 'utf8'); } catch { /* first write */ }
     content = upsertEnvLine(content, 'LLM_PROVIDER', provider);
     content = upsertEnvLine(content, 'LLM_API_KEY', apiKey.trim());
     if (model?.trim()) content = upsertEnvLine(content, 'LLM_MODEL', model.trim());
-    await writeFile(envPath, content, 'utf8');
-  } catch { /* .env write failed — in-memory update still works for this session */ }
+    await fs.writeFile(RUNTIME_ENV_PATH, content, 'utf8');
+    await fs.chmod(RUNTIME_ENV_PATH, 0o600).catch(() => {});   // best-effort: don't expose API key
+  } catch (e: any) {
+    console.warn(`[config] Could not persist runtime override to ${RUNTIME_ENV_PATH}: ${e?.message ?? e}`);
+  }
 
   await startExtractionIfReady();
   return { ok: true, provider };

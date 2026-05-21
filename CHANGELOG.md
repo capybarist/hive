@@ -5,6 +5,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.4.4] — 2026-05-21 — *Runtime persistence + Qdrant race-condition fix*
+
+Two production bugs surfaced today on Hetzner, both fixed in this patch.
+
+### Fixed
+
+- **0.6.4.3** — `POST /api/config` (the UI's "set provider" button) was
+  writing the resulting `LLM_PROVIDER` / `LLM_API_KEY` to `/hive/.env`
+  *inside the container*, which is not a mounted path. On the next
+  `docker compose up -d` (or any container recreate) the override was
+  lost and the bee fell back to whatever `LLM_PROVIDER` the host's
+  `docker-compose.yml` env-var resolved to. We hit this today after
+  adding bee-2: the original Gemini override vanished and bees were
+  starting in ollama-fallback mode while the operator (and memory)
+  said "Currently Groq". Fixed by persisting to
+  `${HIVE_DATA_DIR}/.runtime.env` (mounted volume) and loading it at
+  boot. Only `LLM_*` keys are honoured from the runtime file —
+  anything else stays under host `.env` control.
+- **0.6.4.4** — Aggregator `depends_on: qdrant: condition: service_started`
+  did not actually wait for Qdrant to accept connections. Qdrant takes
+  a few seconds to open its storage after process start, so the
+  aggregator's `aggregator.sh` would call `curl qdrant:6333/healthz`,
+  get a connection refused, **silently fall through to the HNSW
+  in-process backend**, and serve from an empty index — while the real
+  collection with 34k+ persistent vectors sat untouched on disk. Fixed:
+   1. Added a `healthcheck` on the qdrant service in `docker-compose.yml`
+      that polls `/readyz` (not `/healthz` — see below).
+   2. Aggregator now waits via `condition: service_healthy`.
+   3. `aggregator.sh` distinguishes "QDRANT_URL was set explicitly"
+      (wait up to 60s, hard-fail if never ready — never silently
+      lose persistence) from "QDRANT_URL was empty" (legacy
+      auto-start path, may fall back to HNSW).
+   4. The readiness probe prefers `/readyz` over `/healthz` because
+      `/healthz` returns 200 while collections are still loading from
+      disk on cold start — the exact behaviour that caused the
+      silent fallback.
+
+### Known issue (backlog v0.6.4.5)
+
+`bee` HNSW index shows `indexed: <number much smaller than Hypercore length>`
+after a container recreate. The Hypercore (source of truth) has the
+full history; the local HNSW does not finish rehydrating because the
+underlying `usearch` library rejects duplicate label adds during
+replay. Tracked. Does not affect the aggregator (Qdrant has upsert
+semantics built-in).
+
+---
+
+## [0.6.4.2] — 2026-05-21 — *Ollama opt-in, Gemini default*
+
+The Ollama container was eating ~2 GB of RAM in deployments that
+already had a cloud LLM key configured — observed in production
+where adding a second BEE on a 4 GB VPS caused OOM despite ollama
+being completely unused.
+
+### Changed
+
+- `docker-compose.yml`: ollama + ollama-init moved behind the
+  `ollama` profile. They no longer start by default. Activate with:
+  `docker compose --profile ollama up -d`.
+- Bees and aggregator no longer have a hard `depends_on: ollama` —
+  ollama is now a peer service, not a dependency.
+- Default `LLM_PROVIDER` / `LLM_MODEL` in compose: `gemini` /
+  `gemini-2.5-flash-lite` (reflects the actual operating reality of
+  most installs since v0.6).
+- `.env.example`: rewritten to lead with Gemini, document the other
+  cloud providers as one-liners, and demote Ollama to "opt in if
+  you want fully-local LLM" with the profile activation command.
+
+---
+
 ## [0.6.4] — 2026-05-21 — *100% P2P: zero HTTP between nodes*
 
 The bee-to-bee channel is now exclusively Hyperswarm + Hypercore. No

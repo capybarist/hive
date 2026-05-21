@@ -55,6 +55,16 @@ services:
       - qdrant-data:/qdrant/storage
     ports:
       - "6333:6333"
+    healthcheck:
+      # Qdrant exposes /readyz which returns 200 only once the storage is open
+      # and ready to serve. /healthz is too eager — it returns 200 while the
+      # collections are still loading from disk on cold start, which causes
+      # the aggregator to fall through to its HNSW fallback (v0.6.4.4 bug).
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:6333/readyz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   # ── Ollama — local LLM (OPTIONAL, opt-in via profile) ────────────────────────
   # Off by default since v0.6.4.2: most operators run with a cloud LLM
@@ -182,7 +192,7 @@ services:
       - aggregator-data:/hive/data
     depends_on:
       qdrant:
-        condition: service_started
+        condition: service_healthy   # v0.6.4.4: wait until Qdrant is actually ready
       bee-1:
         condition: service_started
 
