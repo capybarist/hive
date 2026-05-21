@@ -217,23 +217,35 @@ Any node can become an aggregator — it will automatically sync all existing fr
 
 ---
 
-## How it works
+## How it works (v0.6.4)
 
 ```
 BEE starts
-  → Reads data/topic_tree.json (95 topics, 9 domains)
-  → Scans peers via HTTP: which topics are already covered
-  → Claims uncovered topics (random jitter to avoid races)
-  → Every 5 min: LLM agent extracts fragments for each topic
-      → Wikipedia first (stable facts)
-      → RSS feeds for news topics
-      → arXiv for academic/scientific topics
-  → Fragments saved to Hypercore (append-only, ed25519-signed)
-  → Hypercore replicates to peers natively
-  → HTTP sync as fallback for restrictive network environments
-  → Before indexing: checks Hypercore for existing fragment (dedup)
-      → Fresh content (wiki 7d, rss 24h, arxiv 30d): skip
-      → Stale content: supersede() — marks old, indexes new
+  → Loads ed25519 identity from data/identity/node.json (created on first boot)
+  → Opens local Hypercore (fragments) + Hypercore (claims), same Corestore
+  → Joins Hyperswarm DHT on topic = sha256("hive-network-v0.1")
+
+On every peer connection:
+  → store.replicate(socket) opens native Hypercore replication
+  → Protomux channel `hive/meta/v2` exchanges:
+       { nodeId, publicKey, coreKey, claimsCoreKey }
+  → peer-meta event:
+      • register peer's pubkey for ed25519 verify on receive
+      • open peer's fragments core read-only by coreKey → download
+      • open peer's claims   core read-only by claimsCoreKey → download
+  → watchRemoteCore: live stream → verify signature → POST to local embedder
+
+Extraction loop (every HIVE_EXTRACT_INTERVAL_MS):
+  → Dequeue 5 titles from crawl_queue.jsonl
+  → For each: wikipedia_fetch verbatim → onFragment per H2/H3
+       → store.get(id) — check Hypercore for existing fragment
+            → Fresh (within TTL — wiki 7d, rss 24h, arxiv 30d): skip
+            → Stale: supersede() — old marked, new appended
+            → New: save() + POST to embedder with hash + signature
+  → Aux fetch by rule: news topics → rss_fetch; science → arxiv_search
+
+No HTTP between two HIVE nodes anywhere since v0.6.4. The Fastify
+server is for external clients only (dashboard + /api/query).
 ```
 
 ---
@@ -242,67 +254,43 @@ BEE starts
 
 ```
 packages/
-  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P node, identity, sync, topic registry
-  agent/       — Autonomous extractor (LLM function calling), budget controller
-  embeddings/  — Python: all-MiniLM-L6-v2 + HNSW + Qdrant backend
-  api/         — Fastify API + UI server
-  ui/          — Web UI (vanilla HTML/JS, light theme)
+  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P node, PeerRegistry,
+                  ClaimRegistry, ed25519 identity, topic assignment
+  agent/       — Autonomous extractor + crawl queue, wikipedia_fetch,
+                  arxiv_search, rss_fetch, text_chunker, HTML-entity decoder
+  embeddings/  — Python: all-MiniLM-L6-v2 → HNSW (bees) or Qdrant (aggregator)
+  api/         — Fastify :8080 + UI server, runtime-env loader, version badge
+  ui/          — Web UI (vanilla HTML/JS, light theme, version + mode chips)
 
 data/
-  topic_tree.json   — knowledge taxonomy (95 topics, 9 domains)
-  bee-*/            — runtime data per BEE (gitignored)
-
-bees/               — dev configs for multi-BEE testing
-```
-
-**Data flow:**
-```
-BEE-A writes fragment → Hypercore (append-only, signed)
-  → Hyperswarm connects BEE-A and BEE-B
-  → Protomux channel exchanges HTTP URLs
-  → HTTP GET /api/status exchanges Hypercore public keys
-  → BEE-B opens BEE-A's core + download() → native replication
-  → watchRemoteCore() live stream → HNSW updated
-  → HTTP sync (SyncManager) as fallback transport
+  topic_tree.json    — committed taxonomy (95 topics, 9 domains)
+  identity/          — runtime ed25519 keypair per node (gitignored)
+  corestore/         — Hypercore data: fragments + claims cores (gitignored)
+  crawl_queue.jsonl  — persistent BFS queue of titles to fetch
+  .runtime.env       — UI-set LLM overrides (since v0.6.4.3)
 ```
 
 ---
 
-## v0.5 Status — May 2026
+## Future architecture (v0.7+)
 
-| Module | Description | Status |
-|--------|-------------|--------|
-| 1 | Embeddings + local HNSW (all-MiniLM-L6-v2, 80MB CPU) | ✅ |
-| 2 | Extractor: wikipedia_fetch (sections API) + arXiv + RSS + web | ✅ |
-| 3 | KnowledgeStore — Hypercore + Hyperbee, append-only, ed25519-signed | ✅ |
-| 4 | P2P — Hyperswarm discovery + native Hypercore replication | ✅ fixed in v0.4 |
-| 5 | Vector query API (Fastify) + federated search | ✅ |
-| 6 | UI with LLM synthesis (Groq / Gemini / Claude / OpenAI / Ollama) — light theme | ✅ |
-| 7 | Autonomous extractor + topic tree + claim registry + TTL/supersede | ✅ |
-| — | Aggregator node + Qdrant backend | ✅ added in v0.4 |
-| — | Ollama local LLM (no API key, runs on VPS) | ✅ added in v0.5 |
-| — | wikipedia_fetch via Wikipedia REST API (all sections, not just intro) | ✅ added in v0.5 |
+The next major version will split a bee's two responsibilities into
+selectable modes, all from the same binary and the same Docker image:
 
-**Planned for v0.6 — Trust & correctness:**
-- **LLM-free verbatim extraction**: tools auto-index content verbatim without LLM writing the text. Fixes hallucination in small models and fulfils the "no fabricated citations" guarantee. 10x throughput improvement.
-- Signature verification on receive (`watchRemoteCore` validates ed25519)
-- Replication factor ≥ 3 (auto-replicate until confirmed on 3 BEEs)
-- `IConsensus` — multi-agent voting on fragment quality
+| Mode | Role | Who runs it |
+|------|------|-------------|
+| `HIVE_MODE=bee` (new default) | **Producer** — extracts, signs, propagates its Hypercore. No embedder, no LLM, no query API. ~150 MB. | Anyone who wants to contribute to the network. Raspberry-Pi-friendly. |
+| `HIVE_MODE=queen` (renamed from aggregator) | **Consumer / indexer** — replicates every bee's Hypercore into Qdrant, serves `/api/query` with LLM synthesis. ~600 MB. | Anyone who wants to query (public services, private corporate verticals). |
+| `HIVE_MODE=hive` | Both in one process. | Single-machine quickstart — preserves v0.6 behaviour for backward compatibility. |
 
-**Planned for v0.7 — Scale:**
-- BulkImporter: direct Wikipedia XML dump ingestion without LLM (enables Wikipedia-scale indexing)
-- Semantic routing (query propagation to relevant BEEs only)
-- QVAC integration (`LLM_PROVIDER=qvac` for on-device inference)
-- Token economics: extractors earn USD₮ per query served (WDK)
+The metaphor stays: bees forage, the queen organises. Splitting roles
+amplifies Hypercore's single-writer pattern (which Holepunch already
+uses for Keet, Hyperdrive, etc.) — it does not break P2P. No
+"HIVE Inc." middle layer; anyone can run their own queen indexing
+whichever bees they care about.
 
----
-
-## Known issues (v0.5)
-
-- **Signature verification on receive**: fragments are signed when saved but signatures are not verified when received from peers. A malicious node could inject unsigned data. Fix planned for v0.5.
-- **Replication factor not enforced**: fragments may exist in fewer than 3 BEEs. No automatic re-replication yet.
-- **Hyperswarm DHT in Codespaces**: same-machine P2P works. Cross-machine via DHT requires open UDP ports (production VMs work fine; Codespaces uses HTTP sync fallback automatically).
-- **No migration scripts**: breaking format changes require `bash start.sh --clean`.
+See [CHANGELOG.md](./CHANGELOG.md) for the full release history and
+[CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
 
 ---
 

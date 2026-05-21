@@ -18,19 +18,53 @@ Every piece of knowledge in HIVE:
 
 ## How it works
 
-Each participant runs a **BEE** — a node in the HIVE network. BEEs are autonomous agents that:
+The HIVE network has two complementary roles. Today a single binary
+does both; from v0.7 onward they are selectable at runtime.
 
-1. **Choose a knowledge domain** by reading the network and finding uncovered areas
+### BEEs — the producers
+
+Each contributor runs a **BEE**: a node that forages knowledge for the
+hive. BEEs are autonomous agents that:
+
+1. **Choose a knowledge domain** — by reading the network and finding uncovered topics
 2. **Extract content** from verified sources: Wikipedia, arXiv, CrossRef, news feeds, the open web
-3. **Verify and sign** each fragment with their cryptographic identity
-4. **Replicate** knowledge across the network via native Hypercore P2P replication
-5. **Serve queries** from any LLM or human that connects
+3. **Sign** each fragment with their ed25519 identity
+4. **Propagate** via native Hypercore P2P replication
 
-BEEs discover each other via Hyperswarm (the same technology behind Keet and Pear). They replicate knowledge automatically using Hypercore's native replication — cryptographically verified, append-only, tamper-proof. If a BEE goes offline, its fragments survive on other BEEs that have replicated them.
+BEEs discover each other via Hyperswarm (the same DHT layer behind Keet
+and Pear). Each BEE's Hypercore is a single-writer, append-only,
+cryptographically verifiable log — peers replicate it read-only.
+Nothing in the log is ever rewritten or deleted; updates happen by
+*superseding* old fragments, leaving the full history auditable.
 
-An **aggregator** node indexes the entire network's knowledge in a vector database (Qdrant), providing fast search across all BEEs. The aggregator centralizes access without centralizing data — like an IPFS gateway or a BitTorrent tracker.
+### Queens — the consumers
 
-An LLM querying HIVE sends its question as a vector, receives the most semantically relevant verified fragments, and uses them as grounded context. No hallucinations about things that are in HIVE. Full source traceability for everything it cites.
+A **queen** (called *aggregator* up to v0.6.x) is a node whose job is
+to index the network and serve queries. A queen:
+
+1. **Joins the same Hyperswarm topic** as every other HIVE node
+2. **Subscribes** to whichever BEE Hypercores it wants to follow
+3. **Streams** their signed fragments into a vector database (Qdrant)
+4. **Serves** semantic queries with LLM-grounded synthesis
+
+The queen "centralises access without centralising data" — like an
+IPFS gateway or a BitTorrent tracker. Anyone can run a queen indexing
+whichever subset of bees they care about (science only, news only, a
+private corporate vertical, a public general-purpose one). No
+"HIVE Inc." middle layer.
+
+### Why the split is faithful to P2P, not a betrayal of it
+
+Hypercore is **single-writer by design**: each node is sovereign over
+its own log; others read. Holepunch's own apps already follow this
+pattern — Keet has one Hypercore per user, with other users acting as
+read-only consumers. HIVE's bee/queen split is the same shape, just
+named differently.
+
+An LLM querying HIVE sends its question as a vector, receives the most
+semantically relevant verified fragments, and uses them as grounded
+context. No hallucinations about things that are in HIVE. Full source
+traceability for everything it cites.
 
 ## Why this matters
 

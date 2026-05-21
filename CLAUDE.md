@@ -8,17 +8,96 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.6.1 — Wikipedia forager (persistent crawl queue)
+## Current state: v0.6.4.4 — 100% P2P, runtime-persistent config
 
-v0.6.1 turns the bee into an indefinite crawler. Every `wikipedia_fetch`
-emits the internal `/wiki/` links it finds into a persistent queue
-(`crawl_queue.jsonl` in the data volume). Each cycle dequeues a batch of
-5 titles from the head and processes them. The LLM stops choosing topics
-— it now just walks the queue. `topic_tree.json` is only the seed; once
+### v0.6.4 — Zero HTTP between nodes
+The bee↔aggregator channel is exclusively Hyperswarm + Hypercore.
+The Protomux `hive/meta/v2` channel carries `{nodeId, publicKey,
+coreKey, claimsCoreKey}` in a single message at connection time.
+`SyncManager`, `/api/register-peer`, `/api/claims` pull, federated
+HTTP query, and the aggregator's `/api/crawl` proxy are all gone.
+`HIVE_PEER` and `HIVE_API_URL` are deprecated (warned on boot,
+otherwise ignored). The only HTTP from node-to-node anywhere in
+the codebase since v0.6.4 is **none**.
+
+### v0.6.4.1 — Protomux protocol bump + decode safety
+A bug surfaced live: pre-v0.6.4 peers on the public Hyperswarm DHT
+(e.g. the old Hetzner aggregator) send the old string `apiUrl`
+payload over `hive/meta/v1`. New nodes opening `hive/meta/v2`
+don't see those peers and old peers don't see new ones — clean
+split. Decoder is `try/catch`ed so a malformed payload never
+crashes the bee.
+
+### v0.6.4.2 — Ollama opt-in, Gemini default
+Ollama + ollama-init moved behind the `ollama` Docker profile.
+Default LLM is Gemini Flash Lite. `docker-compose.yml` ships
+without Ollama by default; activate with
+`docker compose --profile ollama up -d`. Frees ~2 GB on
+cloud-LLM deployments.
+
+### v0.6.4.3 — Runtime config persistence
+`POST /api/config` (the UI's provider switcher) now writes to
+`${HIVE_DATA_DIR}/.runtime.env` (mounted) instead of `/hive/.env`
+(ephemeral). Loaded at boot before any LLM check. Fixes the bug
+where UI-set provider was lost on every container recreate —
+production found this today after adding bee-2: original Gemini
+override vanished, bees fell back to whatever the host's
+docker-compose env-var resolved to (which was `ollama`).
+
+### v0.6.4.4 — Qdrant race-condition fix
+`depends_on: qdrant: condition: service_started` did NOT wait until
+Qdrant accepted connections. Aggregator on cold start would
+silently fall through to the in-process HNSW backend and serve
+queries from an empty index while the 34k-vector persistent
+collection sat untouched in the qdrant-data volume. Fixed by:
+- Adding a `healthcheck` to qdrant polling `/readyz` (not
+  `/healthz` — the latter returns 200 while storage is still
+  being opened on cold start).
+- Changing aggregator's `depends_on: qdrant` to
+  `condition: service_healthy`.
+- `aggregator.sh` distinguishes "QDRANT_URL was set explicitly"
+  (wait, hard-fail if never ready — never silently lose
+  persistence) from "QDRANT_URL was empty" (legacy auto-start
+  path, may fall back to HNSW).
+
+### v0.6.2.x — Trust + extraction quality
+- `PeerRegistry` (`packages/core/src/peer_registry.ts`) holds
+  `node_id → publicKey` learnt during the meta exchange.
+  `watchRemoteCore` and (former) `SyncManager` run a full
+  `verifySignature({id, hash}, signature, pubkey)` on every
+  replicated fragment. Drop counters distinguish unsigned /
+  tampered / unknown-peer.
+- `wikipedia_fetch` now indexes H3 subsections as their own
+  fragments. Long sections chunked via `text_chunker` (350
+  tokens, 50 overlap) — no more `slice(0, 1000)`.
+- `watchFragments` + `watchRemoteCore` self-heal: for-await
+  loop wrapped in restart-on-error with exp backoff.
+- `ClaimRegistry.releaseExpired()` called at the top of each
+  extraction cycle to free topics from dead BEEs.
+- Auxiliary fetch by rule: news/current_events → `rss_fetch`,
+  science/ML/physics → `arxiv_search`. Wikipedia remains the
+  bulk source.
+
+### v0.6.3.x — Replicated claims + Hypercore-served fragments
+- `ClaimRegistry` accepts a shared `Corestore` (v0.6.3.4): the
+  `claims` Hypercore lives alongside the `fragments` core and
+  replicates over the same Hyperswarm socket. `/api/status`
+  exposes `claimsCoreKey`. Each peer's claims core is opened
+  read-only and streamed via `watchRemoteClaims`.
+- `GET /api/fragments` reads from Hypercore in BEE mode
+  (signed payload with hash + signature). Aggregator still reads
+  from Qdrant since it owns no local Hypercore.
+
+### Wikipedia forager (carried over from v0.6.1)
+The bee is an indefinite crawler. Every `wikipedia_fetch` emits
+the internal `/wiki/` links it finds into a persistent queue
+(`crawl_queue.jsonl` in the data volume). Each cycle dequeues a
+batch of 5 titles from the head. The LLM stops choosing topics
+— it walks the queue. `topic_tree.json` is only the seed; once
 seeded, growth is geometric.
 
-`/api/crawl` exposes `queue_size`, `visited_size`, `next_in_queue`, and
-`recent_visited` for the dashboard.
+`/api/crawl` exposes `queue_size`, `visited_size`,
+`next_in_queue`, `recent_visited` for the dashboard.
 
 ### Two modes inside `runAutonomousExtraction`
 
@@ -100,34 +179,109 @@ seeded, growth is geometric.
 
                     **In original spec, not yet implemented:**
                     - `Autobase` multi-writer → **abandoned** (see decision below)
-                    - `IConsensus` multi-agent fragment quality voting → **v0.6**
-                    - Signature verification on receive → **v0.6**
-                    - Replication factor ≥ 3 → **v0.6**
-                    - LLM-free verbatim extraction → **v0.6** (see architectural decision below)
-                    - Semantic routing / VecDHT → **v0.7**
+                    - `IConsensus` multi-agent fragment quality voting → **replaced by score-by-corroboration in v0.7** (lighter, non-bizantine alternative)
+                    - Signature verification on receive → **✅ done v0.6.2.1** (full ed25519 against peer's pubkey)
+                    - Replication factor ≥ 3 → **v0.7+**
+                    - LLM-free verbatim extraction → **✅ done v0.6** (see architectural decision below)
+                    - Semantic routing / VecDHT → **v0.7+** (requires role split first)
                     - Token economics (WDK) → **v0.7+**
+
+                    **Architectural changes planned but not yet implemented:**
+                    - **v0.7.0 role separation** (bee = producer, aggregator = consumer, full = both) — see Roadmap below.
+                    - **Drop HNSW from bees** (after v0.7.0) — bees no longer host queries, no need for local vector index. -200 MB Docker image.
 
                     ---
 
                     ## Roadmap
 
-                    ### v0.6 — Trust & correctness
-                    The Manifesto guarantees "no fabricated citations". v0.6 closes the gap between the promise and the implementation.
+                    ### v0.6.4.x — In-flight (current)
+                    Already shipped: 0.6.4.1 (protocol bump + decoder safety),
+                    0.6.4.2 (ollama opt-in + Gemini default), 0.6.4.3 (runtime
+                    config persistence), 0.6.4.4 (qdrant race-condition fix).
+
+                    Open patches:
 
                     | Item | Why | Notes |
                     |------|-----|-------|
-                    | LLM-free verbatim extraction | Small models hallucinate fragment text — violates "no fabricated citations" | See architectural decision below |
-                    | Signature verification on receive | Malicious nodes can inject unsigned fragments today | `watchRemoteCore` validates ed25519 before indexing |
-                    | Replication factor ≥ 3 | Fragments may exist on only 1 BEE — single point of failure | Auto-replicate until ≥ 3 copies confirmed |
-                    | IConsensus — fragment quality voting | No validation that fragment text matches claimed source | Multiple BEEs vote; outliers rejected |
+                    | **v0.6.4.5** — HNSW wrapper upsert semantics | After container recreate, bee's `indexed` count is far below the Hypercore length because `usearch` rejects duplicate-label adds during replay. Hypercore is fine, queries via the aggregator are fine, but the bee dashboard misreports its own coverage. | Fix in `packages/embeddings/hnsw_index.py`: dedupe by id before re-adding, or rotate labels deterministically. ~20 LoC. |
 
-                    ### v0.7 — Scale & economics
+                    ### v0.7.0 — `bee` vs `queen` (architectural separation)
+                    The biggest design change planned. This is what Daniel
+                    (Holepunch CEO) will ask about, and the answer should be:
+                    "yes, we split roles to amplify Hypercore's single-writer
+                    pattern, not to break it".
+
+                    **Today (v0.6.x)**: a single bee binary does everything —
+                    extract + sign + serve queries + LLM synthesis + embedder
+                    + HNSW. The bee Docker image drags Python +
+                    sentence-transformers (200 MB) + HNSW + LLM config just
+                    to answer queries that 99% of users won't issue directly
+                    to a bee anyway.
+
+                    **v0.7.0**: same codebase, same image, **mode selected at
+                    runtime** by `HIVE_MODE`:
+
+                    | Mode | Role | Components active | RAM | Use case |
+                    |------|------|-------------------|-----|----------|
+                    | `bee` (NEW DEFAULT) | producer | extractor + Hypercore + Hyperswarm | ~150 MB | publisher-only, Raspberry-Pi friendly, contribute to the network |
+                    | `queen` (renamed from `aggregator`) | consumer / indexer | + Qdrant + embedder + LLM | ~600 MB | consumer-facing query endpoint; can be public or private/vertical |
+                    | `hive` (NEW, backward-compat) | both | both in one process | ~700 MB | single-machine quickstart — preserves v0.6 behaviour |
+
+                    **Practical impact on a 4 GB VPS** (the Hetzner instance):
+
+                    | Stack | Today (v0.6.x) | After v0.7 |
+                    |-------|----------------|------------|
+                    | 1 bee + 1 queen + qdrant + caddy + capy services | ~2.0 GB (works) | ~1.4 GB (very comfortable) |
+                    | 2 bees + 1 queen + qdrant + caddy + capy services | ~2.7 GB (apretado, hit OOM today) | ~1.6 GB (comfortable) |
+                    | 4 bees + 1 queen + qdrant + caddy + capy services | OOM | ~1.9 GB (still room) |
+
+                    The whole point of the split is "make it cheap to be a
+                    producer". Today the producer Docker image carries an
+                    embedder + a vector index it doesn't need, which is the
+                    main reason a 4 GB VPS can't host more than one bee.
+
+                    The terminology change `aggregator` → `queen` keeps the
+                    bee metaphor consistent: in nature, the queen organises
+                    the hive, doesn't forage. Operators may run a queen for
+                    their own vertical (science / news / private corp) and
+                    point it at whichever bees they want to index.
+
+                    Why this is Holepunch-native, not a betrayal of P2P:
+
+                    - **Hypercore is single-writer by design**. The bee=producer
+                      / queen=consumer split *amplifies* that, doesn't break
+                      it.
+                    - **Holepunch's own apps follow this pattern**: Keet has
+                      one Hypercore per user (write your own); other users
+                      open it read-only; the Keet client itself is the
+                      "consumer" that follows N hypercores. We replicate that
+                      shape with `bee` + `queen`.
+                    - **No mandatory queen**: anyone can run `HIVE_MODE=queen`
+                      indexing whatever subset of bees they care about. No
+                      "HIVE Inc." middle layer.
+                    - **The only thing the split loses** is "single binary
+                      auto-everything" — i.e., the convenience that today
+                      `bash hive.sh` gives you a node that also answers
+                      queries. We preserve that as `HIVE_MODE=hive` for
+                      backward compat. It's not a regression, it's an
+                      honest split for operators who want lean producers.
+                    - **Enables VecDHT properly** (v0.7+ next item). Routing
+                      queries semantically to relevant bees only makes sense
+                      when the consumer-node is a distinct entity, not just
+                      another producer that happens to also have a vector
+                      index.
+
+                    ### v0.7.x — Scale & economics
+
                     | Item | Why |
                     |------|-----|
+                    | **Drop HNSW from bees** | Once roles are split (above), bees no longer need an in-process vector index. Removes 200 MB of `sentence-transformers` weight from the bee Docker image and eliminates the upsert-on-rehydrate bug entirely. Aggregator keeps Qdrant. Considered but rejected for v0.6.x because it would break the "single bee can answer queries" quickstart. |
                     | BulkImporter — Wikipedia dump | LLM-per-fragment is too slow for Wikipedia-scale (~46 years on Ollama CPU). Direct chunking of Wikipedia XML dumps, no LLM, into Hypercore. |
-                    | Semantic routing / VecDHT | All BEEs reply to all queries; should route to relevant nodes only |
+                    | Semantic routing / VecDHT | All BEEs reply to all queries; should route to relevant nodes only. Requires v0.7.0 role split first. |
+                    | Score-by-corroboration | When multiple bees independently index the same `(source, content_hash)`, boost confidence in queries: `cos_sim × log(1 + corroboration_count)`. NOT bizantine consensus — just a soft trust signal. User-requested 2026-05-21 as a replacement for the original (abandoned) IConsensus. |
                     | QVAC integration | `LLM_PROVIDER=qvac` for on-device inference without Ollama overhead |
                     | Token economics (WDK) | Extractors earn USD₮ per query served; consumers pay per query |
+                    | Replication factor ≥ 3 | Fragments may exist on only 1 BEE — single point of failure |
                     | Topic tree expansion | 95 topics → 5000+ for meaningful coverage |
 
                     ---
@@ -169,25 +323,37 @@ seeded, growth is geometric.
 
                               ---
 
-                              ## How data flows
+                              ## How data flows (v0.6.4+)
 
                               ```
                               BEE-A extracts a fragment
-                                → saves to local Hypercore (append-only, ed25519-signed) + HNSW embedder
-                                  → Hyperswarm connects BEE-A and BEE-B on HIVE topic
-                                    → Protomux channel (hive/meta/v1, msg[0]): exchanges HTTP API URLs
-                                      → HTTP GET /api/status: peer's Hypercore public key
-                                        → store.get({key}) + core.download({start:0,end:-1})
-                                              → Corestore streamTracker.attachAll() → native replication active
-                                                → watchRemoteCore(): live Hyperbee history stream → HNSW updated
-                                                  → SyncManager: HTTP pull from /api/fragments every 8s (fallback)
+                                → buildFragment(): hash + ed25519 sign with BEE-A's key
+                                  → store.save(): append to local Hypercore + local Hyperbee
+                                    → indexInEmbedder(): POST /add to local HNSW (bee) with
+                                       buildEmbedderPayload(frag) — carries hash + signature
 
-                                                  Before indexing any fragment:
-                                                    → store.get(id) — check Hypercore for existing fragment
-                                                      → Fresh (within TTL): skip
-                                                        → Stale (past TTL): supersede() — marks old, indexes new
-                                                          → New: save() + embedder /add
-                                                          ```
+                              BEE-A meets AGGREGATOR via Hyperswarm DHT
+                                topic = sha256("hive-network-v0.1")
+                                → swarm.on('connection', socket): store.replicate(socket)
+                                  → Protomux channel hive/meta/v2 on noiseStream.userData
+                                    → metaMessage.send({nodeId, publicKey, coreKey, claimsCoreKey})
+                                      → peer-meta event fires on the other side
+                                        → peerRegistry.register(nodeId, publicKey)
+                                          → corestore.get({key: coreKey}).download() → replication started
+                                            → watchRemoteCore: live history stream → verify ed25519
+                                              → if OK: POST to aggregator embedder (Qdrant)
+                                            → corestore.get({key: claimsCoreKey}).download() → claims sync
+
+                              Before indexing any fragment locally:
+                                → store.get(id) — check Hypercore for existing fragment
+                                  → Fresh (within TTL): skip (saves LLM/network cost)
+                                  → Stale (past TTL): supersede() — old marked, new appended
+                                  → New: save() + embedder /add
+                              ```
+
+                              **Zero HTTP between two HIVE nodes.** External clients (dashboard,
+                              `/api/query`) still hit HTTP endpoints, but no node ever calls
+                              another node's HTTP API since v0.6.4.
 
                                                           **TTL by source:** wiki 7 days · rss 24h · arXiv 30 days · web 3 days
 
@@ -258,15 +424,17 @@ seeded, growth is geometric.
 
                                                                                                                                               | Variable | Default | Description |
                                                                                                                                               |----------|---------|-------------|
-                                                                                                                                              | `LLM_PROVIDER` | `ollama` (Docker) / `gemini` (shell) | `gemini` · `claude` · `openai` · `groq` · `ollama` |
+                                                                                                                                              | `LLM_PROVIDER` | `gemini` (since v0.6.4.2) | `gemini` · `claude` · `openai` · `groq` · `ollama` |
                                                                                                                                               | `LLM_API_KEY` | — | Required for cloud providers. Not needed for `ollama`. |
-                                                                                                                                              | `LLM_MODEL` | — | Optional override (e.g. `qwen2.5:1.5b`) |
+                                                                                                                                              | `LLM_MODEL` | `gemini-2.5-flash-lite` (since v0.6.4.2) | Optional override per provider |
                                                                                                                                               | `OLLAMA_URL` | `http://localhost:11434` | Ollama server. In Docker Compose: `http://ollama:11434` |
-                                                                                                                                              | `OLLAMA_MODEL` | `qwen2.5:1.5b` | Model to pull on first start (Docker only) |
+                                                                                                                                              | `OLLAMA_MODEL` | `qwen2.5:1.5b` | Model to pull on first start (Docker only, profile `ollama`) |
                                                                                                                                               | `HIVE_PORT` | 8080 | API server port |
                                                                                                                                               | `HIVE_EMBEDDER_PORT` | 7700 | Python embeddings server port |
-                                                                                                                                              | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory |
-                                                                                                                                              | `HIVE_PEER` | — | Bootstrap peer HTTP URL |
+                                                                                                                                              | `HIVE_DATA_DIR` | `~/.hive` (prod) | BEE data directory. Also where `.runtime.env` lives (UI-set overrides). |
+                                                                                                                                              | ~~`HIVE_PEER`~~ | — | **DEPRECATED v0.6.4** — Hyperswarm discovery is automatic |
+                                                                                                                                              | ~~`HIVE_API_URL`~~ | — | **DEPRECATED v0.6.4** — no HTTP between nodes anymore |
+                                                                                                                                              | ~~`HIVE_HTTP_SYNC`~~ | — | **REMOVED v0.6.4** — `SyncManager` deleted |
                                                                                                                                               | `BEE_TOPIC_DOMAIN` | — | Domain hint (e.g. `current_events`, `health`) |
                                                                                                                                               | `HIVE_EXTRACT_MAX_FRAGMENTS` | 9 (Docker) / 10 (shell) | Max fragments per extraction cycle |
                                                                                                                                               | `HIVE_EXTRACT_INTERVAL_MS` | 60000 (Docker) / 1800000 (shell) | Pause between cycles (ms) |
@@ -295,14 +463,14 @@ seeded, growth is geometric.
 
                                                                                                                                               ## Key design decisions
 
-                                                                                                                                              - **Hypercore as source of truth**: append-only, ed25519-signed. Data lives here regardless of sync transport.
-                                                                                                                                              - **Single-writer per BEE**: each BEE owns its Hypercore. Peers open it read-only. No Autobase.
-                                                                                                                                              - **HNSW/Qdrant as derived index**: always rebuildable from Hypercore. HNSW for BEEs, Qdrant for aggregator.
-                                                                                                                                              - **HTTP sync as fallback**: SyncManager pulls `/api/fragments` from peers every 8s. Kept while native replication stabilises.
-                                                                                                                                              - **Native Hypercore replication**: core key fetched via HTTP after peer URL is known. All test phases pass.
+                                                                                                                                              - **Hypercore as source of truth**: append-only, ed25519-signed. Data lives here regardless of derived-index state.
+                                                                                                                                              - **Single-writer per BEE**: each BEE owns its Hypercore. Peers open it read-only. No Autobase. Aligns with Holepunch's own apps (Keet, Hyperdrive).
+                                                                                                                                              - **HNSW/Qdrant as derived index**: always rebuildable from Hypercore. HNSW for BEEs (in-process, ~80 MB), Qdrant for aggregator (persistent, multi-process, ~400 MB).
+                                                                                                                                              - **100% P2P between nodes since v0.6.4**: discovery via Hyperswarm DHT, metadata exchange via Protomux `hive/meta/v2`, fragment + claim sync via Hypercore replication on the same socket. No HTTP request is made between two HIVE nodes for any reason. The Fastify HTTP server is only for external clients (dashboard, /api/query).
+                                                                                                                                              - **Native Hypercore replication**: core key arrives in the meta exchange, not over HTTP. v0.6.4 removed the HTTP bootstrap that earlier versions had.
                                                                                                                                               - **No agent framework**: own TypeScript extractor — cleaner and more auditable than LangChain for this use case.
-                                                                                                                                              - **Topic-centric extraction**: LLM picks sources per topic. wikipedia_fetch → rss_fetch → arxiv_search priority.
-                                                                                                                                              - **LLM for orchestration only (v0.6 target)**: LLM decides what to fetch, tools do the verbatim extraction.
+                                                                                                                                              - **LLM-free verbatim extraction (v0.6)**: fetch tools write fragment text byte-for-byte from the source API. The LLM only orchestrates which sources to crawl, never the text. ed25519 signature backs verbatim content, fulfilling the Manifesto's "no fabricated citations" promise.
+                                                                                                                                              - **Filosofical alignment with Holepunch (relevant for the v0.7 role split)**: Hypercore is single-writer by design; consumers fan out. The planned `HIVE_MODE=bee` (producer only) + `HIVE_MODE=aggregator` (consumer) topology is the same shape as Keet's "each user a Hypercore, indexer-nodes federate". Splitting roles is *more* Holepunch-native than the current monolithic bee.
 
                                                                                                                                               ---
 
@@ -318,17 +486,21 @@ seeded, growth is geometric.
                                                                                                                                               | web_fetch 2000-char truncation | Only article intro indexed — missed 95% of content | **Fixed v0.5** (wikipedia_fetch) |
                                                                                                                                               | RSS 300-char teaser | Useless teasers indexed instead of article content | **Fixed v0.5** (content:encoded) |
                                                                                                                                               | arXiv 500-char abstract | Abstract cut mid-sentence | **Fixed v0.5** (2000 chars) |
-                                                                                                                                              | LLM writes fragment text | Small models hallucinate/paraphrase — violates "no fabricated citations" | **TODO v0.6** (LLM-free extraction) |
-                                                                                                                                              | Signature verification on receive | Malicious node could inject unsigned data | **TODO v0.6** |
-                                                                                                                                              | Replication factor ≥ 3 | Fragments may exist on < 3 BEEs | **TODO v0.6** |
-                                                                                                                                              | IConsensus — fragment quality voting | No multi-agent validation | **TODO v0.6** |
-                                                                                                                                              | ~~Peer HTTP URL in Docker (127.0.0.1)~~ | ~~Aggregator advertises loopback — HTTP sync fallback fails cross-container~~ | **Fixed v0.5.1** — `HIVE_API_URL` env var. Note: also broke native replication, not just HTTP sync — the bootstrap of native replication requires the same HTTP exchange to fetch the peer's `coreKey`. Previous docs claimed native still worked; empirically it didn't (0 `native replication started` logs before the fix). |
-                                                                                                                                              | Bee local HNSW shows `indexed: 0` after container recreate | `usearch` library throws `Duplicate keys not allowed in high-level wrappers` when the bee re-hydrates its embedder from Hypercore and the same logical id has multiple versions (supersede history) | **Known, low-impact** — Hypercore still has the data, replication still works, the aggregator's Qdrant supports upsert correctly so queries are unaffected. Fix path: switch hnsw_index.add to upsert semantics or de-duplicate before re-hydration. v0.6.1 candidate. |
-                                                                                                                                              | Free-tier Groq for bee extraction | bee + aggregator share the API key → share the TPM bucket. Aggregator's queries leave the bee with ~1-2k usable TPM/min, can't complete extraction cycles | **Won't fix at this layer** — real fix is v0.6 LLM-free extraction. Alternatives: separate API key per node, paid Groq Dev tier, or another provider with higher free TPM |
-                                                                                                                                              | Aggregator `(unhealthy)` in `docker ps` | Dockerfile HEALTHCHECK curls `127.0.0.1:8080` which isn't bound in the aggregator container | Cosmetic — aggregator works correctly. Will tidy when touching the Dockerfile next |
-                                                                                                                                              | Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.7** |
+                                                                                                                                              | LLM writes fragment text | Small models hallucinate/paraphrase — violates "no fabricated citations" | **✅ Fixed v0.6** (LLM-free extraction) |
+                                                                                                                                              | Signature verification on receive | Malicious node could inject unsigned data | **✅ Fixed v0.6.2.1** — full ed25519 verify via PeerRegistry |
+                                                                                                                                              | Replication factor ≥ 3 | Fragments may exist on < 3 BEEs | **TODO v0.7+** |
+                                                                                                                                              | IConsensus — fragment quality voting | No multi-agent validation | **Replaced by score-by-corroboration (v0.7)** — non-bizantine, softer trust signal |
+                                                                                                                                              | ~~Peer HTTP URL in Docker (127.0.0.1)~~ | ~~Aggregator advertises loopback — HTTP sync fallback fails cross-container~~ | **Fixed v0.5.1** — `HIVE_API_URL` env var. (Obsolete since v0.6.4: no HTTP between nodes at all.) |
+                                                                                                                                              | Bee local HNSW shows lower `indexed` than its Hypercore length after container recreate | `usearch` library throws `Duplicate keys not allowed in high-level wrappers` when the bee re-hydrates its embedder from Hypercore and the same logical id has multiple versions (supersede history) | **TODO v0.6.4.5** — switch `VectorIndex.add` to upsert semantics. Hypercore is fine, replication is fine, aggregator queries unaffected (Qdrant has upsert). |
+                                                                                                                                              | Free-tier Groq for bee extraction | bee + aggregator share the API key → share the TPM bucket. Aggregator's queries leave the bee with ~1-2k usable TPM/min, can't complete extraction cycles | **✅ Fixed v0.6** — LLM-free extraction means the bee no longer hits the LLM per fragment. Bees can now use the same key without choking each other. |
+                                                                                                                                              | Aggregator `(unhealthy)` in `docker ps` | Dockerfile HEALTHCHECK curls `127.0.0.1:8080` which isn't bound in the aggregator container | Cosmetic — aggregator works correctly. Will tidy when touching the Dockerfile next. |
+                                                                                                                                              | UI `/api/config` provider override lost on container recreate | Was writing to `/hive/.env` inside the container (ephemeral) | **✅ Fixed v0.6.4.3** — persists to `${HIVE_DATA_DIR}/.runtime.env` (mounted volume), loaded at boot |
+                                                                                                                                              | Aggregator silently fell back to HNSW when Qdrant slow to start | `depends_on: service_started` doesn't wait for the port to accept connections; aggregator.sh got connection-refused and used in-process HNSW while 34k vectors sat untouched in qdrant-data | **✅ Fixed v0.6.4.4** — Qdrant healthcheck on `/readyz`, aggregator waits `service_healthy`, aggregator.sh hard-fails when `QDRANT_URL` was set explicitly |
+                                                                                                                                              | bee + bee-2 + aggregator + ollama on a 4 GB VPS = OOM | Stack required ~4.5 GB residence | **✅ Mitigated v0.6.4.2** — Ollama moved behind opt-in profile (~2 GB freed). 2 bees + aggregator + Gemini fits in 4 GB. For 2 bees with Ollama: 8 GB recommended. |
+                                                                                                                                              | Hypercore DHT in Codespaces | Cross-machine needs open UDP | Expected. No HTTP fallback since v0.6.4. If UDP blocked, the bee runs isolated until UDP becomes available. |
+                                                                                                                                              | Semantic routing / VecDHT | All BEEs reply to all queries | **TODO v0.7+** (requires role split first) |
                                                                                                                                               | Token economics | No incentive layer | **TODO v0.7+** |
-                                                                                                                                              | Hyperswarm DHT in Codespaces | Cross-machine needs open UDP | Expected — HTTP sync covers Codespaces |
+                                                                                                                                              | Bee Docker image carries 200 MB of `sentence-transformers` it doesn't strictly need for the producer role | Architecture entanglement — bee = producer + consumer in one process today | **TODO v0.7.0** — role separation drops HNSW + embedder from bee image |
 
                                                                                                                                               ---
 
