@@ -60,7 +60,10 @@ services:
       # and ready to serve. /healthz is too eager — it returns 200 while the
       # collections are still loading from disk on cold start, which causes
       # the aggregator to fall through to its HNSW fallback (v0.6.4.4 bug).
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:6333/readyz || exit 1"]
+      #
+      # The Qdrant image has neither wget, curl, nc, nor python — only bash.
+      # We use bash's /dev/tcp pseudo-device to issue a raw HTTP/1.0 request.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3; head -n1 <&3 | grep -q ' 200'"]
       interval: 5s
       timeout: 3s
       retries: 20
