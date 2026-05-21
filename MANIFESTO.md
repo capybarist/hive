@@ -61,6 +61,41 @@ pattern — Keet has one Hypercore per user, with other users acting as
 read-only consumers. HIVE's bee/queen split is the same shape, just
 named differently.
 
+The natural challenge — *"if queens index everything and serve queries,
+aren't they the new Mastodon servers?"* — has a clean answer. The
+table below compares HIVE to the closest things in the social-protocol
+landscape:
+
+|  | Mastodon (ActivityPub) | Bluesky (AT Protocol) | **HIVE** |
+|---|---|---|---|
+| Transport between nodes | HTTPS | HTTPS | **Hyperswarm DHT + Hypercore** |
+| Discovery | DNS + WebFinger | Personal Data Server URL | **DHT, no DNS** |
+| Identity | `@user@server` (dies with server) | DID, tied to a PDS | **Self-sovereign ed25519** |
+| NAT traversal | No (public servers) | No (public servers) | **Yes (UDP holepunch)** |
+| Indexer role | Your home server | Bluesky-hosted relay + appview in practice | **Any queen, anyone** |
+| Data survives without the indexer? | No | Hard (PDS usually Bluesky-hosted) | **Yes — replicated signed Hypercores** |
+| Censoring content | Admin can delete; defederation | Relay can drop | **Cannot** — signed copies persist on every peer that replicated |
+
+Three points to keep in mind when the question comes up:
+
+1. **"In Mastodon you die with your instance. In HIVE you die if you
+   lose your key."** Your identity is not someone else's
+   responsibility.
+2. **"A queen is a convenience, not a gatekeeper."** Canonical truth
+   lives in the bees' signed Hypercores. A queen is a derived
+   index, reconstructible from scratch by anyone. If every queen
+   on earth disappeared, one new operator restarting `HIVE_MODE=queen`
+   would rebuild it.
+3. **"Bees can live without queens. Mastodon cannot live without
+   instances."** A network of 1000 bees and 0 queens is still a
+   signed, replicated distributed archive. It just stops being
+   semantically queryable until someone runs a queen.
+
+HIVE is more P2P than Mastodon (no DNS, no server-bound identity, no
+HTTPS between nodes) and more P2P than Bluesky (no centralised relay,
+no PDS hosting bias) — while keeping the practical convenience of
+"there is a public endpoint you can query".
+
 An LLM querying HIVE sends its question as a vector, receives the most
 semantically relevant verified fragments, and uses them as grounded
 context. No hallucinations about things that are in HIVE. Full source
