@@ -240,6 +240,33 @@ seeded, growth is geometric.
                     embedder + a vector index it doesn't need, which is the
                     main reason a 4 GB VPS can't host more than one bee.
 
+                    #### UI in v0.7
+
+                    Same `index.html`, **conditional rendering by mode**.
+                    The UI distinguishes *operational* views (does my
+                    node work?) from *consumer* views (what does the
+                    network know?):
+
+                    | Section | `bee` | `queen` | `hive` |
+                    |---------|:-:|:-:|:-:|
+                    | Logo + version + mode badge | ✓ | ✓ | ✓ |
+                    | LLM provider config | ✗ | ✓ | ✓ |
+                    | Extraction activity feed | ✓ | ✗ | ✓ |
+                    | Forager / crawl-queue state | ✓ | ✗ | ✓ |
+                    | Connected peers list | ✓ | ✓ | ✓ |
+                    | Search box + LLM synthesis | ✗ | ✓ | ✓ |
+                    | Fragments listing | ✓ (from Hypercore) | ✓ (from Qdrant) | ✓ |
+
+                    No code duplication — about 50 LoC of JS to hide
+                    sections based on the `mode` field of `/api/status`.
+                    Zero runtime cost (UI is static files served by
+                    Fastify); the only thing we'd gain by removing the
+                    UI entirely is ~150 KB in the Docker image.
+
+                    A future `HIVE_NO_UI=1` env flag could disable the
+                    static plugin for headless flotilla deployments
+                    (v0.8+).
+
                     The terminology change `aggregator` → `queen` keeps the
                     bee metaphor consistent: in nature, the queen organises
                     the hive, doesn't forage. Operators may run a queen for
