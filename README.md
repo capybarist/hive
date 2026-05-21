@@ -11,70 +11,100 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge from the
 
 ## Quick start
 
-### Option 1 — Docker (recommended)
+The recommended deployment is the **full stack via Docker Compose** —
+that gives you a BEE, an aggregator, Qdrant, and a Caddy reverse proxy
+all wired up. You only need an LLM API key.
+
+### 1. Full VPS stack (recommended)
 
 ```bash
-docker run -d \
-  -e LLM_PROVIDER=groq \
-  -e LLM_API_KEY=gsk_your_key_here \
-  -p 8080:8080 -p 7700:7700 \
-  -v hive-data:/root/.hive \
-  ghcr.io/capybarist/hive:latest
+git clone https://github.com/capybarist/hive.git && cd hive
+cp .env.example .env
+nano .env                                # paste your LLM_API_KEY
+docker compose up -d                     # caddy + qdrant + bee-1 + aggregator
 ```
 
-Open `http://localhost:8080` — the BEE self-configures and starts indexing.
+That's it. Open:
+- `http://<your-ip>` → aggregator UI (via Caddy)
+- `http://<your-ip>:8080` → bee-1 dashboard (extraction activity)
+- `http://<your-ip>:8090` → aggregator dashboard (Qdrant-backed queries)
 
-Get a free Groq key at [console.groq.com](https://console.groq.com).
+Default provider is **Gemini Flash Lite** (free tier covers a 4 GB VPS
+with 1–2 BEEs easily). Get a key in <2 min at
+[aistudio.google.com](https://aistudio.google.com).
 
-### Option 2 — From source
+#### Add a second BEE (more extraction throughput)
+
+```bash
+docker compose --profile bee-2 up -d
+```
+
+Bee-2 listens on `:8081` and auto-coordinates topics with bee-1 over the
+P2P network. Each new BEE adds independent extraction capacity. For a
+4 GB VPS, 2 BEEs is the practical limit when running with cloud LLM.
+
+#### Run a fully-local LLM (no cloud)
+
+```bash
+docker compose --profile ollama up -d    # pulls qwen2.5:1.5b on first start
+# then in .env: LLM_PROVIDER=ollama   LLM_MODEL=qwen2.5:1.5b
+```
+
+Ollama adds ~2 GB of RAM and is much slower (~250 frag/h on CPU vs
+several thousand/h on cloud). Use it only if you specifically want
+zero-cloud operation.
+
+### 2. Single BEE without Docker (from source)
 
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
 pip install -r packages/embeddings/requirements.txt
 
-# Set your LLM key
-echo "LLM_PROVIDER=groq" >> .env
-echo "LLM_API_KEY=gsk_your_key_here" >> .env
+echo "LLM_PROVIDER=gemini" >> .env
+echo "LLM_API_KEY=AIza_your_key_here" >> .env
+echo "LLM_MODEL=gemini-2.5-flash-lite" >> .env
 
-bash hive.sh   # single BEE, production mode
+bash hive.sh                             # single BEE on :8080
 ```
 
-Open `http://localhost:8080` — the BEE scans the network, claims uncovered topics, and starts indexing autonomously.
-
-### Dev mode — 3 BEEs on the same machine
+### 3. Dev mode — 3 BEEs on one machine
 
 ```bash
-bash start.sh           # starts bee-1, bee-2, bee-3
-bash start.sh --clean   # wipe data and restart
-bash stop.sh --force    # kill everything
+bash start.sh                            # bees on :8080 :8081 :8082
+bash start.sh --clean                    # wipe data and restart
+bash stop.sh --force                     # kill all processes
 ```
+
+Useful for testing P2P + replication locally before deploying.
 
 ---
 
 ## LLM Providers
 
-| Provider | Cost | Model | Notes |
-|---|---|---|---|
-| **Ollama** | Free, local | `qwen2.5:3b` | No API key. Runs on your machine. Recommended for VPS. |
-| **Groq** | Free tier 100K tokens/day | `llama-3.3-70b-versatile` | Best quality for free. Get key at console.groq.com |
-| **Gemini** | Free tier available | `gemini-2.5-flash` | aistudio.google.com |
-| **Claude** | Paid | `claude-sonnet-4-6` | console.anthropic.com |
-| **OpenAI** | Paid | `gpt-4o` | platform.openai.com |
+HIVE uses **one provider for everything** — autonomous extraction *and*
+query synthesis. The embeddings model (`all-MiniLM-L6-v2`, ~80 MB) always
+runs locally and is not an LLM.
 
-HIVE uses **one provider for everything** — both autonomous extraction and query synthesis. The embeddings model (all-MiniLM-L6-v2, ~80MB) always runs locally and is not an LLM.
+| Provider | Cost | Default model | Where to get a key |
+|---|---|---|---|
+| **Gemini** *(default)* | Generous free tier | `gemini-2.5-flash-lite` | [aistudio.google.com](https://aistudio.google.com) |
+| **Groq** | Free 100K tok/day | `llama-3.3-70b-versatile` | [console.groq.com](https://console.groq.com) |
+| **Claude** | Paid | `claude-sonnet-4-6` | [console.anthropic.com](https://console.anthropic.com) |
+| **OpenAI** | Paid | `gpt-4o` | [platform.openai.com](https://platform.openai.com) |
+| **Ollama** | Free, local, slow | `qwen2.5:1.5b` | runs on your VPS — opt in via `--profile ollama` |
+
+Set in `.env`:
 
 ```bash
-# Cloud provider — set in hive/.env
-LLM_PROVIDER=groq
-LLM_API_KEY=gsk_your_key
-
-# Or Ollama (local, no key needed) — requires --profile ollama
-LLM_PROVIDER=ollama
-# OLLAMA_URL=http://ollama:11434   ← default, no need to set this
+LLM_PROVIDER=gemini
+LLM_API_KEY=AIza_your_key_here
+LLM_MODEL=gemini-2.5-flash-lite          # optional override
 ```
 
-Or configure at runtime via the UI — click the provider button in the sidebar.
+Or configure at runtime via the UI — click the provider chip in the
+sidebar. **Note:** UI-set provider lives in container memory; for
+persistence across redeploys, set it in `.env`.
 
 ---
 
