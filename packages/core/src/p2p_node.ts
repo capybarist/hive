@@ -12,13 +12,52 @@ export interface PeerInfo {
   connectedAt: string;
 }
 
+/**
+ * Self-description sent over the Protomux meta channel on every new
+ * Hyperswarm connection. From v0.6.4 onwards this is the ONLY bootstrap
+ * channel between nodes — there is no longer an HTTP round-trip for
+ * coreKey / publicKey / nodeId. Anything HTTP between bees has been
+ * removed.
+ */
+export interface PeerMeta {
+  nodeId: string;
+  publicKey: string;       // ed25519 pubkey hex
+  coreKey: string;         // hex of fragments Hypercore key
+  claimsCoreKey: string;   // hex of claims Hypercore key
+}
+
+// JSON-over-c.string encoding for the meta payload. We considered a
+// custom compact-encoding schema but the payload is tiny (~200 bytes)
+// and sent exactly once per connection, so the simplicity of JSON beats
+// the byte savings.
+//
+// The decode is wrapped in try/catch so a malformed payload from any
+// peer (mid-rollout incompatibility, malicious node, corrupted frame)
+// can never crash the bee. We log once and skip — Protomux will
+// continue delivering the next message normally.
+const metaEncoding = {
+  preencode(state: any, m: PeerMeta) { c.string.preencode(state, JSON.stringify(m)); },
+  encode(state: any, m: PeerMeta) { c.string.encode(state, JSON.stringify(m)); },
+  decode(state: any): PeerMeta | null {
+    const raw = c.string.decode(state);
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as PeerMeta;
+      return null;
+    } catch {
+      console.warn(`[p2p] Ignoring non-JSON meta payload (likely a pre-v0.6.4 peer): ${raw.slice(0, 60)}`);
+      return null;
+    }
+  },
+};
+
 export class HiveP2PNode extends EventEmitter {
   private swarm: Hyperswarm;
   private _peers = new Map<string, PeerInfo>();
 
   constructor(
     private store: Corestore,
-    private localApiUrl?: string,  // HTTP URL of this node — sent to peers for sync + core key discovery
+    private localMeta: PeerMeta,
   ) {
     super();
     this.swarm = new Hyperswarm();
@@ -39,25 +78,33 @@ export class HiveP2PNode extends EventEmitter {
       // both protocols. All custom channels must use replStream.noiseStream.userData.
       const replStream = (this.store as any).replicate(socket);
 
-      // ── Metadata exchange (HTTP URL only) ─────────────────────────────────
-      // After the noise handshake, add a lightweight channel on CORESTORE'S mux
-      // to exchange HTTP API URLs. Core key exchange intentionally moved to HTTP
-      // (GET /api/status) to avoid any Protomux timing conflicts with replication.
+      // ── Meta exchange (v0.6.4) ────────────────────────────────────────────
+      // After the noise handshake, add a lightweight channel on CORESTORE'S
+      // mux to exchange our self-description: pubkey + coreKey + claimsCoreKey
+      // + nodeId. Previously this was done via HTTP `/api/status` after the
+      // peer announced its API URL — that HTTP round-trip is gone since v0.6.4.
       replStream.noiseStream.opened.then(() => {
         const mux: any = replStream.noiseStream.userData;
-        const channel = mux.createChannel({ protocol: 'hive/meta/v1' });
+        // Protocol version bumped to v2 in v0.6.4.1. Pre-v0.6.4 nodes
+        // open `hive/meta/v1` and never see our channel; we never see
+        // theirs. The wire-format break is therefore isolated to nodes
+        // running the new protocol and never crashes either side.
+        const channel = mux.createChannel({ protocol: 'hive/meta/v2' });
         if (!channel) return;
 
-        const urlMessage = channel.addMessage({ encoding: c.string });
-        urlMessage.onmessage = (theirApiUrl: string) => {
-          if (theirApiUrl) {
-            console.log(`[p2p] Got API URL from ${peerId}: ${theirApiUrl}`);
-            this.emit('peer-api', theirApiUrl, peerId);
+        const metaMessage = channel.addMessage({ encoding: metaEncoding });
+        metaMessage.onmessage = (theirMeta: PeerMeta | null) => {
+          if (!theirMeta) return; // decoder already logged the reason
+          if (theirMeta?.nodeId && theirMeta?.publicKey && theirMeta?.coreKey) {
+            console.log(`[p2p] Got meta from ${peerId}: node=${theirMeta.nodeId.slice(0, 16)} core=${theirMeta.coreKey.slice(0, 16)}`);
+            this.emit('peer-meta', theirMeta, peerId);
+          } else {
+            console.warn(`[p2p] Ignoring malformed meta from ${peerId}: missing fields`);
           }
         };
 
         channel.open();
-        if (this.localApiUrl) urlMessage.send(this.localApiUrl);
+        metaMessage.send(this.localMeta);
       }).catch(() => {});
 
       socket.on('close', () => {

@@ -1,4 +1,5 @@
-import { KnowledgeStore, loadOrCreateIdentity } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, buildEmbedderPayload } from '@hive/core';
+import type { Fragment } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
@@ -82,18 +83,14 @@ export async function runAutonomousExtraction(
     return 3 * 24 * h;                                   // Other web: 3 days
   };
 
-  const indexInEmbedder = (id: string, text: string, frag: FragInput) => {
-    const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1] ?? null;
+  const indexInEmbedder = (frag: Fragment) => {
     fetch(`${effectiveEmbedderUrl}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id, text,
-        metadata: {
-          source: frag.source, doi: frag.doi ?? null, doi_valid: frag.doi !== null,
-          confidence: frag.confidence, title: frag.title ?? null, node_id: store.nodeId,
-          arxiv_id: arxivId, extracted_at: new Date().toISOString(),
-        },
+        id: frag.id,
+        text: frag.text,
+        metadata: buildEmbedderPayload(frag),
       }),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => {});
@@ -102,9 +99,13 @@ export async function runAutonomousExtraction(
   type FragInput = { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string };
 
   const onFragment = async (frag: FragInput) => {
+    // arXiv IDs travel as a structured field so academic-source fragments
+    // can be filtered downstream without parsing the source URL each time.
+    const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1];
     const input: Parameters<typeof store.save>[0] = {
       id: frag.id, text: frag.text, source: frag.source,
       doi: frag.doi, confidence: frag.confidence, title: frag.title,
+      arxiv_id: arxivId,
       extracted_at: new Date().toISOString(), node_id: store.nodeId,
     };
 
@@ -124,11 +125,11 @@ export async function runAutonomousExtraction(
       // Stale content — supersede in Hypercore and update embedder
       console.log(`  [supersede] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old)`);
       try {
-        const newId = await store.supersede(frag.id, input);
-        indexInEmbedder(newId, frag.text, frag);
+        const newFrag = await store.supersede(frag.id, input);
+        indexInEmbedder(newFrag);
         budget.recordFragments(1);
         fragmentsIndexed++;
-        onIndexed?.({ id: newId, title: frag.title, source: frag.source });
+        onIndexed?.({ id: newFrag.id, title: newFrag.title, source: newFrag.source });
       } catch (e: any) {
         console.warn(`[store] Supersede failed for ${frag.id}: ${e.message}`);
       }
@@ -136,16 +137,20 @@ export async function runAutonomousExtraction(
     }
 
     // ── New fragment ─────────────────────────────────────────────────────────
+    // We save to Hypercore first so the embedder payload carries the canonical
+    // hash + signature. If Hypercore write fails (timeout, session closed) we
+    // skip the embedder entirely — a fragment that isn't in the signed log
+    // shouldn't appear as if it were.
     try {
-      await store.save(input);
+      const saved = await store.save(input);
+      indexInEmbedder(saved);
+      budget.recordFragments(1);
+      fragmentsIndexed++;
+      console.log(`  [+] Indexed: ${saved.id} | ${saved.source} | conf:${saved.confidence}`);
+      onIndexed?.({ id: saved.id, title: saved.title, source: saved.source });
     } catch (e: any) {
-      console.warn(`[store] Hypercore save failed for ${frag.id}: ${e.message}`);
+      console.warn(`[store] Hypercore save failed for ${frag.id} — skipping embedder: ${e.message}`);
     }
-    indexInEmbedder(frag.id, frag.text, frag);
-    budget.recordFragments(1);
-    fragmentsIndexed++;
-    console.log(`  [+] Indexed: ${frag.id} | ${frag.source} | conf:${frag.confidence}`);
-    onIndexed?.({ id: frag.id, title: frag.title, source: frag.source });
   };
 
   // Crawler callback: tools (mainly wikipedia_fetch) feed discovered titles here.
@@ -203,6 +208,9 @@ export async function runAutonomousExtraction(
   console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min\n`);
 
   // Drain the batch deterministically — one wikipedia_fetch per title.
+  // We only mark a title as `visited` if the fetch succeeded; transient
+  // failures (network blip, Wikipedia 503) leave the title eligible for
+  // re-enqueue by a future fetch that discovers the same link.
   for (const title of batchTitles) {
     const check = budget.exhausted();
     if (check.yes) {
@@ -218,13 +226,56 @@ export async function runAutonomousExtraction(
         onCrawlEnqueue,
       });
       if (!result.ok) {
-        console.warn(`  [fetch] failed for "${title}": ${result.error}`);
+        console.warn(`  [fetch] failed for "${title}": ${result.error} — leaving unvisited for retry`);
       } else {
+        crawlQueue.markVisited(title);
         const d = result.data as any;
         console.log(`  [fetch] "${title}" → indexed ${d?.indexed_count ?? 0} sections, discovered ${d?.links_discovered ?? 0} links`);
       }
     } catch (e: any) {
-      console.warn(`  [fetch] exception for "${title}": ${e.message}`);
+      console.warn(`  [fetch] exception for "${title}": ${e.message} — leaving unvisited for retry`);
+    }
+  }
+
+  // ── Auxiliary sources (rule-based, no LLM) ──────────────────────────────
+  // After draining the Wikipedia batch we optionally pull from one
+  // supplementary source per cycle, picked from the topic objective:
+  //   - "current_events" / news / today        → rss_fetch over a curated feed
+  //   - "science", "physics", "biology", math, ml, ai, cs → arxiv_search
+  //   - otherwise nothing extra (Wikipedia covers it)
+  // The choice is deterministic so the LLM stays out. Curated feeds and
+  // categories are tweakable via env (HIVE_AUX_RSS_FEEDS, HIVE_AUX_ARXIV).
+  if (!budget.exhausted().yes) {
+    const lower = objective.toLowerCase();
+    const auxQuery = (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+
+    const newsRe = /current[\s_-]?events|news|today|breaking|headline|politics|election/;
+    const scienceRe = /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/;
+
+    if (newsRe.test(lower)) {
+      const feeds = (process.env.HIVE_AUX_RSS_FEEDS ?? 'https://feeds.bbci.co.uk/news/world/rss.xml,https://www.reutersagency.com/feed/').split(',').map(s => s.trim()).filter(Boolean);
+      const feed = feeds[Math.floor(Math.random() * feeds.length)];
+      console.log(`\n  [aux] rss_fetch("${feed}") — news domain detected`);
+      try {
+        const r = await executeTool('rss_fetch', { url: feed, limit: 10 }, {
+          embedderUrl: effectiveEmbedderUrl, onFragment, onCrawlEnqueue,
+        });
+        if (r.ok) console.log(`  [aux] rss indexed ${(r.data as any)?.indexed_count ?? 0} items`);
+        else console.warn(`  [aux] rss failed: ${r.error}`);
+      } catch (e: any) {
+        console.warn(`  [aux] rss exception: ${e.message}`);
+      }
+    } else if (scienceRe.test(lower)) {
+      console.log(`\n  [aux] arxiv_search("${auxQuery}") — science domain detected`);
+      try {
+        const r = await executeTool('arxiv_search', { query: auxQuery, limit: 5 }, {
+          embedderUrl: effectiveEmbedderUrl, onFragment, onCrawlEnqueue,
+        });
+        if (r.ok) console.log(`  [aux] arxiv indexed ${(r.data as any)?.indexed_count ?? 0} papers`);
+        else console.warn(`  [aux] arxiv failed: ${r.error}`);
+      } catch (e: any) {
+        console.warn(`  [aux] arxiv exception: ${e.message}`);
+      }
     }
   }
 

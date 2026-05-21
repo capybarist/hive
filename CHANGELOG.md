@@ -5,6 +5,272 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.4] — 2026-05-21 — *100% P2P: zero HTTP between nodes*
+
+The bee-to-bee channel is now exclusively Hyperswarm + Hypercore. No
+HTTP request is made between two HIVE nodes for any reason — discovery,
+key exchange, claims sync, fragment sync, or federated queries all
+happen on the same Hyperswarm socket via Protomux + Hypercore replication.
+The Fastify HTTP server still serves the dashboard and `/api/query` to
+external clients, but it is no longer a transport between bees.
+
+### Added
+
+- **0.6.4.1** — `PeerMeta` interface in `packages/core/src/p2p_node.ts`
+  (re-exported from `@hive/core`). Carries `{ nodeId, publicKey,
+  coreKey, claimsCoreKey }`. The `hive/meta/v1` Protomux channel now
+  encodes a JSON-over-c.string blob with all four fields, sent once
+  per connection. Previously the channel carried just an `apiUrl`
+  string and the rest came over HTTP `/api/status` — that HTTP
+  round-trip is gone.
+- **0.6.4.2** — New `peer-meta` event on `HiveP2PNode` (replaces
+  `peer-api`). The `api_server.ts` handler is one block that does the
+  whole bootstrap: register pubkey, open fragments core, open claims
+  core, start watchers. No retry loop needed because the channel is
+  reliable (TCP+Noise inside the same Hyperswarm socket).
+
+### Removed
+
+- **0.6.4.3** — `packages/core/src/sync_manager.ts` deleted. The class
+  was already off-by-default since v0.6.3.2; this version removes it
+  entirely. `HIVE_HTTP_SYNC` env var no longer recognised.
+- **0.6.4.4** — `POST /api/register-peer` endpoint deleted. The
+  startup auto-announce that called it has also been removed. Peer
+  discovery is fully Hyperswarm.
+- **0.6.4.5** — HTTP pull of `/api/claims` during bootstrap removed.
+  Claims arrive via Hypercore replication (the `claims` core lives in
+  the same shared Corestore as `fragments` since v0.6.3.4, so
+  `store.replicate(socket)` propagates both).
+- **0.6.4.5** — Federated HTTP query in `POST /api/query` removed.
+  When a peer is connected via Hyperswarm its data is already in our
+  local embedder via replication; if it isn't, the correct answer is
+  "we don't have data" rather than poking HTTP.
+- **0.6.4.5** — Aggregator `/api/crawl` HTTP proxy to a bee removed.
+  Dashboards should query the bee directly. The aggregator stops
+  having any opinion about a bee's local crawl queue.
+- **0.6.4.6** — `HIVE_PEER` env var deprecated. Reading it still works
+  but only produces a `[deprecated]` warning at startup; nothing in
+  the code uses its value any more. `HIVE_API_URL` is also vestigial
+  now (no HTTP peer-to-peer means nobody needs to know our HTTP URL).
+
+### Changed
+
+- **Startup log** — `Peers → Hyperswarm discovery (no HTTP bootstrap
+  since v0.6.4)` replaces the old `Peer → http://...` line.
+- **`discoverObjective`** — no longer accepts a list of `peerApis` to
+  poll; receives `[]` from `api_server.ts`. Claims learnt from peers
+  via Hypercore replication populate `ClaimRegistry` directly, so
+  `assignTopics()` sees them without an HTTP detour.
+
+### Operational note
+
+If you were running with `HIVE_PEER=…` to bootstrap a fresh bee, you
+can drop it. Hyperswarm DHT does the discovery. The only caveat
+remains the one from CLAUDE.md: environments that block outbound UDP
+(some Codespaces, some corporate VPNs) cannot establish a Hyperswarm
+connection — in those environments **the bee runs in isolation
+until UDP becomes available**. Since v0.6.4 there is no HTTP fallback
+to compensate for that, by design.
+
+### Security
+
+- The receive-side ed25519 check from v0.6.2.1 is now strictly stronger
+  because every fragment's producer pubkey is known at the moment the
+  peer connects (it travels in the same Protomux meta payload). No
+  more "unknown peer — pubkey not registered yet" drops at startup.
+
+---
+
+## [0.6.3.4] — 2026-05-21 — *Pure P2P, replicated claims*
+
+Patch series 0.6.3.1 → 0.6.3.4. The bee is now a real Hypercore-native
+peer: HTTP sync is opt-in, fragments are served from the signed log
+(not the embedder), claims replicate alongside fragments over the same
+Hyperswarm connection, and `HIVE_PEER` is just a warm-start hint —
+Hyperswarm discovery covers the rest.
+
+### Added
+
+- **0.6.3.1** — When a peer is discovered via Hyperswarm, the bootstrap
+  step now also pulls the peer's `/api/claims` so topic coordination
+  works without `HIVE_PEER`. Booting a brand-new bee with no env config
+  is now a supported topology.
+- **0.6.3.4** — `ClaimRegistry` accepts an optional shared `Corestore`;
+  when passed, the `claims` Hypercore lives alongside the `fragments`
+  core and replicates over the same `store.replicate(socket)` channel.
+  `/api/status` exposes the new `claimsCoreKey`. Each peer's
+  `claimsCoreKey` is opened read-only and streamed into the local
+  registry via the new `watchRemoteClaims(remoteCoreKey)` method.
+  Restartable on stream death with exp backoff (same pattern as
+  `watchRemoteCore`).
+
+### Changed
+
+- **0.6.3.2** — `SyncManager` HTTP sync (the 8-second `/api/fragments`
+  poll) is now **OFF by default**. Set `HIVE_HTTP_SYNC=1` to re-enable
+  for debugging or when Hyperswarm UDP is blocked. Native Hypercore
+  replication is the only sync path in the default configuration.
+- **0.6.3.3** — `GET /api/fragments` now reads from Hypercore via
+  `KnowledgeStore.query()` in BEE mode, so the response carries the
+  full signed fragment (`hash`, `signature`, `status`, `supersedes`,
+  `superseded_by`). The aggregator path still reads from Qdrant since
+  it owns no local Hypercore. Hard cap of 5000 fragments in the page
+  to avoid OOM on very large stores.
+- **0.6.3.1** — Startup log shows `Peer → (none configured — relying on
+  Hyperswarm discovery)` instead of the previous `(no bootstrap peer)`
+  half-warning. Operators stop reading it as an error.
+
+---
+
+## [0.6.2.6] — 2026-05-21 — *Extraction quality + full ed25519 verify*
+
+Patch series 0.6.2.1 → 0.6.2.6. The signature check on the receive
+side is now a real ed25519 verify against a per-peer pubkey, not just
+a hash recompute. Wikipedia extraction stops truncating long sections
+and finally indexes H3 subsections. RSS/arXiv come back into the loop
+via rule-based routing. The watch streams self-heal.
+
+### Added
+
+- **0.6.2.1** — New `PeerRegistry` (`packages/core/src/peer_registry.ts`)
+  holds `node_id → publicKey` learnt during `/api/status` exchange.
+  `/api/status` now exposes `publicKey`. `watchRemoteCore` and
+  `SyncManager.syncOnce` look up the producer's pubkey and run a
+  full `verifySignature({id, hash}, signature, pubkey)` per fragment.
+  Drop counters distinguish unsigned / tampered / unknown-peer cases.
+  If no peer registry is provided (CLI/tests), the previous hash
+  recompute is used as a fallback so existing tests still pass.
+- **0.6.2.3** — `wikipedia_fetch` now indexes H3 subsections as their
+  own fragments with ids like `wiki_<article>_<h2_slug>_<h3_slug>` so
+  fine-grained search can hit a specific H3 instead of being absorbed
+  by its H2 parent.
+- **0.6.2.5** — Both `watchFragments` and `watchRemoteCore` wrap their
+  for-await loop in a restart-on-error supervisor with exponential
+  backoff (max 30s). A torn-down stream (session close, hyperbee
+  internal) is now self-healing instead of silently halting until
+  next process restart.
+- **0.6.2.6** — `ClaimRegistry.releaseExpired()` sweeps and deletes
+  claims whose `renewedAt` is older than TTL. Called at the top of
+  every extraction cycle in `api_server.ts`. The operator sees a
+  `[claims] Released N expired claim(s)` line whenever a dead BEE's
+  topics get freed; previously they sat in the registry blocking
+  re-assignment for 30 minutes with no signal.
+
+### Changed
+
+- **0.6.2.2** — `wikipedia_fetch` stops using `.slice(0, 1000)` to
+  cap section length. Sections longer than 1500 chars are chunked
+  via `text_chunker` (350 tokens, 50 overlap) so long sections
+  (`History`, `Background`) are fully indexed without losing content.
+  Each chunk gets its own id (`…_cN`) so dedup + TTL + supersede
+  remain consistent.
+- **0.6.2.4** — `runAutonomousExtraction` ends each cycle with an
+  optional auxiliary fetch decided by rules over the topic objective:
+  news / current_events → `rss_fetch` over a curated feed
+  (configurable via `HIVE_AUX_RSS_FEEDS`); science / ML / physics /
+  math / AI → `arxiv_search` with the topic name. Wikipedia remains
+  the default and the bulk of indexing. No LLM is involved in the
+  decision.
+
+### Security
+
+- The receive-side check is now real ed25519 against the producer's
+  known pubkey. Mutation (tampering) was already caught in v0.6.1.x
+  via hash recompute; this patch additionally catches impersonation
+  (peer X presenting a fragment claiming `node_id=Y`). Unknown peers
+  emit `[repl] Dropping fragment … — no pubkey known for …` and are
+  retried implicitly on the next Hyperswarm reconnect once
+  `/api/status` has populated the registry.
+
+---
+
+## [0.6.1.10] — 2026-05-21 — *Trust, honesty, and a real signed payload*
+
+Rolling patch series 0.6.1.1 → 0.6.1.10. The headline change: the ed25519
+signature now actually travels with every fragment all the way to the
+embedder, and peers that send us unsigned or tampered fragments get
+dropped instead of silently indexed. The aggregator-bootstrap bug
+("aggregator stops ingesting after a transient bee blip") is fixed.
+Misleading comments removed. Schema cleaned up.
+
+### Added
+
+- **0.6.1.1** — Aggregator (and bees) now retry the `coreKey` HTTP bootstrap
+  **indefinitely** while a peer remains connected via Hyperswarm, with
+  exponential backoff capped at 60s. The retry loop is cancelled when
+  Hyperswarm reports `peer-left`. Previously a single 5s-timeout fetch:
+  if `/api/status` didn't answer once at startup, native replication
+  for that peer never started for the rest of the session.
+  *File: `packages/api/src/api_server.ts` — `peer-api` handler.*
+- **0.6.1.2** — `buildEmbedderPayload(fragment)` helper in
+  `packages/core/src/interfaces.ts`. Single canonical shape for the
+  `/add` metadata sent to HNSW and Qdrant, including `hash`, `signature`,
+  `status`, and `extracted_at`. All four call sites
+  (`autonomous_extractor`, `watchFragments`, `watchRemoteCore`,
+  `SyncManager.addToHNSW`) now go through it.
+- **0.6.1.4** — `watchRemoteCore` re-hashes every replicated fragment and
+  drops anything missing a signature or whose hash doesn't match the
+  payload. Logs the drop count so the operator can spot a misbehaving
+  peer. *File: `packages/core/src/knowledge_store.ts`.*
+- **0.6.1.5** — `SyncManager.syncOnce` does the same for the HTTP-sync
+  path: a peer that returns fragments without `hash`/`signature`, or
+  whose hash doesn't recompute, gets dropped. Previously these were
+  normalised with `hash: ''` and `signature: ''` and stored as if
+  trusted. *File: `packages/core/src/sync_manager.ts`.*
+- **0.6.1.6** — `decodeHtmlEntities(s)` helper in `tools_registry.ts`.
+  Decodes numeric (`&#91;`, `&#x5B;`) and named (`&nbsp;`, `&amp;`,
+  `&mdash;` …) entities after stripping HTML tags so fragments no
+  longer carry visible `&#91; 10 &#93;` artefacts. Applied in
+  `wikipedia_fetch`, `web_fetch`, and `rss_fetch`.
+
+### Changed
+
+- **0.6.1.2 / 0.6.1.7** — `KnowledgeStore.save()` and
+  `KnowledgeStore.supersede()` now return the full `Fragment` (with hash
+  + signature) instead of just the `FragmentId`. The autonomous
+  extractor uses that return value to POST to the embedder, guaranteeing
+  the canonical signed payload reaches HNSW/Qdrant. Academic-only
+  fields (`doi`, `doi_valid`, `arxiv_id`) are now **omitted** from
+  the embedder payload when they don't apply, so Wikipedia/RSS
+  fragments no longer carry a sea of `null`s.
+- **0.6.1.3** — Removed the misleading
+  `// HTTP sync still works as fallback` comment from the aggregator's
+  bootstrap path; aggregators don't initialise `SyncManager`. The
+  new retry loop logs each failed attempt with the peer URL.
+- **0.6.1.8** — `crawl_queue.dequeueBatch(n)` no longer marks dequeued
+  titles as `visited`. The autonomous extractor calls
+  `crawlQueue.markVisited(title)` only after `wikipedia_fetch` returns
+  `ok: true`. Transient failures (Wikipedia 503, network blip) no
+  longer permanently lose a URL.
+- **0.6.1.9** — `docker-compose.yml` `bee-2` now uses the same defaults
+  as `bee-1` (`HIVE_EXTRACT_INTERVAL_MS=60000`,
+  `HIVE_EXTRACT_MAX_FRAGMENTS=9`, `HIVE_EXTRACT_BUDGET_MINUTES=20`).
+  Default `LLM_PROVIDER` in `api_server.ts` status/logs is now
+  `ollama`, matching the Docker stack default.
+
+### Removed
+
+- **0.6.1.10** — `packages/agent/src/reactive_extractor.ts` and
+  `packages/core/src/test_v02.ts` deleted. The reactive extractor was
+  the v0.1 entry path (LLM writing fragment text per chunk) and has
+  not been called from any production code since v0.6.0's LLM-free
+  extraction landed. `package.json` scripts (`test`, `extract`)
+  pointing at it were dropped; `extract:auto` renamed to plain
+  `extract` against `autonomous_extractor.ts`.
+
+### Security
+
+- Unsigned and tampered fragments are now refused by both the native
+  Hypercore replication path (`watchRemoteCore`) and the HTTP sync
+  path (`SyncManager.syncOnce`). This is the first version that
+  actually enforces the Manifesto's "ed25519 signed" promise on the
+  receive side. A future patch (planned **0.6.2.x**) will replace the
+  hash recomputation with a full ed25519 verify against a per-peer
+  public-key registry; today's check catches mutation but not a peer
+  presenting somebody else's signed payload.
+
+---
+
 ## [0.6.1] — 2026-05-19 — *Wikipedia forager: persistent crawl queue*
 
 Turns the bee from a "process my assigned topics once" extractor into an

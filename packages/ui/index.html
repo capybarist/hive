@@ -51,6 +51,20 @@
       background-clip: text; display: block;
     }
     .brand-sub { font-size: 10px; color: var(--muted); letter-spacing: .5px; margin-top: 2px; display: block; }
+    .brand-version {
+      font-size: 11px; font-weight: 600; letter-spacing: 0; vertical-align: middle;
+      margin-left: 6px; padding: 1px 6px; border-radius: 6px;
+      color: var(--muted); background: var(--bg-soft, #f3f4f6);
+      -webkit-text-fill-color: var(--muted); /* override the gradient mask */
+      border: 1px solid var(--border);
+    }
+    .brand-mode {
+      display: inline-block; margin-top: 4px; padding: 1px 6px;
+      font-size: 9px; font-weight: 700; letter-spacing: 1.2px;
+      border-radius: 4px; background: #eef2ff; color: #4338ca;
+      text-transform: uppercase;
+    }
+    .brand-mode.aggregator { background: #fef3c7; color: #92400e; }
 
     .sidebar-scroll { flex: 1; overflow-y: auto; padding-bottom: 16px; }
 
@@ -266,8 +280,9 @@
 <!-- ── Sidebar ── -->
 <aside class="sidebar">
   <div class="sidebar-brand">
-    <span class="brand-logo">HIVE</span>
+    <span class="brand-logo">HIVE <span id="hive-version" class="brand-version" title="HIVE version">v—</span></span>
     <span class="brand-sub">Heuristic Intelligent Vector Extraction</span>
+    <span id="hive-mode-badge" class="brand-mode" title="Node mode">—</span>
   </div>
 
   <div class="sidebar-scroll">
@@ -492,6 +507,16 @@ async function checkStatus() {
   try {
     const d = await fetch(`${API}/api/status`).then(r => r.json());
     MY_NODE_ID = d.nodeId ?? '';
+
+    // Version + mode badges (top of sidebar)
+    const vEl = document.getElementById('hive-version');
+    if (vEl) vEl.textContent = d.version ? `v${d.version}` : 'v—';
+    const mEl = document.getElementById('hive-mode-badge');
+    if (mEl) {
+      const m = (d.mode ?? '').toString();
+      mEl.textContent = m || '—';
+      mEl.className = 'brand-mode' + (m === 'aggregator' ? ' aggregator' : '');
+    }
     document.getElementById('node-id-label').textContent = `node: ${d.nodeId?.slice(0, 26) ?? '—'}`;
 
     const dot = document.getElementById('status-dot');

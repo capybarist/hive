@@ -87,13 +87,17 @@ export class CrawlQueue {
     return added;
   }
 
-  /** Take up to N titles from the head of the queue, mark them visited. */
+  /**
+   * Take up to N titles from the head of the queue. The titles are removed
+   * from the queue but NOT marked visited — call `markVisited(title)` after
+   * a successful fetch. Failed fetches stay out of `visited` so a future
+   * cycle can re-enqueue them via the normal link-discovery path.
+   */
   dequeueBatch(n: number): string[] {
     const out: string[] = [];
     while (out.length < n && this.queue.length > 0) {
       const t = this.queue.shift()!;
       this.inQueue.delete(t);
-      this.visited.add(t);
       out.push(t);
     }
     if (out.length > 0) this.dirty = true;

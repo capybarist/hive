@@ -2,7 +2,9 @@ import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
 import { join } from 'node:path';
 import type { Fragment, FragmentId, FragmentInput, IKnowledgeGraph, QueryFilter } from './interfaces.js';
+import { buildEmbedderPayload } from './interfaces.js';
 import { hashPayload, signPayload, verifySignature, type NodeIdentity } from './node_identity.js';
+import type { PeerRegistry } from './peer_registry.js';
 
 const K = {
   frag: (id: string)                 => `frag:${id}`,
@@ -100,7 +102,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return result;
   }
 
-  async save(input: FragmentInput): Promise<FragmentId> {
+  async save(input: FragmentInput): Promise<Fragment> {
     await this.ready();
     const fragment = this.buildFragment(input);
     return this.enqueue(async () => {
@@ -111,7 +113,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       await b.put(K.src(fragment.source, fragment.id), fragment.id);
       await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
       await this.withTimeout(b.flush(), 8_000, 'save flush');
-      return fragment.id;
+      return fragment;
     });
   }
 
@@ -154,7 +156,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
-  async supersede(oldId: FragmentId, newInput: FragmentInput): Promise<FragmentId> {
+  async supersede(oldId: FragmentId, newInput: FragmentInput): Promise<Fragment> {
     await this.ready();
     const old = await this.get(oldId);
     if (!old) throw new Error(`Fragment ${oldId} not found`);
@@ -172,7 +174,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       await b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
       await b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
       await this.withTimeout(b.flush(), 8_000, 'supersede flush');
-      return newFragment.id;
+      return newFragment;
     });
   }
 
@@ -198,18 +200,13 @@ export class KnowledgeStore implements IKnowledgeGraph {
    * delivers blocks to this BEE, the history stream picks them up, and HNSW
    * stays in sync automatically — no polling, no separate sync layer needed.
    *
-   * Call once after ready(). Never resolves (live stream). Catches its own errors.
+   * Call once after ready(). Never resolves (live stream). Auto-restarts the
+   * stream if it dies — previously a hyperbee internal error or session
+   * close would tear down the for-await loop and silently stop indexing
+   * until the bee was restarted.
    */
   async watchFragments(embedderUrl: string): Promise<void> {
     await this.ready();
-    
-    // Create a dedicated session for watching to avoid contention with the main session
-    const watchSession = this.store.session();
-    const watchCore = watchSession.get({ name: 'fragments' });
-    await watchCore.ready();
-    const watchBee = new Hyperbee(watchCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-    await watchBee.ready();
-
     const seen = new Set<string>();
 
     const post = async (frag: Fragment) => {
@@ -221,15 +218,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
           body: JSON.stringify({
             id: frag.id,
             text: frag.text,
-            metadata: {
-              source: frag.source,
-              doi: frag.doi ?? null,
-              doi_valid: frag.doi !== null,
-              confidence: frag.confidence,
-              node_id: frag.node_id,
-              title: (frag as any).title ?? null,
-              arxiv_id: (frag as any).arxiv_id ?? null,
-            },
+            metadata: buildEmbedderPayload(frag),
           }),
           signal: AbortSignal.timeout(10_000),
         });
@@ -237,11 +226,33 @@ export class KnowledgeStore implements IKnowledgeGraph {
       } catch { /* embedder offline — not marked seen, will retry on next appearance */ }
     };
 
-    // createHistoryStream({ live: true }) replays all past Hyperbee entries then
-    // streams new ones indefinitely — covers both local writes and P2P-replicated blocks.
-    for await (const { key, value } of (watchBee as any).createHistoryStream({ live: true })) {
-      if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
-        await post(value as Fragment);
+    const runStreamOnce = async () => {
+      // Dedicated session per attempt so a torn-down stream doesn't poison
+      // the next retry's session state.
+      const watchSession = this.store.session();
+      const watchCore = watchSession.get({ name: 'fragments' });
+      await watchCore.ready();
+      const watchBee = new Hyperbee(watchCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await watchBee.ready();
+      for await (const { key, value } of (watchBee as any).createHistoryStream({ live: true })) {
+        if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
+          await post(value as Fragment);
+        }
+      }
+    };
+
+    // Restart loop with bounded backoff. If the stream throws we wait and
+    // re-open from scratch; `seen` is preserved across restarts so already-
+    // indexed fragments are skipped immediately.
+    let backoffMs = 1_000;
+    while (true) {
+      try {
+        await runStreamOnce();
+        backoffMs = 1_000;   // clean exit (unlikely with live:true) → reset
+      } catch (err: any) {
+        console.warn(`[watch] watchFragments stream died: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        backoffMs = Math.min(backoffMs * 2, 30_000);
       }
     }
   }
@@ -249,44 +260,117 @@ export class KnowledgeStore implements IKnowledgeGraph {
   /**
    * Watch a remote peer's fragments core (opened read-only by key) and POST
    * each fragment to HNSW. Called after key exchange with a peer.
+   * The optional `peerRegistry` enables full ed25519 verification — without
+   * it we fall back to the v0.6.1.x hash-recompute check.
    */
-  async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string): Promise<void> {
+  async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
     await this.ready();
-    // The core was already opened and download()-enabled in api_server.ts before
-    // emitting peer-core. Getting it again is a no-op (Corestore caches by key).
-    const remoteCore = (this.store as any).get({ key: remoteCoreKey });
-    await remoteCore.ready();
-    // Ensure download is enabled even if called independently (e.g. tests).
-    remoteCore.download({ start: 0, end: -1 });
-    console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
-
-    const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-    await remoteBee.ready();
-
     const seen = new Set<string>();
+    let droppedUnsigned = 0;
+    let droppedBadSig = 0;
+    let droppedUnknownPeer = 0;
+
+    const runStreamOnce = async () => {
+      // The core was already opened + download()-enabled in api_server.ts
+      // before emitting peer-core. Getting it again is a no-op (Corestore
+      // caches by key). Re-fetching on every restart picks up the latest
+      // length naturally.
+      const remoteCore = (this.store as any).get({ key: remoteCoreKey });
+      await remoteCore.ready();
+      remoteCore.download({ start: 0, end: -1 });
+      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
+      const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await remoteBee.ready();
+      await this._consumeRemoteStream(remoteBee, embedderUrl, seen, peerRegistry, {
+        droppedUnsignedRef: () => droppedUnsigned, incUnsigned: () => droppedUnsigned++,
+        droppedBadSigRef: () => droppedBadSig,    incBadSig:    () => droppedBadSig++,
+        droppedUnknownPeerRef: () => droppedUnknownPeer, incUnknownPeer: () => droppedUnknownPeer++,
+      });
+    };
+
+    let backoffMs = 1_000;
+    while (true) {
+      try {
+        await runStreamOnce();
+        backoffMs = 1_000;
+      } catch (err: any) {
+        console.warn(`[repl] watchRemoteCore stream died for ${remoteCoreKey.toString('hex').slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+      }
+    }
+  }
+
+  // Extracted so watchRemoteCore can wrap the for-await loop in a restartable
+  // closure. Counters are passed via getter/incrementer pairs so the outer
+  // scope keeps a stable running total across restarts.
+  private async _consumeRemoteStream(
+    remoteBee: any,
+    embedderUrl: string,
+    seen: Set<string>,
+    peerRegistry: PeerRegistry | undefined,
+    counters: {
+      droppedUnsignedRef: () => number; incUnsigned: () => void;
+      droppedBadSigRef: () => number;   incBadSig: () => void;
+      droppedUnknownPeerRef: () => number; incUnknownPeer: () => void;
+    },
+  ): Promise<void> {
     for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
       if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
-        if (seen.has(value.id)) continue;
+        const frag = value as Fragment;
+        if (seen.has(frag.id)) continue;
+
+        // ── Signature verification ──────────────────────────────────────────
+        // Three-step check on every replicated fragment:
+        //   1. hash + signature present (else: drop "unsigned")
+        //   2. hash recomputes from the payload (else: drop "tampered")
+        //   3. signature verifies against the producer's known ed25519 pubkey
+        //      (else: drop "unknown peer" — happens before /api/status round
+        //      trip completes, or when somebody is impersonating a node_id)
+        // When peerRegistry is not provided we keep the v0.6.1.x behaviour:
+        // hash recompute only. This preserves CLI/test usage.
+        if (!frag.hash || !frag.signature) {
+          counters.incUnsigned();
+          const n = counters.droppedUnsignedRef();
+          if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping unsigned remote fragment ${frag.id} (count=${n})`);
+          continue;
+        }
+        const { hash, signature, ...rest } = frag;
+        const recomputed = hashPayload(rest);
+        if (recomputed !== hash) {
+          counters.incBadSig();
+          const n = counters.droppedBadSigRef();
+          if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping tampered remote fragment ${frag.id} (count=${n})`);
+          continue;
+        }
+        if (peerRegistry) {
+          const pubkey = peerRegistry.pubkeyFor(frag.node_id);
+          if (!pubkey) {
+            counters.incUnknownPeer();
+            const n = counters.droppedUnknownPeerRef();
+            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — no pubkey known for ${frag.node_id} (count=${n})`);
+            continue;
+          }
+          if (!verifySignature({ id: frag.id, hash }, signature, pubkey)) {
+            counters.incBadSig();
+            const n = counters.droppedBadSigRef();
+            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — ed25519 signature does not verify against ${frag.node_id}'s key (count=${n})`);
+            continue;
+          }
+        }
+
         try {
           await fetch(`${embedderUrl}/add`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              id: value.id,
-              text: value.text,
-              metadata: {
-                source: value.source,
-                doi: value.doi ?? null,
-                doi_valid: value.doi !== null,
-                confidence: value.confidence,
-                node_id: value.node_id,
-                title: value.title ?? null,
-                arxiv_id: value.arxiv_id ?? null,
-              },
+              id: frag.id,
+              text: frag.text,
+              metadata: buildEmbedderPayload(frag),
             }),
             signal: AbortSignal.timeout(10_000),
           });
-          seen.add(value.id);
+          seen.add(frag.id);
         } catch { /* embedder offline — not marked seen, will retry on reconnect */ }
       }
     }

@@ -6,18 +6,36 @@ import { dirname, join, resolve } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, SyncManager, isLLMConfigured, validateLLMKey } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry, isLLMConfigured, validateLLMKey } from '@hive/core';
+import type { PeerMeta } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
+
+// Read the package.json version once at startup so /api/status and the UI
+// can advertise which build is running. Fails silently to 'unknown' if the
+// file can't be read (e.g. zipped/bundled deployments).
+let HIVE_VERSION = 'unknown';
+try {
+  const pkgPath = resolve(__dirname, '../../../package.json');
+  const pkgJson = JSON.parse(await (await import('node:fs/promises')).readFile(pkgPath, 'utf8'));
+  HIVE_VERSION = String(pkgJson.version ?? 'unknown');
+} catch { /* fall back to 'unknown' */ }
 
 const PORT = Number(process.env.HIVE_PORT ?? 8080);
 const HIVE_MODE = (process.env.HIVE_MODE ?? 'bee') as 'bee' | 'aggregator';
 const IS_AGGREGATOR = HIVE_MODE === 'aggregator';
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
-const PEER_API = process.env.HIVE_PEER ?? '';   // kept for bootstrap announcements only
+// HIVE_PEER is DEPRECATED since v0.6.4: discovery is fully Hyperswarm-based and
+// the meta exchange (coreKey + publicKey + claimsCoreKey) happens over the
+// Protomux `hive/meta/v1` channel on the same socket. We still read the env
+// so users with old configs don't see crashes, but we ignore it for sync.
+const LEGACY_PEER_API = process.env.HIVE_PEER ?? '';
+if (LEGACY_PEER_API) {
+  console.warn(`[deprecated] HIVE_PEER=${LEGACY_PEER_API} ignored since v0.6.4 — discovery is Hyperswarm-only. Unset this env var to silence this warning.`);
+}
 const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
 const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
 const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
@@ -33,60 +51,62 @@ const knowledgeStore = new KnowledgeStore(DATA_DIR, identity);
 await knowledgeStore.ready();
 console.log(`   KnowledgeStore ready ✓`);
 
+// Registry of peer node_id → public key. Populated from the meta exchange
+// over the Hyperswarm/Protomux channel (no HTTP). Drives full ed25519
+// signature verification on every fragment received via Hypercore.
+const peerRegistry = new PeerRegistry();
+peerRegistry.register(identity.nodeId, identity.publicKeyHex);
+
 const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 
-// URL we advertise to peers so they can fetch our coreKey via HTTP and then
-// start the native Hypercore replication. Defaults to loopback for shell
-// development (single host). In Docker / cross-host setups you MUST set
-// HIVE_API_URL to a value the peer can reach — e.g. `http://bee-1:8080` for
-// docker-compose, or `https://hive.example.com` for public deployment.
-// Wrong value here means peers receive a URL that resolves to nothing on
-// their end → HTTP /api/status fails → coreKey never exchanged → native
-// Hypercore replication never starts → fragments don't propagate.
-const localApiUrl = process.env.HIVE_API_URL ?? `http://127.0.0.1:${PORT}`;
-const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localApiUrl);
+// Claim registry is initialised here so it's available when we build the
+// PeerMeta below. The full ready() + sweep is set up later in the file —
+// here we just need its coreKey, which is available after ready().
+const claimRegistry = new ClaimRegistry(DATA_DIR, knowledgeStore.corestore);
+await claimRegistry.ready();
+
+// PeerMeta — what we advertise to every Hyperswarm peer we connect with.
+// Sent once per connection over the `hive/meta/v1` Protomux channel.
+// There is NO HTTP fallback for this exchange since v0.6.4.
+const localMeta: PeerMeta = {
+  nodeId: identity.nodeId,
+  publicKey: identity.publicKeyHex,
+  coreKey: knowledgeStore.coreKey.toString('hex'),
+  claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? '',
+};
+const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localMeta);
 
 // ── Register ALL p2p listeners BEFORE start() ────────────────────────────────
 // Hyperswarm peers can connect and emit events during start()'s flush() window.
 // Any listener registered after start() would miss those early events.
 
-// When a peer's core key is known, start native Hypercore replication.
-p2pNode.on('peer-core', (remoteCoreKey: Buffer) => {
-  knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl).catch(console.error);
-});
-
-// ── Peer discovery via P2P + native Hypercore replication ────────────────────
-let syncManager: SyncManager | null = null;
-if (PEER_API) {
-  syncManager = new SyncManager(knowledgeStore, identity.nodeId, [PEER_API], embedderUrl);
-  syncManager.start();
-  console.log(`   HTTP sync → ${PEER_API} ✓`);
-}
-
-p2pNode.on('peer-api', async (peerApiUrl: string, peerId: string) => {
-  // 1. HTTP sync fallback
-  if (!syncManager) {
-    syncManager = new SyncManager(knowledgeStore, identity.nodeId, [], embedderUrl);
-    syncManager.start();
-  }
-  syncManager.addPeer(peerApiUrl);
-  syncManager.syncOnce().catch(() => {});
-
-  // 2. Native Hypercore replication: fetch core key via HTTP, then open + download
+// One inbound `peer-meta` event per peer = full bootstrap in a single shot:
+//   1. learn the peer's pubkey + node_id for signature verification
+//   2. open and start downloading their fragments Hypercore
+//   3. open and start downloading their claims Hypercore
+// All over the same Hyperswarm socket via the same Corestore.
+p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
   try {
-    const res = await fetch(`${peerApiUrl}/api/status`, { signal: AbortSignal.timeout(5_000) });
-    if (!res.ok) return;
-    const data = await res.json() as any;
-    if (!data.coreKey) return;
+    peerRegistry.register(meta.nodeId, meta.publicKey);
 
-    const remoteCoreKey = Buffer.from(data.coreKey, 'hex');
+    const remoteCoreKey = Buffer.from(meta.coreKey, 'hex');
     const peerCore = (knowledgeStore.corestore as any).get({ key: remoteCoreKey });
-    await peerCore.ready();
-    peerCore.download({ start: 0, end: -1 });
-    console.log(`[p2p] Core key fetched from ${peerApiUrl} — native replication started`);
-    p2pNode.emit('peer-core', remoteCoreKey, peerId);
-  } catch {
-    // HTTP fetch failed — HTTP sync still works as fallback
+    peerCore.ready().then(() => {
+      peerCore.download({ start: 0, end: -1 });
+      console.log(`[p2p] Replication started for ${meta.nodeId.slice(0, 16)} (peer ${peerId})`);
+      knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl, peerRegistry).catch(err =>
+        console.warn(`[repl] watchRemoteCore crashed: ${err?.message ?? err}`),
+      );
+    }).catch((err: any) => console.warn(`[p2p] peerCore.ready failed for ${peerId}: ${err?.message ?? err}`));
+
+    if (meta.claimsCoreKey) {
+      const claimsKey = Buffer.from(meta.claimsCoreKey, 'hex');
+      claimRegistry.watchRemoteClaims(claimsKey).catch(err =>
+        console.warn(`[claims] watchRemoteClaims crashed: ${err?.message ?? err}`),
+      );
+    }
+  } catch (e: any) {
+    console.warn(`[p2p] peer-meta handling failed for ${peerId}: ${e.message}`);
   }
 });
 
@@ -116,29 +136,12 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?
     const { question, top_k = 5, use_llm = true, history = [], filters } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
-    let { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k, filters);
+    const { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k, filters);
 
-    // Federated query: if local HNSW has no relevant data, ask peer BEEs.
-    // This handles the case where extraction happened on a different node and
-    // sync hasn't propagated yet (or Hyperswarm is unavailable).
-    if (!has_hive_data && PEER_API) {
-      try {
-        const peerRes = await fetch(`${PEER_API}/api/query`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question, top_k, use_llm: false }),
-          signal: AbortSignal.timeout(6_000),
-        });
-        if (peerRes.ok) {
-          const peerData = (await peerRes.json()) as any;
-          if (peerData.has_hive_data) {
-            fragments = peerData.fragments ?? fragments;
-            has_hive_data = true;
-            console.log(`[federated] Got ${fragments.length} fragments from ${PEER_API}`);
-          }
-        }
-      } catch { /* peer unreachable — fall through to hybrid mode */ }
-    }
+    // No federated HTTP query since v0.6.4 — when a peer is connected via
+    // Hyperswarm its fragments arrive via Hypercore replication and are
+    // already in our local embedder. If they aren't yet, the right answer
+    // is "we don't have data" rather than poking the peer over HTTP.
 
     if (!use_llm) return { fragments, has_hive_data, embedder_online, answer: null, mode: 'raw' };
 
@@ -156,25 +159,42 @@ app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?
 );
 
 // ── GET /api/fragments ───────────────────────────────────────────────────────
-// Reads from the HNSW embedder (not Hypercore) — ensures fragments are
-// available for sync even when Hypercore/Autobase writes fail.
+// Reads from Hypercore (the signed source-of-truth) so the response carries
+// the canonical fragment with hash + signature intact. Previous versions
+// read from the embedder's metadata table, which dropped hash/signature and
+// re-served whatever the embedder happened to remember.
+//
+// Aggregator mode keeps reading from the embedder because the aggregator
+// owns no local Hypercore — it has only Qdrant + the replicated cores it
+// streams to the embedder.
 app.get<{ Querystring: { limit?: string; offset?: string } }>(
   '/api/fragments',
   async (req) => {
     const limit = Number(req.query.limit ?? 50);
     const offset = Number(req.query.offset ?? 0);
 
-    try {
-      const res = await fetch(`${embedderUrl}/fragments?limit=1000`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) return { total: 0, offset, limit, fragments: [] };
-      const data = (await res.json()) as { total: number; fragments: any[] };
-      const page = (data.fragments ?? []).slice(offset, offset + limit);
-      return { total: data.total, offset, limit, fragments: page };
-    } catch {
-      return { total: 0, offset, limit, fragments: [] };
+    if (IS_AGGREGATOR) {
+      try {
+        const res = await fetch(`${embedderUrl}/fragments?limit=1000`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) return { total: 0, offset, limit, fragments: [] };
+        const data = (await res.json()) as { total: number; fragments: any[] };
+        const page = (data.fragments ?? []).slice(offset, offset + limit);
+        return { total: data.total, offset, limit, fragments: page };
+      } catch {
+        return { total: 0, offset, limit, fragments: [] };
+      }
     }
+
+    // BEE mode — stream from Hypercore via KnowledgeStore.query()
+    const all: any[] = [];
+    for await (const frag of knowledgeStore.query({})) {
+      all.push(frag);
+      if (all.length >= 5000) break;   // hard cap to avoid OOM on huge stores
+    }
+    const page = all.slice(offset, offset + limit);
+    return { total: all.length, offset, limit, fragments: page };
   },
 );
 
@@ -182,22 +202,8 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
 app.get('/api/node-info', async () => ({
   nodeId: identity.nodeId,
   port: PORT,
-  apiUrl: localApiUrl,
+  version: HIVE_VERSION,
 }));
-
-// ── POST /api/register-peer ──────────────────────────────────────────────────
-// Peers call this on startup so the seed node learns about them and starts
-// pulling their fragments. This makes the topology bidirectional:
-// BEE-2 → syncs from BEE-1 (via PEER_API config)
-// BEE-1 → syncs from BEE-2 (via this registration)
-app.post<{ Body: { apiUrl: string } }>('/api/register-peer', async (req) => {
-  const { apiUrl } = req.body;
-  if (!apiUrl) return { ok: false, error: 'apiUrl required' };
-  syncManager?.addPeer(apiUrl);
-  syncManager?.syncOnce().catch(() => {});   // immediate pull
-  console.log(`[sync] Peer registered: ${apiUrl}`);
-  return { ok: true, nodeId: identity.nodeId };
-});
 
 // ── GET /api/peers ───────────────────────────────────────────────────────────
 app.get('/api/peers', async () => ({
@@ -256,6 +262,7 @@ app.get('/api/status', async () => {
   const embedder = await getEmbedderStatus();
   return {
     api: 'ok',
+    version: HIVE_VERSION,
     mode: HIVE_MODE,
     nodeId: identity.nodeId,
     nodeIdShort: identity.nodeId.slice(0, 20),
@@ -265,9 +272,11 @@ app.get('/api/status', async () => {
     backend: (embedder as any)?.backend ?? 'hnsw',
     llm_configured: isLLMConfigured(),
     llm_ok: llmHealthy,
-    llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
+    llm_provider: process.env.LLM_PROVIDER ?? 'ollama',
     peers: p2pNode.peerCount,
     coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
+    claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? null,
+    publicKey: identity.publicKeyHex,
   };
 });
 
@@ -277,22 +286,13 @@ app.get('/api/status', async () => {
 // crawl — it only ingests fragments via Hypercore replication). This lets
 // the public dashboard query one URL regardless of where the crawler is.
 app.get('/api/crawl', async () => {
-  // Aggregator → proxy to peer bee
+  // Aggregator doesn't crawl — it only ingests via Hypercore replication.
+  // The /api/crawl proxy to a bee was removed in v0.6.4 to keep the
+  // node-to-node communication strictly P2P (Hyperswarm + Hypercore).
+  // Dashboards that want forager progress should query each bee directly
+  // (e.g. http://bee-1:8080/api/crawl).
   if (HIVE_MODE === 'aggregator') {
-    const peerUrl = process.env.HIVE_PEER ?? '';
-    if (!peerUrl) {
-      return { error: 'no peer configured', mode: HIVE_MODE };
-    }
-    try {
-      const res = await fetch(`${peerUrl}/api/crawl`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) return { error: `peer ${res.status}`, mode: HIVE_MODE };
-      const data = await res.json() as object;
-      return { ...data, source_peer: peerUrl };
-    } catch (e: any) {
-      return { error: e.message, mode: HIVE_MODE };
-    }
+    return { mode: HIVE_MODE, hint: 'query a bee directly — aggregator does not proxy /api/crawl' };
   }
 
   // Bee → read local queue files
@@ -361,9 +361,8 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
   console.log(`[${type}] ${msg}`);
 }
 
-// ── Claim registry (both modes use it for network visibility) ────────────────
-const claimRegistry = new ClaimRegistry(DATA_DIR);
-await claimRegistry.ready();
+// claimRegistry is initialised earlier (needed for PeerMeta).
+// Both modes use it for network visibility.
 
 // ── Aggregator mode: just index, never extract ────────────────────────────────
 if (IS_AGGREGATOR) {
@@ -377,48 +376,36 @@ let resolvedObjective = IS_AGGREGATOR ? '' : HIVE_OBJECTIVE;
 if (!IS_AGGREGATOR && !resolvedObjective) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
-    resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
+    // peerApis empty — Hyperswarm has already populated claimRegistry with
+    // any peer claims it has seen via Hypercore replication. There is no
+    // HTTP fallback for cross-peer claim discovery since v0.6.4.
+    resolvedObjective = await discoverObjective([], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
     logEvent('start', `Assigned objective: "${resolvedObjective}"`);
   } catch (e: any) {
     logEvent('error', `Topic assignment failed: ${e.message}`);
   }
 }
 
-// Register claims in the registry (BEE mode only)
+// Register claims in the registry (BEE mode only). Replication is automatic:
+// any peer connected via Hyperswarm gets our `claims` Hypercore appended
+// blocks and learns about our topics through `watchRemoteClaims`. No HTTP
+// push needed since v0.6.4.
 if (!IS_AGGREGATOR && resolvedObjective) {
   try {
-    const { loadTree, assignTopics: _assign } = await import('@hive/core');
+    const { loadTree } = await import('@hive/core');
     const leaves = loadTree();
     const objLower = resolvedObjective.toLowerCase();
-    // Find leaves whose keywords match the objective
     const matched = leaves.filter(leaf =>
       leaf.keywords.some(kw => objLower.includes(kw.toLowerCase())) ||
       objLower.includes(leaf.name_en.toLowerCase())
     ).slice(0, 5);
-    
-    const newClaims = [];
+
     for (const leaf of matched) {
       await claimRegistry.claim(leaf.id, identity.nodeId);
-      newClaims.push({ topicId: leaf.id, beeId: identity.nodeId, fragmentCount: 0 });
     }
-    
-    // Broadcast our claims to the bootstrap peer so others can see them
-    if (PEER_API && newClaims.length > 0) {
-      try {
-        await fetch(`${PEER_API}/api/claims`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claims: newClaims }),
-          signal: AbortSignal.timeout(3000)
-        });
-        logEvent('start', `Pushed ${newClaims.length} claims to bootstrap peer`);
-      } catch (err: any) {
-        logEvent('error', `Failed to push claims to bootstrap peer: ${err.message}`);
-      }
-    }
-    
+
     if (matched.length) {
-      logEvent('start', `Registered claims for ${matched.length} matching topics in knowledge tree`);
+      logEvent('start', `Registered ${matched.length} claims (replicated via Hypercore to all peers)`);
     }
   } catch { /* topic tree not available yet */ }
 }
@@ -428,7 +415,7 @@ if (!IS_AGGREGATOR && resolvedObjective) {
 let llmHealthy: boolean | null = null;
 
 if (isLLMConfigured()) {
-  validateLLMKey(process.env.LLM_PROVIDER ?? 'gemini', process.env.LLM_API_KEY ?? '')
+  validateLLMKey(process.env.LLM_PROVIDER ?? 'ollama', process.env.LLM_API_KEY ?? '')
     .then(err => { llmHealthy = err === null; })
     .catch(() => { llmHealthy = false; });
 }
@@ -442,6 +429,16 @@ const runLoop = async () => {
     nextCycleAt = null;
     let totalIndexed = 0;
     let totalTokens = 0;
+
+    // Sweep claims from dead BEEs so their topics are visible as uncovered
+    // to the next `discoverObjective`. Without this, a crashed BEE held
+    // topics hostage for CLAIM_TTL_MS = 30 minutes with no operator signal.
+    try {
+      const released = await claimRegistry.releaseExpired();
+      if (released.length > 0) logEvent('sync', `Released ${released.length} stale claims from dead BEEs`);
+    } catch (e: any) {
+      logEvent('error', `Claim sweep failed: ${e.message}`);
+    }
 
     try {
       let claims = await claimRegistry.getClaimsForBee(identity.nodeId);
@@ -511,7 +508,7 @@ async function startExtractionIfReady() {
   }
   if (!resolvedObjective) {
     try {
-      resolvedObjective = await discoverObjective(PEER_API ? [PEER_API] : [], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
+      resolvedObjective = await discoverObjective([], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
       logEvent('start', `Assigned objective: "${resolvedObjective}"`);
     } catch (e: any) {
       logEvent('error', `Topic assignment failed: ${e.message}`);
@@ -595,12 +592,13 @@ app.get('/api/activity', async () => ({
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
-  console.log(`\n   Mode → ${HIVE_MODE.toUpperCase()}`);
+  console.log(`\n   HIVE  → v${HIVE_VERSION}`);
+  console.log(`   Mode  → ${HIVE_MODE.toUpperCase()}`);
   console.log(`   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
-  console.log(`   Peer → ${PEER_API || '(no bootstrap peer)'}`);
+  console.log(`   Peers → Hyperswarm discovery (no HTTP bootstrap since v0.6.4)`);
   if (!IS_AGGREGATOR) {
-    const provider = process.env.LLM_PROVIDER ?? 'gemini';
+    const provider = process.env.LLM_PROVIDER ?? 'ollama';
     console.log(`   LLM  → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}`);
   } else {
     console.log(`   Qdrant → ${process.env.QDRANT_URL ?? 'http://localhost:6333'}`);
@@ -611,15 +609,6 @@ try {
   process.exit(1);
 }
 
-// Announce ourselves to the bootstrap peer so it adds us to its SyncManager.
-// This makes data flow bidirectionally: we pull from peer, peer pulls from us.
-if (PEER_API) {
-  fetch(`${PEER_API}/api/register-peer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiUrl: localApiUrl }),
-    signal: AbortSignal.timeout(5_000),
-  })
-    .then(r => { if (r.ok) console.log(`[sync] Announced to bootstrap peer ${PEER_API}`); })
-    .catch(e => console.warn(`[sync] Could not announce to ${PEER_API}: ${e.message}`));
-}
+// No HTTP announcement to a bootstrap peer since v0.6.4 — Hyperswarm
+// discovery + the Protomux `hive/meta/v1` channel cover everything that
+// /api/register-peer used to do.

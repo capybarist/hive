@@ -152,8 +152,10 @@ async function test4_p2p_replication() {
   await store1.ready();
   await store2.ready();
 
-  const p2p1 = new HiveP2PNode(store1.corestore);
-  const p2p2 = new HiveP2PNode(store2.corestore);
+  const meta1 = { nodeId: id1.nodeId, publicKey: id1.publicKeyHex, coreKey: store1.coreKey.toString('hex'), claimsCoreKey: '' };
+  const meta2 = { nodeId: id2.nodeId, publicKey: id2.publicKeyHex, coreKey: store2.coreKey.toString('hex'), claimsCoreKey: '' };
+  const p2p1 = new HiveP2PNode(store1.corestore, meta1);
+  const p2p2 = new HiveP2PNode(store2.corestore, meta2);
 
   // Start both nodes
   await p2p1.start();

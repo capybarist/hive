@@ -176,6 +176,35 @@ function hostnameFromUrl(url: string): string {
   }
 }
 
+// Decode the HTML entities that survive after `<tag>` stripping. Wikipedia's
+// parse API returns bracketed citation markers like `&#91; 10 &#93;` and other
+// numeric refs we want to render as their actual characters so the indexed
+// text reads naturally. Covers numeric entities (decimal + hex) plus a small
+// named-entity table — enough for clean news/wiki text without pulling in a
+// full HTML parser dep.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+  laquo: '«', raquo: '»', copy: '©', reg: '®',
+  trade: '™', deg: '°', middot: '·', bull: '•',
+};
+
+export function decodeHtmlEntities(s: string): string {
+  return s.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (full, body: string) => {
+    if (body[0] === '#') {
+      const isHex = body[1] === 'x' || body[1] === 'X';
+      const num = parseInt(body.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+      if (Number.isFinite(num) && num > 0 && num <= 0x10FFFF) {
+        try { return String.fromCodePoint(num); } catch { return full; }
+      }
+      return full;
+    }
+    const named = NAMED_ENTITIES[body.toLowerCase()];
+    return named ?? full;
+  });
+}
+
 // Tracks titles seen in this session to prevent duplicate indexing of the same
 // article from different sources (e.g. RSS feed URL vs direct article URL).
 const _seenTitles = new Set<string>();
@@ -301,7 +330,7 @@ export async function executeTool(
         const resolvedTitle: string = parse.title ?? title;
 
         const clean = (html: string) =>
-          html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+          decodeHtmlEntities(html.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 
         // Extract Wikipedia internal article titles from the raw HTML BEFORE
         // we strip tags (the forager's source of new URLs). Matches:
@@ -330,48 +359,81 @@ export async function executeTool(
         const linkAccumulator = new Set<string>();
         for (const t of extractLinks(fullHtml)) linkAccumulator.add(t);
 
-        // Split the HTML by H2 boundaries. Everything before the first H2 is
-        // the lead. Each subsequent chunk is one top-level section. We
-        // deliberately ignore H3+ subsections to keep fragment count
-        // manageable — the chunk for a section will include its sub-headings
-        // inline.
-        const parts = fullHtml.split(/<h2[^>]*>/);
-        const leadHtml = parts[0] ?? '';
-        const leadText = clean(leadHtml).slice(0, 1200);
-        if (leadText.length > 80) {
-          await emit({
-            id: `wiki_${articleSlug}_intro`,
-            text: leadText,
-            source: articleUrl,
-            doi: null,
-            confidence: 0.9,
-            title: `${resolvedTitle} — Introduction`,
-          });
-          indexed.push('Introduction');
-        }
+        // Split the HTML into hierarchical sections (H2 then H3) and emit
+        // a fragment per leaf. Sections longer than CHUNK_THRESHOLD chars
+        // are further split via text_chunker so we never silently truncate
+        // a long "History" or "Background" section.
+        //
+        // Section IDs are deterministic: wiki_<article>_<slug>[_cN].
+        // Re-fetching the same article produces the same ids, so dedup +
+        // TTL + supersede all work correctly.
+        const CHUNK_THRESHOLD = 1500;     // chars
+        const CHUNK_MAX_TOKENS = 350;     // ~1400 chars
+        const CHUNK_OVERLAP = 50;         // ~200 chars
+        const MIN_FRAGMENT_LEN = 100;
 
-        // Map remaining chunks to top-level section titles. `sections` from
-        // the API is a flat list across H2/H3/H4; pick the toclevel=1 entries
-        // (top-level) which correspond to the H2 splits we just made.
+        const emitSection = async (
+          slugPath: string,
+          headingPath: string,
+          rawText: string,
+        ) => {
+          if (rawText.length < MIN_FRAGMENT_LEN) return;
+          if (rawText.length <= CHUNK_THRESHOLD) {
+            await emit({
+              id: `wiki_${articleSlug}_${slugPath}`,
+              text: rawText,
+              source: articleUrl,
+              doi: null,
+              confidence: 0.9,
+              title: `${resolvedTitle} — ${headingPath}`,
+            });
+            indexed.push(headingPath);
+            return;
+          }
+          for (const chunk of chunkText(rawText, CHUNK_MAX_TOKENS, CHUNK_OVERLAP)) {
+            await emit({
+              id: `wiki_${articleSlug}_${slugPath}_c${chunk.index}`,
+              text: chunk.text,
+              source: articleUrl,
+              doi: null,
+              confidence: 0.9,
+              title: `${resolvedTitle} — ${headingPath} (part ${chunk.index + 1})`,
+            });
+            indexed.push(`${headingPath} (part ${chunk.index + 1})`);
+          }
+        };
+
+        // ── Lead / intro ────────────────────────────────────────────────────
+        const h2Split = fullHtml.split(/<h2[^>]*>/);
+        const leadHtml = h2Split[0] ?? '';
+        const leadText = clean(leadHtml);
+        await emitSection('intro', 'Introduction', leadText);
+
+        // ── Top-level sections (H2), each split further by H3 ───────────────
         const topLevel = sections.filter((s: any) => s.toclevel === 1);
-        for (let i = 0; i < parts.length - 1; i++) {
-          const chunk = parts[i + 1];
+        for (let i = 0; i < h2Split.length - 1; i++) {
+          const sectionHtml = h2Split[i + 1];
           const sectionMeta = topLevel[i];
           if (!sectionMeta) continue;
           const sTitle = clean(sectionMeta.line ?? '');
           if (!sTitle || SKIP_SECTIONS.has(sTitle.toLowerCase())) continue;
-          const content = clean(chunk).slice(0, 1000);
-          if (content.length < 100) continue;
-          const slug = slugify(sTitle);
-          await emit({
-            id: `wiki_${articleSlug}_${slug}`,
-            text: content,
-            source: articleUrl,
-            doi: null,
-            confidence: 0.9,
-            title: `${resolvedTitle} — ${sTitle}`,
-          });
-          indexed.push(sTitle);
+          const sSlug = slugify(sTitle);
+
+          // Within this H2 section, peel off H3 subsections.
+          const h3Split = sectionHtml.split(/<h3[^>]*>/);
+          const sectionLead = clean(h3Split[0] ?? '');
+          await emitSection(sSlug, sTitle, sectionLead);
+
+          for (let j = 1; j < h3Split.length; j++) {
+            const subHtml = h3Split[j];
+            // Subheading appears at the start of the chunk before its first
+            // closing tag; recover it from the cleaned text up to first period
+            // OR fall back to the chunk's first 60 chars.
+            const subClean = clean(subHtml);
+            const headingGuess = subClean.split(/[.,;]/)[0]?.slice(0, 60).trim() || `subsection-${j}`;
+            const subSlug = slugify(headingGuess) || `sub${j}`;
+            await emitSection(`${sSlug}_${subSlug}`, `${sTitle} → ${headingGuess}`, subClean);
+          }
         }
 
         // Feed links into the crawl queue (drop the article we just fetched).
@@ -408,7 +470,7 @@ export async function executeTool(
         const html = await res.text();
 
         const stripHtml = (s: string) =>
-          s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          decodeHtmlEntities(s.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
         const text = stripHtml(html).slice(0, 30_000);
 
         // Recover a page title from <title>...</title>
@@ -471,10 +533,9 @@ export async function executeTool(
           const description = typeof item.description === 'string'
             ? item.description
             : item.description?.['#text'] ?? item.summary?.['#text'] ?? item.summary ?? '';
-          const bodyText = (fullContent || description)
-            .replace(/<[^>]+>/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+          const bodyText = decodeHtmlEntities(
+            (fullContent || description).replace(/<[^>]+>/g, ''),
+          ).replace(/\s+/g, ' ').trim();
 
           const title = (typeof item.title === 'string'
             ? item.title

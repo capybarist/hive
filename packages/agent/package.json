@@ -6,9 +6,7 @@
   "main": "./src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "scripts": {
-    "test": "npx tsx src/reactive_extractor.ts",
-    "extract": "npx tsx src/reactive_extractor.ts",
-    "extract:auto": "npx tsx src/autonomous_extractor.ts"
+    "extract": "npx tsx src/autonomous_extractor.ts"
   },
   "dependencies": {
     "@hive/core": "*",
