@@ -1,20 +1,25 @@
 # HIVE — Full VPS stack
 #
 # Usage:
-#   cp .env.example .env && nano .env   # set LLM_PROVIDER (default: ollama, no key needed)
-#   docker compose up -d               # starts everything, pulls AI model automatically
+#   cp .env.example .env && nano .env   # set LLM_PROVIDER + LLM_API_KEY
+#   docker compose up -d                # starts caddy + qdrant + bee-1 + aggregator
+#
+# Default LLM provider is `gemini` (gemini-2.5-flash-lite). To switch:
+#   LLM_PROVIDER=groq   LLM_API_KEY=gsk_...
+#   LLM_PROVIDER=claude LLM_API_KEY=sk-ant-...
+#   LLM_PROVIDER=openai LLM_API_KEY=sk-...
+#   LLM_PROVIDER=ollama (then also `docker compose --profile ollama up -d`)
 #
 # Access points (no domain needed):
 #   http://your-ip        → Aggregator (via Caddy)
-#   http://your-ip:8080   → BEE directly
+#   http://your-ip:8080   → BEE-1 directly
+#   http://your-ip:8081   → BEE-2 directly (if started)
 #   http://your-ip:8090   → Aggregator directly
 #   http://your-ip:6333/dashboard → Qdrant
 #
-# To use a cloud LLM instead of Ollama:
-#   LLM_PROVIDER=groq  LLM_API_KEY=your_key   (in .env)
-#
-# To add a second BEE:
-#   docker compose up -d bee-2
+# Optional services (off by default — opt in via --profile):
+#   docker compose --profile bee-2 up -d     # add a 2nd extractor BEE
+#   docker compose --profile ollama up -d    # run a local LLM container
 
 services:
 
@@ -51,10 +56,16 @@ services:
     ports:
       - "6333:6333"
 
-  # ── Ollama — local LLM (starts automatically, pulls model on first run) ───────
+  # ── Ollama — local LLM (OPTIONAL, opt-in via profile) ────────────────────────
+  # Off by default since v0.6.4.2: most operators run with a cloud LLM
+  # (LLM_PROVIDER=gemini/groq/claude/openai) and the Ollama container was
+  # eating ~2 GB of RAM doing nothing. To turn it on:
+  #   docker compose --profile ollama up -d
+  # Then set LLM_PROVIDER=ollama in your .env and restart the bees.
   ollama:
     image: ollama/ollama:latest
     container_name: hive-ollama
+    profiles: ["ollama"]
     restart: unless-stopped
     volumes:
       - ollama-data:/root/.ollama
@@ -71,6 +82,7 @@ services:
   ollama-init:
     image: curlimages/curl:latest
     container_name: hive-ollama-init
+    profiles: ["ollama"]
     restart: "no"
     environment:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:1.5b}
@@ -91,9 +103,9 @@ services:
     container_name: hive-bee-1
     restart: unless-stopped
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8080
       - HIVE_EMBEDDER_PORT=7700
@@ -110,20 +122,20 @@ services:
       - "8080:8080"
     volumes:
       - bee1-data:/hive/data
-    depends_on:
-      ollama:
-        condition: service_healthy
+    # No depends_on since v0.6.4.2: ollama is opt-in (profile). When you run
+    # with `--profile ollama` the container becomes a peer service but is
+    # not a hard dependency — bees fall back to whatever LLM_PROVIDER says.
 
-  # ── Optional second BEE (start with: docker compose up -d bee-2) ─────────────
+  # ── Optional second BEE (start with: docker compose --profile bee-2 up -d) ──
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
     profiles: ["bee-2"]
     restart: unless-stopped
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:1.5b}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8081
       - HIVE_EMBEDDER_PORT=7701
@@ -139,8 +151,6 @@ services:
     volumes:
       - bee2-data:/hive/data
     depends_on:
-      ollama:
-        condition: service_healthy
       bee-1:
         condition: service_started
 
@@ -175,8 +185,6 @@ services:
         condition: service_started
       bee-1:
         condition: service_started
-      ollama:
-        condition: service_healthy
 
 volumes:
   qdrant-data:
