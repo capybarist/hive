@@ -90,31 +90,30 @@ VPS, `qwen2.5:3b` ~1.9 GB → needs 6 GB+.
 ### 2. Single node from source
 
 The minimum path — runs a **BEE** (producer-only, ~150 MB, no embedder,
-no `/api/query`):
+no LLM, no `/api/query`):
 
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
-
-# Recommended: set an LLM key so the extractor can decide what to fetch.
-# Free tier covers a bee easily (~1 call per cycle, Gemini or Groq work):
-echo "LLM_PROVIDER=gemini"        > .env
-echo "LLM_API_KEY=AIza_your_key" >> .env
-
-bash hive.sh                       # bee on :8080
+bash hive.sh                       # bee on :8080 — no .env needed
 ```
 
-Without `.env`, the bee still boots, joins the Hyperswarm DHT, claims
-topics, and replicates fragments from peers — but it won't extract new
-ones, because v0.7.0 still uses an LLM to orchestrate fetches. v0.7.x
-will let bees extract without an LLM. Either way the node contributes to
-durability of the network from second one.
+A bee extracts knowledge entirely without an LLM (since v0.6.1 the
+crawl loop is purely mechanical: drain queue → `wikipedia_fetch`
+verbatim → sign → append to Hypercore). It joins the Hyperswarm DHT,
+claims topics from `data/topic_tree.json`, fetches articles, and
+replicates with peers — all on day one, no API key required.
 
 For **hive** (all-in-one with `/api/query`) or **queen** (query-only),
-you need Python + an embedder too:
+you need Python + an embedder + an LLM key (the LLM is used **only**
+to synthesise natural-language answers from verified fragments at
+query time):
 
 ```bash
 pip install -r packages/embeddings/requirements.txt    # only for hive/queen
+echo "LLM_PROVIDER=gemini"        > .env
+echo "LLM_API_KEY=AIza_your_key" >> .env
+
 HIVE_MODE=hive bash hive.sh                            # extractor + queries (dev)
 bash queen.sh                                          # consumer-only with Qdrant (production)
 ```
@@ -145,9 +144,19 @@ Useful for testing P2P + replication locally before deploying.
 
 ## LLM Providers
 
-HIVE uses **one provider for everything** — autonomous extraction *and*
-query synthesis. The embeddings model (`all-MiniLM-L6-v2`, ~80 MB) always
-runs locally and is not an LLM.
+HIVE uses an LLM in exactly **one place**: **query synthesis on the
+queen**. When a client hits `/api/query`, the queen takes the top
+verified fragments returned by vector search and asks the LLM to weave
+them into a natural-language answer with citations. That's it.
+
+**Bees never call an LLM.** Since v0.6.1 the extractor is a purely
+mechanical loop (drain queue → `wikipedia_fetch` verbatim → sign →
+append). Topic assignment comes from `data/topic_tree.json` + hash-
+based round-robin among peers — no LLM, no API key needed for bee
+mode.
+
+The embeddings model (`all-MiniLM-L6-v2`, ~80 MB) runs locally on
+queens and is not an LLM.
 
 | Provider | Cost | Default model | Where to get a key |
 |---|---|---|---|
@@ -210,18 +219,24 @@ BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
 # Extraction tuning
 HIVE_EXTRACT_MAX_FRAGMENTS=9        # fragments per cycle, split across claimed topics
 HIVE_EXTRACT_INTERVAL_MS=60000      # pause between cycles (1 min = near-continuous)
-HIVE_EXTRACT_BUDGET_MINUTES=20      # total LLM time per cycle, divided by topic count
+HIVE_EXTRACT_BUDGET_MINUTES=20      # wall-clock budget per cycle, divided across topics
 ```
 
-**Throughput guidance:**
+**Bee throughput** depends only on `MAX_FRAGMENTS`, `INTERVAL_MS`, and
+Wikipedia's response time — there's no LLM in the loop. With the
+defaults (9 fragments/cycle, 60 s cycle) a healthy bee produces
+~13 000 fragments/day. Lower `INTERVAL_MS` for more, raise it to be
+gentler on the source.
 
-| Provider | Fragments/day (1 BEE, 3 topics) | Notes |
-|----------|--------------------------------|-------|
-| Ollama qwen2.5:1.5b on CPU | ~630 | Free. No API key. Small model may paraphrase. |
-| Groq free tier | ~6,400 | 100K tokens/day. Recommended for quality. |
-| Gemini / OpenAI | ~10,000+ | Paid. Highest quality and speed. |
+**Query latency** (queen `/api/query`) is dominated by the LLM
+synthesis call:
 
-> **Fragment quality note:** Small local models (≤3b) tend to paraphrase source content instead of extracting verbatim, which can introduce inaccuracies. For production use, Groq (free) or Gemini are recommended. **v0.6 fixed this architecturally** — extraction tools now auto-index verbatim content without LLM involvement in the text path.
+| Provider | Typical query latency | Notes |
+|---|---|---|
+| Groq | ~1–2 s | Free 100K tok/day. Best speed/quality trade-off. |
+| Gemini Flash Lite | ~2–3 s | Generous free tier. Default. |
+| OpenAI / Claude | ~2–4 s | Paid. Highest quality. |
+| Ollama qwen2.5:1.5b | ~15–30 s | Free, local, slow. Useful for fully-offline demos. |
 
 ---
 
@@ -250,29 +265,35 @@ Any node can become a queen — it will automatically sync all existing fragment
 ## How it works
 
 ```
-BEE starts
+Every node (bee | queen | hive) starts:
   → Loads ed25519 identity from data/identity/node.json (created on first boot)
-  → Opens local Hypercore (fragments) + Hypercore (claims), same Corestore
+  → Opens its Hypercore pair (fragments + claims) in a shared Corestore
   → Joins Hyperswarm DHT on topic = sha256("hive-network-v0.1")
 
-On every peer connection:
+On every peer connection (all modes):
   → store.replicate(socket) opens native Hypercore replication
   → Protomux channel `hive/meta/v2` exchanges:
        { nodeId, publicKey, coreKey, claimsCoreKey }
   → peer-meta event:
       • register peer's pubkey for ed25519 verify on receive
-      • open peer's fragments core read-only by coreKey → download
-      • open peer's claims   core read-only by claimsCoreKey → download
-  → watchRemoteCore: live stream → verify signature → POST to local embedder
+      • queen / hive: open peer's fragments core read-only → download
+                        + watchRemoteCore: live stream → verify sig → POST to embedder
+      • bee: registers the peer but does not download remote cores (v0.7)
 
-Extraction loop (every HIVE_EXTRACT_INTERVAL_MS):
+Bee extraction loop (every HIVE_EXTRACT_INTERVAL_MS) — NO LLM:
   → Dequeue 5 titles from crawl_queue.jsonl
   → For each: wikipedia_fetch verbatim → onFragment per H2/H3
        → store.get(id) — check Hypercore for existing fragment
             → Fresh (within TTL — wiki 7d, rss 24h, arxiv 30d): skip
-            → Stale: supersede() — old marked, new appended
-            → New: save() + POST to embedder with hash + signature
+            → Stale: supersede() — old marked, new appended (still signed)
+            → New: save() — signed and appended to own Hypercore
   → Aux fetch by rule: news topics → rss_fetch; science → arxiv_search
+
+Queen query path (/api/query) — the ONLY LLM call in HIVE:
+  → embedder.embed(question) → top-K vectors from Qdrant
+  → fragments = fetch text for each match (already signed when ingested)
+  → llm.generate(system_prompt, "fragments + question") → natural-language answer
+  → return { answer, sources: [{ url, title, source }, ...] }
 
 No HTTP between two HIVE nodes anywhere since v0.6.4. The Fastify
 server is for external clients only (dashboard + /api/query).
