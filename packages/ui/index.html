@@ -333,15 +333,35 @@
     .bee-card {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 16px 18px;
+      position: relative; overflow: hidden;
     }
+    /* v0.7.2.3 — top accent stripe + tinted halo so stat cards read at a
+       glance instead of being indistinguishable from background panels.
+       The accent variants are set via modifier classes on the card. */
+    .bee-card::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: var(--accent);
+      opacity: 0;
+    }
+    .bee-card.accent-queue::before    { opacity: 1; background: var(--accent); }
+    .bee-card.accent-visited::before  { opacity: 1; background: var(--green); }
+    .bee-card.accent-objective::before { opacity: 1; background: var(--brand); }
+    .bee-card.accent-queue    { background: linear-gradient(135deg, rgba(139,92,246,.04) 0%, var(--surface) 60%); }
+    .bee-card.accent-visited  { background: linear-gradient(135deg, rgba(16,185,129,.05) 0%, var(--surface) 60%); }
+    .bee-card.accent-objective { background: linear-gradient(135deg, rgba(14,165,233,.04) 0%, var(--surface) 60%); }
+
     .bee-card-label {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px;
     }
+    .bee-card-label .glyph { font-size: 13px; line-height: 1; }
     .bee-stat-num {
-      font-size: 26px; font-weight: 800; color: var(--text); line-height: 1.1;
+      font-size: 28px; font-weight: 800; color: var(--text); line-height: 1.1;
       font-variant-numeric: tabular-nums;
     }
+    .bee-card.accent-queue   .bee-stat-num { color: var(--accent); }
+    .bee-card.accent-visited .bee-stat-num { color: var(--green); }
     .bee-stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
     .bee-status-row {
@@ -360,14 +380,25 @@
       50%      { opacity: .4; transform: scale(1.4); }
     }
 
-    .bee-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+    .bee-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+    /* Titles list (next-up / recently-fetched) — ellipsed because they're
+       Wikipedia titles that can be very long, and the operator only needs
+       to recognise the article. */
     .bee-list-item {
-      font-size: 12px; padding: 4px 6px; color: var(--text);
+      font-size: 12px; padding: 5px 6px; color: var(--text);
       border-bottom: 1px solid var(--border); white-space: nowrap;
-      overflow: hidden; text-overflow: ellipsis;
+      overflow: hidden; text-overflow: ellipsis; line-height: 1.45;
     }
     .bee-list-item:last-child { border-bottom: none; }
     .bee-list-item .ts { color: var(--muted); margin-right: 8px; font-family: ui-monospace, monospace; font-size: 11px; }
+
+    /* v0.7.2.3 — activity items can be long ("Cycle complete: 60 fragments | 0 tokens").
+       Allowing wrap is more useful than ellipsing the most informative
+       text. The wrap-aware version is applied only inside the bee event list. */
+    #bee-event-list .bee-list-item {
+      white-space: normal; overflow: visible; text-overflow: clip;
+      line-height: 1.5; padding: 6px 6px;
+    }
 
     .bee-objective {
       font-size: 13px; line-height: 1.55; color: var(--text);
@@ -438,7 +469,9 @@
     </div>
     <div class="topbar-pills">
       <div class="pill"><span class="dot peer" id="peer-dot"></span><span id="peer-text">0 peers</span></div>
-      <div class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting...</span></div>
+      <!-- v0.7.2.3: the "embedder online/X indexed" pill is meaningless on a
+           bee (no embedder, indexed=0 by design). Hidden on bee mode. -->
+      <div class="pill hide-on-bee"><span class="dot" id="status-dot"></span><span id="status-text">connecting...</span></div>
       <button class="clear-btn" id="clear-btn" style="margin-left:4px">New chat</button>
     </div>
   </div>
@@ -470,21 +503,21 @@
 
       <!-- Forager metrics, 2-col grid -->
       <div class="bee-grid-2">
-        <div class="bee-card">
-          <div class="bee-card-label">Queue</div>
+        <div class="bee-card accent-queue">
+          <div class="bee-card-label"><span class="glyph">📥</span><span>Queue</span></div>
           <div class="bee-stat-num" id="bee-stat-queue">—</div>
           <div class="bee-stat-sub">Articles waiting to fetch</div>
         </div>
-        <div class="bee-card">
-          <div class="bee-card-label">Visited</div>
+        <div class="bee-card accent-visited">
+          <div class="bee-card-label"><span class="glyph">✓</span><span>Visited</span></div>
           <div class="bee-stat-num" id="bee-stat-visited">—</div>
           <div class="bee-stat-sub">Articles already fetched</div>
         </div>
       </div>
 
       <!-- Objective -->
-      <div class="bee-card">
-        <div class="bee-card-label">Current objective</div>
+      <div class="bee-card accent-objective">
+        <div class="bee-card-label"><span class="glyph">🎯</span><span>Current objective</span></div>
         <div class="bee-objective" id="bee-objective">—</div>
       </div>
 
@@ -588,6 +621,11 @@
 <script>
 const API = '';
 let MY_NODE_ID = '';
+// v0.7.2.3: cache the latest /api/status payload so loadNetwork() can
+// surface the same peer count + indexed total that the topbar shows.
+// Avoids the sidebar/topbar disagreement (sidebar derived from
+// /api/topics, which only sees peers that already published a claim).
+let LATEST_STATUS = null;
 
 // ── LLM Config Modal ──────────────────────────────────────────────────────────
 const PROVIDER_HINTS = {
@@ -673,6 +711,7 @@ async function checkStatus() {
   try {
     const d = await fetch(`${API}/api/status`).then(r => r.json());
     MY_NODE_ID = d.nodeId ?? '';
+    LATEST_STATUS = d;
 
     // Version + mode badges (top of sidebar)
     const vEl = document.getElementById('hive-version');
@@ -888,9 +927,14 @@ async function loadNetwork() {
     }
 
     // ── Aggregate ─────────────────────────────────────────────────────────
-    // Count peers (excluding self) and total fragments across the network.
+    // v0.7.2.3: peer count and frag total now come from /api/status so the
+    // sidebar matches the topbar. `/api/topics` only knows about peers that
+    // already published a claim record over Hypercore — anyone connected
+    // via the DHT but not yet seen with a claim doesn't appear there. The
+    // resulting "0 peers" while the topbar said "1 peer" was confusing.
+    const peerCount = LATEST_STATUS?.peers ?? 0;
+    const indexedTotal = LATEST_STATUS?.indexed ?? 0;
     const peerNodes = nodes.filter(n => n.nodeId !== MY_NODE_ID);
-    const totalFragments = nodes.reduce((s, n) => s + (n.count ?? 0), 0);
     const myCount = nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0;
 
     // Bucket topics by their first slash-separated segment. Topic IDs look
@@ -914,13 +958,20 @@ async function loadNetwork() {
       .sort((a, b) => b.bees - a.bees);
 
     // ── Render ────────────────────────────────────────────────────────────
+    // Headline numbers always come from /api/status (LATEST_STATUS). On a
+    // queen `indexed` is the qdrant collection size; on a bee it's 0 by
+    // design — we hide the frag count in that case so the sidebar reads
+    // honestly ("X peers" only, with the rest of the panel showing what
+    // those peers are claiming).
+    const showFrags = (LATEST_STATUS?.mode !== 'bee') && indexedTotal > 0;
     let html = `
       <div class="net-summary">
-        <span class="num">${peerNodes.length}</span>
-        <span>peer${peerNodes.length === 1 ? '' : 's'}</span>
-        <span class="sep">·</span>
-        <span class="num">${totalFragments.toLocaleString()}</span>
-        <span>frags</span>
+        <span class="num">${peerCount}</span>
+        <span>peer${peerCount === 1 ? '' : 's'}</span>
+        ${showFrags ? `
+          <span class="sep">·</span>
+          <span class="num">${indexedTotal.toLocaleString()}</span>
+          <span>frags</span>` : ''}
       </div>`;
 
     if (coverage.length) {
@@ -951,8 +1002,13 @@ async function loadNetwork() {
         </div>`;
     }
 
+    // The "Show N peers" toggle only exists if we have peer claim data to
+    // show. The headline peer count is already shown above and may be
+    // higher than peerNodes.length (some peers connect via DHT but haven't
+    // published a claim yet — the topics endpoint won't see them).
     if (peerNodes.length) {
-      html += `<button class="net-peers-toggle" id="net-peers-toggle">▾ Show ${peerNodes.length} peer${peerNodes.length === 1 ? '' : 's'}</button>`;
+      const noun = peerNodes.length === 1 ? 'peer' : 'peers';
+      html += `<button class="net-peers-toggle" id="net-peers-toggle">▾ Show ${peerNodes.length} ${noun} with claim data</button>`;
       html += '<div class="net-peers-detail hidden" id="net-peers-detail"></div>';
     }
 
@@ -988,7 +1044,8 @@ async function loadNetwork() {
           detail.dataset.rendered = '1';
         }
         detail.classList.toggle('hidden');
-        toggle.textContent = (opening ? '▴ Hide ' : '▾ Show ') + `${peerNodes.length} peer${peerNodes.length === 1 ? '' : 's'}`;
+        const noun = peerNodes.length === 1 ? 'peer' : 'peers';
+        toggle.textContent = (opening ? '▴ Hide ' : '▾ Show ') + `${peerNodes.length} ${noun} with claim data`;
       });
     }
   } catch { document.getElementById('network-panel').innerHTML = '<div class="net-empty">Could not load network</div>'; }

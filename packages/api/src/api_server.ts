@@ -103,7 +103,14 @@ try {
 
 const HIVE_OBJECTIVE = process.env.HIVE_OBJECTIVE ?? '';
 const HIVE_TOPIC_DOMAIN = process.env.BEE_TOPIC_DOMAIN ?? '';   // soft domain preference
-const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 30 * 60 * 1000);
+// v0.7.2.3: default lowered from 30 min → 1 s. The 30-min pause was
+// a v0.5/v0.6 hedge against LLM rate limits — the LLM is no longer
+// in the extraction loop (see autonomous_extractor.ts since v0.6.1).
+// Wikipedia's API tolerates well over 60 req/s for our query shape,
+// so a 1 s gap between cycles is polite without leaving the node idle.
+// Operators can still raise this via HIVE_EXTRACT_INTERVAL_MS if they
+// run on metered bandwidth or want to be extra-conservative.
+const EXTRACT_INTERVAL_MS = Number(process.env.HIVE_EXTRACT_INTERVAL_MS ?? 1000);
 const EXTRACT_MAX_FRAGMENTS = Number(process.env.HIVE_EXTRACT_MAX_FRAGMENTS ?? 10);
 const EXTRACT_BUDGET_MINUTES = Number(process.env.HIVE_EXTRACT_BUDGET_MINUTES ?? 8);
 

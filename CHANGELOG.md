@@ -5,6 +5,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2.3] — 2026-05-22 — *Continuous extraction; sidebar parity; UI polish*
+
+Follow-up to v0.7.2.2 fixing five things from the live review.
+
+### Changed
+
+- **Default `HIVE_EXTRACT_INTERVAL_MS` lowered from 30 min → 1 s**
+  (binary and docker-compose default). The 30-min pause was a v0.5/v0.6
+  hedge against LLM rate limits; the LLM is no longer in the extraction
+  loop since v0.6.1 so the pause has no purpose. Wikipedia's API tolerates
+  well over our extraction rate, so 1 s between cycles keeps the bee
+  effectively continuous without hammering the source. On a healthy bee
+  the queue should drain visibly, not sit at the same count for minutes.
+- **Sidebar / topbar number parity.** The "Knowledge Network" panel now
+  reads peer count + fragment total from `/api/status` (the same source
+  the topbar uses) instead of from `/api/topics`. The old discrepancy
+  ("sidebar: 0 peers · 0 frags" while topbar said "1 peer · 123843
+  indexed") came from `/api/topics` only knowing about peers that had
+  already published a claim record — DHT-connected peers without a claim
+  yet were invisible. The detailed peer list with topic claims still
+  exists behind the toggle and reads from `/api/topics`; only the
+  summary numbers move.
+- **Embedder pill hidden on bee.** The "X indexed / embedder offline"
+  pill in the topbar is meaningless for a bee (no embedder, indexed=0
+  by design — see v0.7.0.1 capability flags). The pill now carries the
+  `.hide-on-bee` class so it disappears in bee mode along with the
+  query input and LLM provider section.
+- **Color accents on bee stat cards.** The Queue / Visited / Objective
+  cards each get a 3 px left stripe plus a faint diagonal gradient in
+  the accent colour (violet for Queue, green for Visited, sky-blue for
+  Objective). The stat numbers themselves take the accent colour on the
+  metric cards. Replaces the all-white panel look that read as "broken
+  dashboard" in the v0.7.2.2 screenshot.
+- **Glyph icons** added to bee card labels (📥 Queue, ✓ Visited, 🎯
+  Objective) for at-a-glance recognition.
+
+### Fixed
+
+- **Activity feed inside the bee dashboard** no longer ellipses entries
+  that wrap to multiple lines. Activity messages can be long (e.g.
+  `Cycle complete: 60 fragments | 0 tokens`); seeing `Cycle co…` was
+  uninformative. The titles lists (Next up, Recently fetched) still
+  ellipse — they're Wikipedia article titles where one-line preview is
+  enough.
+
+### Added
+
+- `LATEST_STATUS` global cached in `checkStatus()`. Lets `loadNetwork()`
+  derive panel numbers from the same `/api/status` payload the topbar
+  uses, without an extra round-trip.
+
+### Verified
+
+- Tag balance on `index.html`: `<div>` open/close 110/110.
+- Smoke test of a fresh `HIVE_MODE=bee` cold-start: nextCycleAt is ~4 s
+  into the future (vs ~60 000 ms previously), confirming the new
+  default takes effect.
+- Served HTML contains 25 matches for the new selectors
+  (`accent-queue`, `accent-visited`, `accent-objective`, `hide-on-bee`,
+  `LATEST_STATUS`, `bee-event-list`, …).
+
+### Not changed
+
+- Per-cycle behaviour. `HIVE_EXTRACT_MAX_FRAGMENTS` (default 10) still
+  caps work per cycle; the change is purely how long the bee waits
+  between cycles.
+- `/api/topics` schema. Still used for the per-peer claim breakdown
+  behind the toggle.
+
+---
+
 ## [0.7.2.2] — 2026-05-22 — *UI polish: capybarahome palette, aggregated network panel, bee dashboard*
 
 UI-only release answering three usability complaints:
