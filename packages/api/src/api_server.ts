@@ -57,15 +57,15 @@ const IS_HIVE  = HIVE_MODE === 'hive';
 // Capability flags (what does this mode do?). These are derived once at
 // boot so the rest of the file reads as "if (HAS_EXTRACTOR) ..." instead
 // of "if (HIVE_MODE === 'bee' || HIVE_MODE === 'hive') ...".
-const HAS_EXTRACTOR     = IS_BEE  || IS_HIVE;   // runs the autonomous Wikipedia forager
-const HAS_LOCAL_STORE   = IS_BEE  || IS_HIVE;   // owns a Hypercore where it writes fragments
-const HAS_QUERY_API     = IS_QUEEN || IS_HIVE;  // /api/query + LLM synthesis
-const HAS_LOCAL_EMBED   = IS_QUEEN || IS_HIVE;  // talks to embedder for /add and /search
-const REPLICATES_PEERS  = true;                  // every mode reads peer Hypercores
-const HAS_DASHBOARD_PROXY = IS_QUEEN;            // /api/crawl proxies a bee for external dashboards
+const HAS_EXTRACTOR           = IS_BEE  || IS_HIVE;   // runs the autonomous Wikipedia forager
+const HAS_LOCAL_STORE         = IS_BEE  || IS_HIVE;   // writes its own Hypercore (signed fragments)
+const HAS_QUERY_API           = IS_QUEEN || IS_HIVE;  // /api/query + LLM synthesis
+const HAS_LOCAL_EMBED         = IS_QUEEN || IS_HIVE;  // talks to embedder for /add and /search
+const HAS_REMOTE_REPLICATION  = IS_QUEEN || IS_HIVE;  // downloads peer Hypercores into the local index
+const HAS_DASHBOARD_PROXY     = IS_QUEEN;             // /api/crawl proxies a bee for external dashboards
 
-// Backward-compat alias for code that hasn't been migrated yet.
-const IS_AGGREGATOR = IS_QUEEN;
+// Bees still join Hyperswarm so queens can discover them and pull their
+// Hypercore — but a producer-only bee doesn't ingest anything itself.
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 // HIVE_PEER is DEPRECATED since v0.6.4: discovery is fully Hyperswarm-based and
@@ -144,13 +144,20 @@ const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localMeta);
 // Any listener registered after start() would miss those early events.
 
 // One inbound `peer-meta` event per peer = full bootstrap in a single shot:
-//   1. learn the peer's pubkey + node_id for signature verification
-//   2. open and start downloading their fragments Hypercore
-//   3. open and start downloading their claims Hypercore
-// All over the same Hyperswarm socket via the same Corestore.
+//   1. learn the peer's pubkey + node_id for signature verification (always)
+//   2. open + download the peer's fragments Hypercore (only if HAS_REMOTE_REPLICATION)
+//   3. open + download the peer's claims Hypercore (only if HAS_REMOTE_REPLICATION)
+// A `bee` (producer-only) registers the peer's identity so it can verify any
+// claims-core writes that arrive over the shared Corestore, but it does NOT
+// download the peer's fragments core — bees are publishers, not consumers.
 p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
   try {
     peerRegistry.register(meta.nodeId, meta.publicKey);
+
+    if (!HAS_REMOTE_REPLICATION) {
+      console.log(`[p2p] Peer ${meta.nodeId.slice(0, 16)} registered (mode=${HIVE_MODE}, no remote replication)`);
+      return;
+    }
 
     const remoteCoreKey = Buffer.from(meta.coreKey, 'hex');
     const peerCore = (knowledgeStore.corestore as any).get({ key: remoteCoreKey });
@@ -176,8 +183,12 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
 // Start P2P AFTER all listeners are registered so no early peer events are missed
 await p2pNode.start();
 
-// Drive local Hypercore → embedder (BEE mode only — aggregator has no local extraction)
-if (!IS_AGGREGATOR) {
+// Drive local Hypercore → embedder. Needs both: (a) we write our own fragments
+// (HAS_LOCAL_STORE) and (b) we have an embedder to push them to (HAS_LOCAL_EMBED).
+// In `bee` mode (a) is true but (b) is false — the bee publishes its Hypercore
+// for queens to consume, but doesn't keep a local vector index. Skipping
+// watchFragments in `bee` mode is the single biggest RAM win of the role split.
+if (HAS_LOCAL_STORE && HAS_LOCAL_EMBED) {
   knowledgeStore.watchFragments(embedderUrl).catch(console.error);
   console.log(`   Local watch started ✓`);
 }
@@ -193,7 +204,10 @@ await app.register(cors, {
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
 // ── POST /api/query ──────────────────────────────────────────────────────────
-app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown> } }>(
+// Only registered when this node has the query API (queen or hive). A
+// producer-only bee doesn't carry an embedder or LLM config — queries
+// should go to a queen instead.
+if (HAS_QUERY_API) app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown> } }>(
   '/api/query',
   async (req, reply) => {
     const { question, top_k = 5, use_llm = true, history = [], filters } = req.body;
@@ -236,7 +250,10 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
     const limit = Number(req.query.limit ?? 50);
     const offset = Number(req.query.offset ?? 0);
 
-    if (IS_AGGREGATOR) {
+    // Queens have no local Hypercore — they aggregate from peers into Qdrant.
+    // Bees and hive-mode read from their own signed Hypercore so the response
+    // carries hash + signature for the fragments they authored.
+    if (!HAS_LOCAL_STORE) {
       try {
         const res = await fetch(`${embedderUrl}/fragments?limit=1000`, {
           signal: AbortSignal.timeout(5000),
@@ -439,16 +456,16 @@ function logEvent(type: ActivityEvent['type'], msg: string) {
 // claimRegistry is initialised earlier (needed for PeerMeta).
 // Both modes use it for network visibility.
 
-// ── Aggregator mode: just index, never extract ────────────────────────────────
-if (IS_AGGREGATOR) {
-  logEvent('start', 'Aggregator mode active — indexing all peer fragments into Qdrant');
+// ── Queen-only startup log ─────────────────────────────────────────────────
+if (IS_QUEEN) {
+  logEvent('start', 'Queen mode active — indexing all peer fragments into Qdrant');
   logEvent('start', `Qdrant backend @ ${process.env.QDRANT_URL ?? 'http://localhost:6333'}`);
   logEvent('start', 'Waiting for BEEs to connect via Hyperswarm...');
 }
 
-// ── BEE mode: resolve objective and start extraction ─────────────────────────
-let resolvedObjective = IS_AGGREGATOR ? '' : HIVE_OBJECTIVE;
-if (!IS_AGGREGATOR && !resolvedObjective) {
+// ── Extractor setup: resolve objective and prepare claims (bee + hive) ─────
+let resolvedObjective = HAS_EXTRACTOR ? HIVE_OBJECTIVE : '';
+if (HAS_EXTRACTOR && !resolvedObjective) {
   logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
   try {
     // peerApis empty — Hyperswarm has already populated claimRegistry with
@@ -465,7 +482,7 @@ if (!IS_AGGREGATOR && !resolvedObjective) {
 // any peer connected via Hyperswarm gets our `claims` Hypercore appended
 // blocks and learns about our topics through `watchRemoteClaims`. No HTTP
 // push needed since v0.6.4.
-if (!IS_AGGREGATOR && resolvedObjective) {
+if (HAS_EXTRACTOR && resolvedObjective) {
   try {
     const { loadTree } = await import('@hive/core');
     const leaves = loadTree();
@@ -575,11 +592,13 @@ const runLoop = async () => {
   };
 
 async function startExtractionIfReady() {
-  if (IS_AGGREGATOR) return; // aggregator never extracts — it only indexes peer fragments
+  if (!HAS_EXTRACTOR) return; // queen never extracts — it only indexes peer fragments
   if (extractionLoopRunning) return;
-  if (!isLLMConfigured()) {
-    logEvent('start', 'LLM not configured — set LLM_PROVIDER + LLM_API_KEY to enable autonomous extraction.');
-    return;
+  // v0.6 made extraction LLM-free; bees no longer need an LLM key to crawl.
+  // We still check for `hive` mode because the operator there may use the
+  // same key for queries — but extraction itself runs without it.
+  if (IS_HIVE && !isLLMConfigured()) {
+    logEvent('start', 'LLM not configured — queries will fail, but extraction proceeds.');
   }
   if (!resolvedObjective) {
     try {
@@ -598,7 +617,7 @@ async function startExtractionIfReady() {
   nextCycleAt = Date.now() + delay;
 }
 
-if (!IS_AGGREGATOR) startExtractionIfReady();
+if (HAS_EXTRACTOR) startExtractionIfReady();
 
 // ── POST /api/config — set LLM provider + API key at runtime ─────────────────
 function upsertEnvLine(content: string, key: string, value: string): string {
@@ -679,10 +698,14 @@ try {
   console.log(`   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
   console.log(`   Peers → Hyperswarm discovery (no HTTP bootstrap since v0.6.4)`);
-  if (!IS_AGGREGATOR) {
-    const provider = process.env.LLM_PROVIDER ?? 'ollama';
+  if (HAS_QUERY_API) {
+    const provider = process.env.LLM_PROVIDER ?? 'gemini';
     console.log(`   LLM  → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}`);
-  } else {
+  }
+  if (HAS_LOCAL_EMBED) {
+    console.log(`   Embedder → ${embedderUrl}`);
+  }
+  if (IS_QUEEN) {
     console.log(`   Qdrant → ${process.env.QDRANT_URL ?? 'http://localhost:6333'}`);
   }
   console.log();
