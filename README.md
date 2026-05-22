@@ -89,28 +89,34 @@ VPS, `qwen2.5:3b` ~1.9 GB → needs 6 GB+.
 
 ### 2. Single node from source
 
+The minimum path — runs a **BEE** (producer-only, ~150 MB, no embedder,
+no `/api/query`):
+
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
-pip install -r packages/embeddings/requirements.txt
 
-bash hive.sh                             # bee on :8080 (no LLM key needed)
+# Recommended: set an LLM key so the extractor can decide what to fetch.
+# Free tier covers a bee easily (~1 call per cycle, Gemini or Groq work):
+echo "LLM_PROVIDER=gemini"        > .env
+echo "LLM_API_KEY=AIza_your_key" >> .env
+
+bash hive.sh                       # bee on :8080
 ```
 
-That gives you a **BEE** (producer-only — extracts and signs to its own
-Hypercore, no LLM, no embedder, ~150 MB). It joins the network and starts
-indexing. No `.env` required.
+Without `.env`, the bee still boots, joins the Hyperswarm DHT, claims
+topics, and replicates fragments from peers — but it won't extract new
+ones, because v0.7.0 still uses an LLM to orchestrate fetches. v0.7.x
+will let bees extract without an LLM. Either way the node contributes to
+durability of the network from second one.
 
-To run a **hive** (all-in-one, includes `/api/query`) or a **queen**
-(query-only), see [`HIVE_MODE`](#3-launch-modes) below — those need an LLM
-key in `.env`:
+For **hive** (all-in-one with `/api/query`) or **queen** (query-only),
+you need Python + an embedder too:
 
 ```bash
-echo "LLM_PROVIDER=gemini"          >> .env
-echo "LLM_API_KEY=AIza_your_key"    >> .env
-
-HIVE_MODE=hive bash hive.sh         # extractor + queries in one process (dev)
-bash queen.sh                       # consumer-only with Qdrant (production)
+pip install -r packages/embeddings/requirements.txt    # only for hive/queen
+HIVE_MODE=hive bash hive.sh                            # extractor + queries (dev)
+bash queen.sh                                          # consumer-only with Qdrant (production)
 ```
 
 ### 3. Launch modes

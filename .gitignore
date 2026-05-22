@@ -26,6 +26,11 @@ data/corestore/
 data/cache/
 data/identity/
 data/claim_registry/
+# Forager persistent state (BFS queue + visited set, written by every
+# running node) and UI-set LLM overrides (runtime.env, since v0.6.4.3).
+data/crawl_queue.jsonl
+data/crawl_visited.jsonl
+data/.runtime.env
 # topic_tree.json IS committed (it's source data, not runtime)
 !data/topic_tree.json
 
