@@ -2,7 +2,11 @@
 #
 # Usage:
 #   cp .env.example .env && nano .env   # set LLM_PROVIDER + LLM_API_KEY
-#   docker compose up -d                # starts caddy + qdrant + bee-1 + aggregator
+#   docker compose up -d                # starts caddy + qdrant + bee-1 + queen
+#
+# v0.7 rename: the consumer node is now `queen` (was `aggregator`). The
+# old `aggregator` DNS alias is preserved on the network so any external
+# consumer that still references `http://aggregator:8090` keeps working.
 #
 # Default LLM provider is `gemini` (gemini-2.5-flash-lite). To switch:
 #   LLM_PROVIDER=groq   LLM_API_KEY=gsk_...
@@ -11,10 +15,10 @@
 #   LLM_PROVIDER=ollama (then also `docker compose --profile ollama up -d`)
 #
 # Access points (no domain needed):
-#   http://your-ip        → Aggregator (via Caddy)
+#   http://your-ip        → Queen (via Caddy)
 #   http://your-ip:8080   → BEE-1 directly
 #   http://your-ip:8081   → BEE-2 directly (if started)
-#   http://your-ip:8090   → Aggregator directly
+#   http://your-ip:8090   → Queen directly
 #   http://your-ip:6333/dashboard → Qdrant
 #
 # Optional services (off by default — opt in via --profile):
@@ -30,9 +34,9 @@ services:
     restart: unless-stopped
     command: >
       sh -c "if [ -n \"$$DOMAIN\" ]; then
-        exec caddy reverse-proxy --from $$DOMAIN --to aggregator:8090;
+        exec caddy reverse-proxy --from $$DOMAIN --to queen:8090;
       else
-        exec caddy reverse-proxy --from :80 --to aggregator:8090;
+        exec caddy reverse-proxy --from :80 --to queen:8090;
       fi"
     environment:
       - DOMAIN=${DOMAIN:-}
@@ -44,7 +48,7 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - aggregator
+      - queen
 
   # ── Vector database ───────────────────────────────────────────────────────────
   qdrant:
@@ -116,6 +120,9 @@ services:
     container_name: hive-bee-1
     restart: unless-stopped
     environment:
+      # v0.7: explicit producer role. Disables /api/query and remote-core
+      # replication; keeps extractor + local Hypercore + embedder.
+      - HIVE_MODE=bee
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
@@ -156,6 +163,7 @@ services:
     profiles: ["bee-2"]
     restart: unless-stopped
     environment:
+      - HIVE_MODE=bee
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
@@ -177,25 +185,39 @@ services:
       bee-1:
         condition: service_started
 
-  # ── Aggregator — indexes all BEE fragments into Qdrant ───────────────────────
-  aggregator:
+  # ── Queen — indexes all BEE fragments into Qdrant ────────────────────────────
+  # v0.7: renamed from `aggregator` (bee metaphor consistency — bees forage,
+  # queens organise). The volume name `aggregator-data` is preserved so
+  # existing operators upgrading from v0.6 don't lose their Hypercore replicas
+  # on `docker compose pull && docker compose up -d`. The volume will rename
+  # to `queen-data` in v0.8 with a migration note.
+  queen:
     image: ghcr.io/capybarist/hive:latest
-    container_name: hive-aggregator
+    container_name: hive-queen
     restart: unless-stopped
-    command: ["bash", "aggregator.sh"]
+    command: ["bash", "queen.sh"]
+    networks:
+      default:
+        aliases:
+          # Backward-compat DNS alias so internal references like
+          # `http://aggregator:8090` (caddy in older deployments, external
+          # dashboards, capybarahome) keep resolving until v0.8 cleanup.
+          - aggregator
     environment:
-      # Aggregator uses a fast cloud LLM for query synthesis (public-facing, latency matters).
-      # Set AGGREGATOR_LLM_PROVIDER + AGGREGATOR_LLM_API_KEY in .env for the aggregator only.
+      # Queen uses a fast cloud LLM for query synthesis (public-facing, latency matters).
+      # Set AGGREGATOR_LLM_PROVIDER + AGGREGATOR_LLM_API_KEY in .env for the queen only.
+      # (Variable names kept for backward-compat with existing .env files; v0.8
+      # will introduce QUEEN_LLM_* as the canonical names and deprecate the old ones.)
       # Groq free tier recommended (console.groq.com) — <2s responses vs 20s with Ollama.
       - LLM_PROVIDER=${AGGREGATOR_LLM_PROVIDER:-groq}
       - LLM_API_KEY=${AGGREGATOR_LLM_API_KEY:-}
       - LLM_MODEL=${AGGREGATOR_LLM_MODEL:-}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - HIVE_MODE=aggregator
+      - HIVE_MODE=queen
       - HIVE_PORT=8090
       - HIVE_EMBEDDER_PORT=7790
       - HIVE_DATA_DIR=/hive/data
-      - HIVE_API_URL=http://aggregator:8090
+      - HIVE_API_URL=http://queen:8090
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDER_BACKEND=qdrant
       - HIVE_PEER=http://bee-1:8080
@@ -209,11 +231,18 @@ services:
       bee-1:
         condition: service_started
 
+  # ── DEPRECATED: aggregator alias service ─────────────────────────────────────
+  # Removed in v0.7.0.4. The canonical service is now `queen` above, with a
+  # network alias `aggregator` that keeps DNS resolution working for any
+  # external consumer (capybarahome /hive widget, custom dashboards) that
+  # still references `http://aggregator:8090`. If you had `docker compose up
+  # aggregator` in scripts, switch to `docker compose up queen`.
+
 volumes:
   qdrant-data:
   bee1-data:
   bee2-data:
-  aggregator-data:
+  aggregator-data:   # v0.7: kept name for zero-loss migration; renames to queen-data in v0.8
   caddy-data:
   caddy-config:
   ollama-data:
