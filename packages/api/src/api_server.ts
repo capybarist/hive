@@ -308,13 +308,25 @@ app.get('/api/status', async () => {
 // crawl — it only ingests fragments via Hypercore replication). This lets
 // the public dashboard query one URL regardless of where the crawler is.
 app.get('/api/crawl', async () => {
-  // Aggregator doesn't crawl — it only ingests via Hypercore replication.
-  // The /api/crawl proxy to a bee was removed in v0.6.4 to keep the
-  // node-to-node communication strictly P2P (Hyperswarm + Hypercore).
-  // Dashboards that want forager progress should query each bee directly
-  // (e.g. http://bee-1:8080/api/crawl).
+  // Aggregator/queen doesn't crawl, but it serves public dashboards
+  // (e.g. the capybarahome /hive widget) that need a single endpoint
+  // for forager state. This is dashboard plumbing, NOT node-to-node
+  // HIVE communication — those nodes talk via Hyperswarm + Hypercore
+  // exclusively since v0.6.4. The /api/crawl forwarder simply
+  // proxies whichever bee is configured as `HIVE_DASHBOARD_BEE_URL`
+  // (defaults to `http://bee-1:8080` for the standard docker-compose
+  // topology). Without an explicit bee URL, returns an empty-queue
+  // payload so dashboards don't break.
   if (HIVE_MODE === 'aggregator') {
-    return { mode: HIVE_MODE, hint: 'query a bee directly — aggregator does not proxy /api/crawl' };
+    const beeUrl = process.env.HIVE_DASHBOARD_BEE_URL ?? 'http://bee-1:8080';
+    try {
+      const res = await fetch(`${beeUrl}/api/crawl`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return { queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], source: beeUrl, hint: `bee returned ${res.status}` };
+      const data = await res.json() as object;
+      return { ...data, source_bee: beeUrl };
+    } catch (e: any) {
+      return { queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], source: beeUrl, error: e?.message ?? 'bee unreachable' };
+    }
   }
 
   // Bee → read local queue files

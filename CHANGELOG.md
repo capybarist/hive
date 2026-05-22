@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.4.5] — 2026-05-21 — *Restore /api/crawl dashboard proxy (not P2P sync)*
+
+The v0.6.4 removal of the aggregator's `/api/crawl` → bee proxy was
+too aggressive: that endpoint is used by external dashboards (the
+capybarahome `/hive` widget), not as node-to-node sync. Removing it
+broke the public widget — it stopped showing queue/visited/recent
+data because the aggregator returned `{ mode, hint }` instead of the
+forager payload.
+
+This restores the proxy with a clearer distinction:
+
+- **Node-to-node HIVE traffic** (fragments, claims, peer discovery)
+  remains 100% P2P via Hyperswarm + Hypercore. No HTTP between
+  HIVE nodes for any of that.
+- **Dashboard plumbing** (a public UI asking a single endpoint for
+  forager state across the network) is HTTP, and that's fine —
+  the dashboard is not a HIVE node, it's a consumer of HIVE's
+  public surface.
+
+Adds a new env var `HIVE_DASHBOARD_BEE_URL` (defaults to
+`http://bee-1:8080` for the standard docker-compose topology) so
+operators can point the aggregator at whichever bee provides the
+visible forager state. If the bee is unreachable, the endpoint
+returns an empty-but-shape-valid payload so the widget renders
+zeros instead of crashing.
+
+---
+
 ## [0.6.4.4] — 2026-05-21 — *Runtime persistence + Qdrant race-condition fix*
 
 Two production bugs surfaced today on Hetzner, both fixed in this patch.
