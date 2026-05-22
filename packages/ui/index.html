@@ -273,6 +273,21 @@
     .ask-btn:hover { opacity: .85; }
     .ask-btn:disabled { opacity: .4; cursor: not-allowed; }
     .input-hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 6px; }
+
+    /* v0.7: hide sections based on HIVE_MODE (set on <body data-hive-mode="…">). */
+    body[data-hive-mode="bee"]   .hide-on-bee   { display: none !important; }
+    body[data-hive-mode="queen"] .hide-on-queen { display: none !important; }
+    /* "hive" mode shows everything (backward-compat with v0.6). */
+
+    .bee-welcome {
+      max-width: 540px; margin: 60px auto; padding: 36px 32px; text-align: center;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    }
+    .bee-welcome h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .bee-welcome p  { margin: 8px 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .bee-welcome .bee-kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 14px; margin-top: 18px; text-align: left; font-size: 12px; }
+    .bee-welcome .bee-kv dt { color: var(--muted); }
+    .bee-welcome .bee-kv dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -288,7 +303,8 @@
   <div class="sidebar-scroll">
 
     <!-- LLM Provider — compact status + click to configure -->
-    <div class="nav-section">
+    <!-- v0.7: bee mode has no LLM (no query API, no synthesis) — hide entirely. -->
+    <div class="nav-section hide-on-bee">
       <div class="nav-title">LLM Provider</div>
       <div class="llm-status-row">
         <span class="dot" id="llm-dot"></span>
@@ -297,7 +313,8 @@
     </div>
 
     <!-- BEE Activity -->
-    <div class="nav-section">
+    <!-- v0.7: queen mode doesn't extract — the activity feed is meaningless. Hide. -->
+    <div class="nav-section hide-on-queen">
       <div class="nav-title">BEE Activity</div>
       <div id="extracting-indicator"></div>
       <div id="next-cycle-label" class="next-cycle"></div>
@@ -334,8 +351,8 @@
   <!-- Conversation -->
   <div class="conversation" id="conversation">
 
-    <!-- Welcome screen -->
-    <div class="welcome" id="placeholder">
+    <!-- Welcome screen (queen/hive — has query API) -->
+    <div class="welcome hide-on-bee" id="placeholder">
       <div class="welcome-glyph">🐝</div>
       <h1 class="welcome-title">Ask HIVE</h1>
       <p class="welcome-sub">Search verified scientific knowledge from the P2P network</p>
@@ -345,6 +362,18 @@
         <button class="chip" onclick="fillQuestion('Vector databases and semantic search')">Vector search</button>
         <button class="chip" onclick="fillQuestion('LLM alignment and safety research')">AI safety</button>
       </div>
+    </div>
+
+    <!-- Bee welcome — producer node, no query UI -->
+    <div class="bee-welcome hidden" id="bee-placeholder">
+      <div class="welcome-glyph">🐝</div>
+      <h2>Producer node</h2>
+      <p>This BEE extracts and signs knowledge into its Hypercore. Querying happens on queens.</p>
+      <p>Watch the sidebar for live extraction activity and forager state.</p>
+      <dl class="bee-kv">
+        <dt>node:</dt>      <dd id="bee-node-id">—</dd>
+        <dt>core key:</dt>  <dd id="bee-core-key">—</dd>
+      </dl>
     </div>
 
     <!-- Legacy single-result area (hidden, kept for JS compatibility) -->
@@ -366,8 +395,8 @@
 
   </div>
 
-  <!-- Input area -->
-  <div class="input-area">
+  <!-- Input area — only on nodes that serve /api/query (queen / hive) -->
+  <div class="input-area hide-on-bee">
     <div class="input-wrap">
       <textarea id="question" placeholder="Ask anything... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
       <div class="input-controls">
@@ -512,10 +541,28 @@ async function checkStatus() {
     const vEl = document.getElementById('hive-version');
     if (vEl) vEl.textContent = d.version ? `v${d.version}` : 'v—';
     const mEl = document.getElementById('hive-mode-badge');
+    const m = (d.mode ?? 'hive').toString();
     if (mEl) {
-      const m = (d.mode ?? '').toString();
-      mEl.textContent = m || '—';
-      mEl.className = 'brand-mode' + (m === 'aggregator' ? ' aggregator' : '');
+      mEl.textContent = m;
+      // Backward-compat: v0.6 "aggregator" still gets the highlighted style;
+      // v0.7 "queen" inherits the same class for parity.
+      mEl.className = 'brand-mode' + ((m === 'aggregator' || m === 'queen') ? ' aggregator' : '');
+    }
+    // v0.7: drive CSS-based section visibility from a single body attribute.
+    document.body.setAttribute('data-hive-mode', m);
+    // Bee mode: surface node id + core key on the welcome card (no query UI).
+    if (m === 'bee') {
+      document.getElementById('placeholder')?.classList.add('hidden');
+      const bp = document.getElementById('bee-placeholder');
+      if (bp) {
+        bp.classList.remove('hidden');
+        const idEl = document.getElementById('bee-node-id');
+        const ckEl = document.getElementById('bee-core-key');
+        if (idEl) idEl.textContent = d.nodeId ?? '—';
+        if (ckEl) ckEl.textContent = d.coreKey ?? '—';
+      }
+    } else {
+      document.getElementById('bee-placeholder')?.classList.add('hidden');
     }
     document.getElementById('node-id-label').textContent = `node: ${d.nodeId?.slice(0, 26) ?? '—'}`;
 
@@ -528,10 +575,15 @@ async function checkStatus() {
     document.getElementById('peer-text').textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
     document.getElementById('peer-dot').className = 'dot' + (pc > 0 ? ' peer' : '');
 
-    // Mode badge
+    // Topbar mode badge — visible on queen/aggregator (consumer node makes its role explicit).
+    // Bee + hive run without it: bee shows its identity in the welcome card; hive is "the default".
     const modeBadge = document.getElementById('mode-badge');
-    if (d.mode === 'aggregator') modeBadge.classList.remove('hidden');
-    else modeBadge.classList.add('hidden');
+    if (m === 'queen' || m === 'aggregator') {
+      modeBadge.textContent = m.toUpperCase();
+      modeBadge.classList.remove('hidden');
+    } else {
+      modeBadge.classList.add('hidden');
+    }
 
     // LLM status in sidebar — reflects actual connectivity, not just key presence
     const llmDot = document.getElementById('llm-dot');
