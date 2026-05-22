@@ -4,5 +4,5 @@
 # HTTP mode (no DOMAIN):  caddy run --config Caddyfile
 # HTTPS mode (with domain): set DOMAIN=hive.example.com before running
 {$DOMAIN::80} {
-    reverse_proxy aggregator:8090
+    reverse_proxy queen:8090
 }

@@ -112,25 +112,34 @@ jobs:
       - name: Add server to known_hosts
         run: ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Pull new image + recreate stack on server
+      - name: Sync repo + pull image + recreate stack on server
+        # /opt/hive is a git checkout of the main branch. The CI must run
+        # `git pull` BEFORE `docker compose up -d` so that compose-level
+        # changes (service rename, env vars, profiles, Caddyfile, scripts)
+        # ship together with the image. `--ff-only` refuses to overwrite
+        # local diverging changes — if the server has drifted, the deploy
+        # fails loudly instead of silently. To clean up, SSH and reset
+        # manually, then re-run the workflow.
         run: |
           ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} '
             set -e
             cd /opt/hive
+            git fetch origin main
+            git pull --ff-only origin main
             docker compose pull
-            docker compose up -d
+            docker compose up -d --remove-orphans
             sleep 5
             docker compose ps
           '
 
-      - name: Verify aggregator /api/status
+      - name: Verify queen /api/status
         run: |
           for i in 1 2 3 4 5 6; do
             if curl -fsS --max-time 5 http://${{ secrets.DEPLOY_HOST }}:8090/api/status >/dev/null; then
-              echo "✅ Aggregator responding after deploy"
+              echo "✅ Queen responding after deploy"
               exit 0
             fi
-            echo "Waiting for aggregator ($i/6)..."
+            echo "Waiting for queen ($i/6)..."
             sleep 10
           done
           echo "❌ /api/status did not respond after deploy" >&2

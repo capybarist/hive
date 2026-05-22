@@ -44,7 +44,26 @@ the obligation to update the docs.
 
 ---
 
-## Current state: v0.7.0 — bee/queen role split shipped
+## Current state: v0.7.0.6 — default = bee, deploy from git
+
+### v0.7.0.6 — Default mode is `bee`; CI deploys from git checkout
+Two production lessons from the v0.7.0 deploy:
+
+- The binary's default `HIVE_MODE` is now **`bee`** (was `hive`). Most
+  operators just want to contribute to the network, not run a full
+  node. Defaulting to `hive` meant a fresh `bash hive.sh` demanded an
+  LLM key the operator may not have. Bee mode boots in ~10 s, no key
+  required, joins the network and starts indexing. To get an
+  all-in-one node, set `HIVE_MODE=hive` explicitly.
+- `hive.sh` reads `HIVE_MODE` and only starts the Python embedder when
+  the mode needs it (queen / hive). v0.7.0 was launching the embedder
+  unconditionally inside bee containers — ~80 MB of wasted RAM per
+  bee. Fixed.
+- CI now does `git pull --ff-only` on the server before
+  `docker compose up -d --remove-orphans`. v0.7.0's CI only pulled the
+  image, leaving `/opt/hive/docker-compose.yml` stale on the server —
+  the `aggregator` → `queen` rename never reached production. From
+  now on `/opt/hive` is a git checkout of `main`.
 
 ### v0.7.0 — `HIVE_MODE` lands (bee | queen | hive)
 The architectural split documented in the v0.7.0 roadmap section is

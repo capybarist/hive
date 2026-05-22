@@ -58,33 +58,77 @@ the Hyperswarm P2P network.
 
 #### Run a fully-local LLM (no cloud)
 
+Ollama is **opt-in** since v0.6.4.2 — the default LLM is Gemini, which
+needs a key but covers the free tier with room to spare. If you really
+want zero-cloud:
+
 ```bash
 docker compose --profile ollama up -d    # pulls qwen2.5:1.5b on first start
 # then in .env: LLM_PROVIDER=ollama   LLM_MODEL=qwen2.5:1.5b
 ```
 
+The `ollama-init` container pulls `qwen2.5:1.5b` (~950 MB) automatically
+on first start. If it fails, pull manually:
+
+```bash
+docker exec hive-ollama ollama pull qwen2.5:1.5b
+```
+
+For a larger (slower, more accurate) model:
+
+```bash
+# In .env:
+OLLAMA_MODEL=qwen2.5:3b   # ~1.9 GB — needs 6 GB+ VPS
+docker compose up -d --force-recreate ollama-init
+```
+
 Ollama adds ~2 GB of RAM and is much slower (~250 frag/h on CPU vs
 several thousand/h on cloud). Use it only if you specifically want
-zero-cloud operation.
+zero-cloud operation. RAM guide: `qwen2.5:1.5b` ~950 MB → safe on 4 GB
+VPS, `qwen2.5:3b` ~1.9 GB → needs 6 GB+.
 
-### 2. Single BEE without Docker (from source)
+### 2. Single node from source
 
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
 pip install -r packages/embeddings/requirements.txt
 
-echo "LLM_PROVIDER=gemini" >> .env
-echo "LLM_API_KEY=AIza_your_key_here" >> .env
-echo "LLM_MODEL=gemini-2.5-flash-lite" >> .env
-
-bash hive.sh                             # single BEE on :8080
+bash hive.sh                             # bee on :8080 (no LLM key needed)
 ```
 
-### 3. Dev mode — 3 BEEs on one machine
+That gives you a **BEE** (producer-only — extracts and signs to its own
+Hypercore, no LLM, no embedder, ~150 MB). It joins the network and starts
+indexing. No `.env` required.
+
+To run a **hive** (all-in-one, includes `/api/query`) or a **queen**
+(query-only), see [`HIVE_MODE`](#3-launch-modes) below — those need an LLM
+key in `.env`:
 
 ```bash
-bash start.sh                            # bees on :8080 :8081 :8082
+echo "LLM_PROVIDER=gemini"          >> .env
+echo "LLM_API_KEY=AIza_your_key"    >> .env
+
+HIVE_MODE=hive bash hive.sh         # extractor + queries in one process (dev)
+bash queen.sh                       # consumer-only with Qdrant (production)
+```
+
+### 3. Launch modes
+
+| Script | `HIVE_MODE` | What it runs | When to use |
+|---|---|---|---|
+| `bash hive.sh` *(default)* | `bee` | Extractor + own Hypercore. No embedder, no LLM, no `/api/query`. | Most people. Contribute to the network. |
+| `HIVE_MODE=hive bash hive.sh` | `hive` | Extractor + embedder + LLM + `/api/query`, all in one process. | Dev, single-machine demos, "I want it all". |
+| `bash queen.sh` | `queen` | Embedder + Qdrant + LLM + `/api/query`. No extractor. | Public query endpoint, vertical-private deployments. |
+
+The Docker Compose stack runs one bee + one queen by default (see the
+[Quick start](#1-full-vps-stack-recommended) above); the launch scripts
+are for running directly on a host without Docker.
+
+### 4. Dev mode — 3 nodes on one machine
+
+```bash
+bash start.sh                            # 3 nodes on :8080 :8081 :8082
 bash start.sh --clean                    # wipe data and restart
 bash stop.sh --force                     # kill all processes
 ```
@@ -124,9 +168,18 @@ persistence across redeploys, set it in `.env`.
 ## Configuration
 
 ```bash
-# Provider
+# Role (since v0.7.0)
+HIVE_MODE=bee                # bee | queen | hive (default: bee)
+
+# Provider (used by queen and hive — bee skips LLM)
 LLM_PROVIDER=groq            # groq | gemini | claude | openai | ollama
-LLM_API_KEY=your_key         # not needed for ollama
+LLM_API_KEY=your_key         # not needed for ollama or bee
+
+# Queen-specific LLM (Docker Compose path — lets the queen run a fast
+# cloud LLM for synthesis while bees use whatever they want for extraction)
+AGGREGATOR_LLM_PROVIDER=groq         # variable name kept for v0.6 compat; renames to QUEEN_LLM_PROVIDER in v0.8
+AGGREGATOR_LLM_API_KEY=your_groq_key
+AGGREGATOR_LLM_MODEL=                # optional override
 
 # Optional model override (defaults shown)
 LLM_MODEL=llama-3.3-70b-versatile   # groq default
@@ -162,53 +215,7 @@ HIVE_EXTRACT_BUDGET_MINUTES=20      # total LLM time per cycle, divided by topic
 | Groq free tier | ~6,400 | 100K tokens/day. Recommended for quality. |
 | Gemini / OpenAI | ~10,000+ | Paid. Highest quality and speed. |
 
-> **Fragment quality note:** Small local models (≤3b) tend to paraphrase source content instead of extracting verbatim, which can introduce inaccuracies. For production use, Groq (free) or Gemini are recommended. v0.6 will fix this architecturally — tools will auto-index verbatim content without LLM involvement in the text path.
-
----
-
-## Full VPS stack (Docker Compose)
-
-The recommended production setup runs everything with a single command.
-
-```bash
-# 1. Copy and edit config
-cp .env.example .env
-nano .env          # set LLM_PROVIDER + LLM_API_KEY (or use ollama, see below)
-
-# 2. Start the full stack (Caddy + 2 BEEs + Aggregator + Qdrant)
-docker compose up -d
-
-# Access points:
-#   http://your-ip        → Aggregator (via Caddy)
-#   http://your-ip:8080   → BEE 1 directly
-#   http://your-ip:8081   → BEE 2 directly
-#   http://your-ip:8090   → Aggregator directly
-#   http://your-ip:6333/dashboard → Qdrant
-```
-
-### Using Ollama (local LLM, no API key)
-
-Ollama is the **default** in the Docker Compose stack. No config needed — just start:
-
-```bash
-docker compose up -d
-```
-
-The `ollama-init` container pulls `qwen2.5:1.5b` (~950MB) automatically on first start. If it fails, pull manually:
-
-```bash
-docker exec hive-ollama ollama pull qwen2.5:1.5b
-```
-
-To use a larger model (better quality, needs more RAM):
-
-```bash
-# In .env:
-OLLAMA_MODEL=qwen2.5:3b   # ~1.9GB — needs 4GB+ free RAM
-docker compose up -d --force-recreate ollama-init
-```
-
-RAM guide: `qwen2.5:1.5b` ~950MB → safe on 4GB VPS. `qwen2.5:3b` ~1.9GB → needs 6GB+ VPS.
+> **Fragment quality note:** Small local models (≤3b) tend to paraphrase source content instead of extracting verbatim, which can introduce inaccuracies. For production use, Groq (free) or Gemini are recommended. **v0.6 fixed this architecturally** — extraction tools now auto-index verbatim content without LLM involvement in the text path.
 
 ---
 
@@ -234,7 +241,7 @@ Any node can become a queen — it will automatically sync all existing fragment
 
 ---
 
-## How it works (v0.6.4)
+## How it works
 
 ```
 BEE starts
@@ -275,7 +282,7 @@ packages/
                   ClaimRegistry, ed25519 identity, topic assignment
   agent/       — Autonomous extractor + crawl queue, wikipedia_fetch,
                   arxiv_search, rss_fetch, text_chunker, HTML-entity decoder
-  embeddings/  — Python: all-MiniLM-L6-v2 → HNSW (bees) or Qdrant (aggregator)
+  embeddings/  — Python: all-MiniLM-L6-v2 → HNSW (hive mode) or Qdrant (queens). v0.7 bees skip the embedder entirely.
   api/         — Fastify :8080 + UI server, runtime-env loader, version badge
   ui/          — Web UI (vanilla HTML/JS, light theme, version + mode chips)
 
@@ -303,9 +310,9 @@ Same binary, same Docker image, mode selected at runtime via the
 
 | Mode | Role | Who runs it |
 |------|------|-------------|
-| `HIVE_MODE=bee` (new default) | **Producer** — extracts, signs, propagates its Hypercore. No embedder, no LLM, no query API. ~150 MB. | Anyone who wants to contribute to the network. Raspberry-Pi-friendly. |
+| `HIVE_MODE=bee` *(default since v0.7.0.6)* | **Producer** — extracts, signs, propagates its Hypercore. No embedder, no LLM, no query API. ~150 MB. | Most operators. Contribute to the network. Raspberry-Pi-friendly. |
 | `HIVE_MODE=queen` (renamed from aggregator) | **Consumer / indexer** — replicates every bee's Hypercore into Qdrant, serves `/api/query` with LLM synthesis. ~600 MB. | Anyone who wants to query (public services, private corporate verticals). |
-| `HIVE_MODE=hive` | Both in one process. | Single-machine quickstart — preserves v0.6 behaviour for backward compatibility. |
+| `HIVE_MODE=hive` | Both in one process. | Devs, single-machine quickstart, advanced users who want extractor + queries in one. |
 
 The metaphor stays: bees forage, the queen organises. Splitting roles
 amplifies Hypercore's single-writer pattern — it does not break P2P.

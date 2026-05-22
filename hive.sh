@@ -1,35 +1,38 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# HIVE — single-process all-in-one launcher (v0.7+)
+# HIVE — node launcher (v0.7+)
 #
-# Runs a node with no HIVE_MODE set, which the api_server treats as
-# `HIVE_MODE=hive`: extractor + own Hypercore + embedder + /api/query
-# in a single process. This is the v0.6 behaviour, preserved for
-# backward compatibility, and the right choice for:
-#   - Local development.
-#   - Single-machine demos.
-#   - Anyone who just wants "knowledge in, queries out" without
-#     thinking about the bee/queen split.
+# Reads `HIVE_MODE` (default: bee) and brings up exactly what that mode
+# needs. The supported modes are:
 #
-# For multi-host or VPS deployments where bee and queen run on
-# separate processes/containers, use docker-compose (full stack) or
-# bash queen.sh / HIVE_MODE=bee bash hive.sh on separate hosts.
+#   bee   — DEFAULT. Producer only: extractor + own Hypercore + Hyperswarm.
+#           No embedder, no LLM, no /api/query. ~150 MB target. Right
+#           choice if you want to contribute to the network.
+#   queen — Consumer only: embedder + Qdrant + LLM + /api/query. No local
+#           extractor, no local Hypercore writes. Run `bash queen.sh`
+#           instead — it handles Qdrant readiness too.
+#   hive  — All-in-one. Extractor + embedder + LLM + queries in a single
+#           process. Convenient for local dev or single-machine demos.
+#
+# This script starts the embedder only when the mode actually needs it
+# (bee mode does not). The api_server resolves the rest from HIVE_MODE.
 #
 # Usage:
-#   bash hive.sh                         # start all-in-one node on default port 8080
+#   bash hive.sh                         # bee (default in v0.7.0.6+)
+#   HIVE_MODE=hive bash hive.sh          # all-in-one (dev / single-machine)
 #   HIVE_PORT=8081 bash hive.sh          # custom port
 #   HIVE_BOOTSTRAP=http://peer.example   # connect to existing network
 #   BEE_TOPIC_DOMAIN=health bash hive.sh # soft topic preference
 #
-# Required env:
+# Required env (only when the LLM is needed — queen / hive):
 #   LLM_PROVIDER=gemini|claude|openai|groq   (default: gemini)
 #   LLM_API_KEY=your_api_key_here
 #
 # Optional env:
-#   HIVE_MODE                 (default: hive — set to 'bee' for producer-only)
+#   HIVE_MODE                 (default: bee)
 #   LLM_MODEL                 (override default model for the provider)
 #   HIVE_PORT                 (default: 8080)
-#   HIVE_EMBEDDER_PORT        (default: 7700)
+#   HIVE_EMBEDDER_PORT        (default: 7700; ignored in bee mode)
 #   HIVE_DATA_DIR             (default: ~/.hive)
 #   HIVE_BOOTSTRAP            (default: none — standalone seed)
 #   BEE_TOPIC_DOMAIN          (default: none — fully autonomous)
@@ -49,13 +52,42 @@ err() { echo -e "${R}✗${N} $1"; exit 1; }
 
 alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 
-# ── Validate ──────────────────────────────────────────────────────────────────
-LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
-case "$LLM_PROVIDER" in
-  gemini|claude|openai|groq|ollama) ;;
-  *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq, ollama" ;;
+# ── Mode resolution ───────────────────────────────────────────────────────────
+RAW_MODE="${HIVE_MODE:-bee}"
+case "$RAW_MODE" in
+  bee|queen|hive) MODE="$RAW_MODE" ;;
+  aggregator)
+    echo "⚠  HIVE_MODE=aggregator is a v0.6 alias — using queen. Update your env."
+    MODE="queen"
+    ;;
+  *)
+    echo "⚠  Unknown HIVE_MODE=$RAW_MODE — falling back to 'bee'. Valid: bee | queen | hive."
+    MODE="bee"
+    ;;
 esac
-[ "$LLM_PROVIDER" != "ollama" ] && [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required. Set it in your environment or in a .env file."
+# Re-export the canonical mode so the api_server sees the same value.
+export HIVE_MODE="$MODE"
+
+# bee mode has no LLM (no /api/query and no synthesis), so the LLM check
+# only applies to queen/hive. This is what makes a fresh `bash hive.sh`
+# work for somebody with no API key: it just produces fragments.
+NEEDS_LLM="false"
+NEEDS_EMBEDDER="false"
+case "$MODE" in
+  bee)            NEEDS_EMBEDDER="false"; NEEDS_LLM="false" ;;
+  queen)          NEEDS_EMBEDDER="true";  NEEDS_LLM="true"  ;;
+  hive)           NEEDS_EMBEDDER="true";  NEEDS_LLM="true"  ;;
+esac
+
+# ── Validate (when applicable) ────────────────────────────────────────────────
+if [ "$NEEDS_LLM" = "true" ]; then
+  LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
+  case "$LLM_PROVIDER" in
+    gemini|claude|openai|groq|ollama) ;;
+    *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq, ollama" ;;
+  esac
+  [ "$LLM_PROVIDER" != "ollama" ] && [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required for HIVE_MODE=$MODE. Set it in .env."
+fi
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT="${HIVE_PORT:-8080}"
@@ -66,45 +98,58 @@ TOPIC_DOMAIN="${BEE_TOPIC_DOMAIN:-}"
 MAX_FRAGS="${HIVE_EXTRACT_MAX_FRAGMENTS:-20}"
 INTERVAL_MS="${HIVE_EXTRACT_INTERVAL_MS:-300000}"
 
+# Friendly title per mode
+case "$MODE" in
+  bee)   TITLE="HIVE — starting BEE (producer only)" ;;
+  queen) TITLE="HIVE — starting QUEEN (consumer / indexer)" ;;
+  hive)  TITLE="HIVE — starting HIVE (all-in-one)" ;;
+esac
+
 echo ""
-echo "  🐝  HIVE — starting BEE"
+echo "  🐝  $TITLE"
 echo "────────────────────────────────────────"
-echo "  Port    : $PORT (embedder: $EMB_PORT)"
+echo "  Mode    : $MODE"
+echo "  Port    : $PORT$([ "$NEEDS_EMBEDDER" = "true" ] && echo " (embedder: $EMB_PORT)" || echo " (no embedder)")"
 echo "  Data    : $DATA_DIR"
 echo "  Peer    : ${BOOTSTRAP:-none (seed mode)}"
-echo "  Domain  : ${TOPIC_DOMAIN:-auto-discover}"
+[ "$MODE" = "bee" ] || [ "$MODE" = "hive" ] && echo "  Domain  : ${TOPIC_DOMAIN:-auto-discover}"
 echo ""
 
 mkdir -p "$DATA_DIR/vectors" "$DATA_DIR/identity" "$DATA_DIR/corestore"
 
-# ── Embedder ──────────────────────────────────────────────────────────────────
-if alive "http://127.0.0.1:$EMB_PORT/health"; then
-  ok "Embedder :$EMB_PORT already running"
-else
-  run "Starting embedder on :$EMB_PORT ..."
-  HIVE_VECTORS_DIR="$DATA_DIR/vectors" HIVE_EMBEDDER_PORT="$EMB_PORT" \
-    nohup python3 packages/embeddings/api_server.py \
-    > "/tmp/hive_embedder.log" 2>&1 &
+# ── Embedder (only when the mode needs it) ────────────────────────────────────
+if [ "$NEEDS_EMBEDDER" = "true" ]; then
+  if alive "http://127.0.0.1:$EMB_PORT/health"; then
+    ok "Embedder :$EMB_PORT already running"
+  else
+    run "Starting embedder on :$EMB_PORT ..."
+    HIVE_VECTORS_DIR="$DATA_DIR/vectors" HIVE_EMBEDDER_PORT="$EMB_PORT" \
+      nohup python3 packages/embeddings/api_server.py \
+      > "/tmp/hive_embedder.log" 2>&1 &
 
-  echo -n "  Loading model"
-  for i in $(seq 1 45); do
-    alive "http://127.0.0.1:$EMB_PORT/health" && break
-    echo -n "."; sleep 2
-  done
-  echo ""
-  alive "http://127.0.0.1:$EMB_PORT/health" || err "Embedder failed. Check /tmp/hive_embedder.log"
-  ok "Embedder ready ($(curl -s http://127.0.0.1:$EMB_PORT/health | python3 -c 'import json,sys; print(json.load(sys.stdin).get("indexed",0))') vectors)"
+    echo -n "  Loading model"
+    for i in $(seq 1 45); do
+      alive "http://127.0.0.1:$EMB_PORT/health" && break
+      echo -n "."; sleep 2
+    done
+    echo ""
+    alive "http://127.0.0.1:$EMB_PORT/health" || err "Embedder failed. Check /tmp/hive_embedder.log"
+    ok "Embedder ready ($(curl -s http://127.0.0.1:$EMB_PORT/health | python3 -c 'import json,sys; print(json.load(sys.stdin).get("indexed",0))') vectors)"
+  fi
+else
+  ok "Bee mode — no embedder needed"
 fi
 
-# ── API + BEE ─────────────────────────────────────────────────────────────────
+# ── API + node ────────────────────────────────────────────────────────────────
 if alive "http://127.0.0.1:$PORT/api/status"; then
-  ok "BEE :$PORT already running"
+  ok "Node :$PORT already running"
 else
-  run "Starting BEE on :$PORT ..."
+  run "Starting node on :$PORT ..."
 
   tmp_env=$(mktemp /tmp/hive_XXXXXX.env)
   [ -f .env ] && cat .env >> "$tmp_env"
   cat >> "$tmp_env" << EOF
+HIVE_MODE=$MODE
 HIVE_PORT=$PORT
 HIVE_DATA_DIR=$DATA_DIR
 EMBEDDER_URL=http://127.0.0.1:$EMB_PORT
@@ -129,9 +174,9 @@ if echo "$STATUS" | grep -q '"ok"'; then
   NODE=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('nodeId','?'))" 2>/dev/null)
   IDX=$(echo "$STATUS"  | python3 -c "import json,sys; print(json.load(sys.stdin).get('indexed','?'))" 2>/dev/null)
   echo ""
-  ok "BEE running"
+  ok "Node running (mode: $MODE)"
   echo "  Node ID : $NODE"
-  echo "  Vectors : $IDX"
+  [ "$NEEDS_EMBEDDER" = "true" ] && echo "  Vectors : $IDX"
   echo ""
 
   SPACE="${CODESPACE_NAME:-}"
@@ -140,11 +185,19 @@ if echo "$STATUS" | grep -q '"ok"'; then
   else
     echo "  UI → http://localhost:$PORT"
   fi
-  echo "  Logs → /tmp/hive_api.log  /tmp/hive_embedder.log"
+  if [ "$NEEDS_EMBEDDER" = "true" ]; then
+    echo "  Logs → /tmp/hive_api.log  /tmp/hive_embedder.log"
+  else
+    echo "  Logs → /tmp/hive_api.log"
+  fi
 else
-  err "BEE failed to start. Check /tmp/hive_api.log"
+  err "Node failed to start. Check /tmp/hive_api.log"
 fi
 echo ""
 
-# Keep the container alive and stream logs to stdout.
-exec tail -f /tmp/hive_api.log /tmp/hive_embedder.log
+# Keep the foreground process alive and stream logs to stdout.
+if [ "$NEEDS_EMBEDDER" = "true" ]; then
+  exec tail -f /tmp/hive_api.log /tmp/hive_embedder.log
+else
+  exec tail -f /tmp/hive_api.log
+fi

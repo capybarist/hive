@@ -26,22 +26,24 @@ const PORT = Number(process.env.HIVE_PORT ?? 8080);
 // ── HIVE_MODE (v0.7) ────────────────────────────────────────────────────────
 // Three modes selectable at runtime, all served by the same binary:
 //   bee   — producer only: extractor + Hypercore + Hyperswarm. No embedder,
-//           no LLM, no query API. ~150 MB target after v0.7 cleanup.
+//           no LLM, no query API. ~150 MB target after v0.7 cleanup. THIS IS
+//           THE DEFAULT: most operators want to contribute to the network,
+//           not stand up a full consumer node.
 //   queen — consumer/indexer: Qdrant + embedder + LLM + queries. No local
 //           extractor, no local Hypercore writes. Replaces the legacy
 //           `aggregator` name (still accepted as a v0.6 alias).
-//   hive  — both in one process. Backward-compat with v0.6 single-machine
-//           deployments. This is the default when HIVE_MODE is not set so
-//           upgrades from v0.6.x require no operator action.
+//   hive  — both in one process. Single-machine quickstart for dev and
+//           power users who want extractor + query API together. Behaves
+//           identically to v0.6.x's single-binary node.
 //
 // Capability flags below let the rest of the code ask "do I run X?"
 // without sprinkling HIVE_MODE checks everywhere. Add a new flag instead
 // of branching on the literal string.
-const RAW_HIVE_MODE = (process.env.HIVE_MODE ?? 'hive').toLowerCase();
+const RAW_HIVE_MODE = (process.env.HIVE_MODE ?? 'bee').toLowerCase();
 const HIVE_MODE = (
   RAW_HIVE_MODE === 'aggregator' ? 'queen' :          // v0.6 alias
   RAW_HIVE_MODE === 'bee' || RAW_HIVE_MODE === 'queen' || RAW_HIVE_MODE === 'hive' ? RAW_HIVE_MODE :
-  'hive'                                              // unknown values fall back to 'hive'
+  'bee'                                               // unknown values fall back to 'bee' (the safe default)
 ) as 'bee' | 'queen' | 'hive';
 if (RAW_HIVE_MODE === 'aggregator') {
   console.warn(`[v0.7] HIVE_MODE=aggregator is a v0.6 alias and will be removed in v0.8. Use HIVE_MODE=queen.`);

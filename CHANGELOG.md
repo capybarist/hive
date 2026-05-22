@@ -5,6 +5,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0.6] — 2026-05-22 — *Default mode = bee, deploy from git*
+
+Follow-up to v0.7.0 fixing two things we found while deploying to
+production.
+
+### Changed
+
+- **Binary default is now `HIVE_MODE=bee`** (was `hive`). The api_server
+  resolves an unset `HIVE_MODE` to `bee` — the safe, lightweight choice
+  for new operators ("I want to contribute to the network"). Running an
+  all-in-one node requires explicit `HIVE_MODE=hive`. Rationale: most
+  people who run HIVE want to be a producer; defaulting to the full
+  node forced them to set up an LLM key and an embedder just to start.
+- **`hive.sh` is mode-aware.** It reads `HIVE_MODE`, brings up the
+  Python embedder ONLY when the mode needs it (queen / hive), and
+  enforces the LLM-key check only when applicable. A fresh
+  `bash hive.sh` with no `.env` boots a bee in ~10 seconds with no
+  Python overhead. v0.7.0 was launching the embedder unconditionally
+  inside bee containers — ~80 MB of wasted RAM per bee.
+- **Repo `Caddyfile`** updated to reverse-proxy `queen:8090` instead of
+  `aggregator:8090`. The docker-compose path doesn't use this file
+  (Caddy gets a one-liner command), but the standalone-Caddy fallback
+  was still pointing at the old name.
+
+### Fixed
+
+- **CI deploy now does `git pull --ff-only` on the server before
+  `docker compose up -d --remove-orphans`.** The v0.7.0 deploy taught
+  us that the workflow only updated the image; the `/opt/hive/docker-
+  compose.yml` on the server stayed at whatever version was last
+  copied by hand. Result: `aggregator` → `queen` rename didn't
+  propagate, bee-1 ran without explicit `HIVE_MODE=bee`. From v0.7.0.6
+  the server is a git checkout of `main` and the CI fetches there
+  before recreating the stack.
+- **README audit.** Removed the duplicated "Full VPS stack" section
+  that contradicted Quick start; corrected the "Ollama is the default"
+  claim (Ollama has been opt-in via profile since v0.6.4.2);
+  re-titled `bash hive.sh` instructions to reflect that it produces a
+  bee, not a "single BEE on :8080" (semantically the same now —
+  finally accurate). Added an explicit "Launch modes" table at the
+  top of the Quick start matching `bee.sh` / `hive.sh` / `queen.sh`
+  to `HIVE_MODE` values.
+- **Configuration section** now documents `HIVE_MODE` and the queen-
+  specific `AGGREGATOR_LLM_PROVIDER` / `AGGREGATOR_LLM_API_KEY`
+  variables, which were not mentioned anywhere in the user-facing
+  docs until now.
+
+### Operator-visible deploy procedure
+
+For anyone running their own VPS deployment from v0.6 or v0.7.0:
+
+```bash
+# One-time: convert /opt/hive to a git checkout
+cp /opt/hive/.env /root/hive.env.backup
+mv /opt/hive /opt/hive.pre-git
+git clone https://github.com/capybarist/hive.git /opt/hive
+cp /root/hive.env.backup /opt/hive/.env
+
+# Subsequent deploys: handled by CI, or manually:
+cd /opt/hive && git pull --ff-only
+docker compose pull
+docker compose up -d --remove-orphans
+```
+
+Volumes (Hypercore data, Qdrant index, Caddy state) are preserved
+because they are external to the directory.
+
+---
+
 ## [0.7.0] — 2026-05-22 — *Bee / queen role split*
 
 First release of the v0.7 cycle. Same codebase, same Docker image,
