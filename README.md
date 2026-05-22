@@ -33,15 +33,22 @@ Default provider is **Gemini Flash Lite** (free tier covers a 4 GB VPS
 with 1–2 BEEs easily). Get a key in <2 min at
 [aistudio.google.com](https://aistudio.google.com).
 
-#### Add a second BEE (more extraction throughput)
+#### Add a second BEE
+
+> ⚠️  **Not recommended on v0.6.x with a 4 GB VPS.** Today each bee
+> carries an embedder + HNSW + sentence-transformers model
+> (~700 MB resident). Adding bee-2 alongside the queen + Qdrant + Caddy
+> stack on a 4 GB box has been observed to trigger OOM. Use only on
+> 8 GB+ VPS while v0.6.x. **v0.7 fixes this** by splitting the bee
+> into a producer-only mode (~150 MB), at which point 2-4 bees fit
+> comfortably on a 4 GB VPS.
 
 ```bash
-docker compose --profile bee-2 up -d
+docker compose --profile bee-2 up -d   # 8 GB+ VPS only on v0.6.x
 ```
 
-Bee-2 listens on `:8081` and auto-coordinates topics with bee-1 over the
-P2P network. Each new BEE adds independent extraction capacity. For a
-4 GB VPS, 2 BEEs is the practical limit when running with cloud LLM.
+Bee-2 listens on `:8081` and auto-coordinates topics with bee-1 over
+the Hyperswarm P2P network.
 
 #### Run a fully-local LLM (no cloud)
 

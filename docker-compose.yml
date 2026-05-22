@@ -139,7 +139,17 @@ services:
     # with `--profile ollama` the container becomes a peer service but is
     # not a hard dependency — bees fall back to whatever LLM_PROVIDER says.
 
-  # ── Optional second BEE (start with: docker compose --profile bee-2 up -d) ──
+  # ── Optional second BEE ──────────────────────────────────────────────────────
+  # ⚠️  NOT RECOMMENDED until v0.7. Today each bee carries a Python embedder +
+  #     HNSW + sentence-transformers model (~700 MB resident). On a 4 GB VPS
+  #     running the full stack (qdrant + aggregator + caddy + ollama-init),
+  #     adding bee-2 has been empirically observed to OOM-kill the box.
+  #
+  #     v0.7 will split roles into `bee` (producer, ~150 MB) and `queen`
+  #     (consumer, ~600 MB). Then 2-4 bees fit comfortably on a 4 GB VPS.
+  #
+  #     If you really want to try bee-2 on v0.6.x today, you need a 8 GB+ VPS:
+  #         docker compose --profile bee-2 up -d
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
