@@ -8,7 +8,85 @@ HIVE (Heuristic Intelligent Vector Extraction) is a decentralized P2P knowledge 
 
 ---
 
-## Current state: v0.6.4.4 — 100% P2P, runtime-persistent config
+## Operating rule: usage docs must always match the shipped version
+
+**Whenever the project introduces or renames anything an operator sees
+or types** — env vars, service names, scripts, ports, `HIVE_MODE`
+values, docker-compose commands, deployment topology — the change
+**must be propagated in the same commit** (or, at worst, the same
+session) to:
+
+1. **`README.md`** — public-facing install/run/deploy section.
+2. **`packages/ui/index.html`** — labels, tooltips, mode badges in the
+   shipped node UI.
+3. **`capybarahome` website** — the `/hive` page (`src/app/hive/page.tsx`)
+   carries `installSteps`, tech-stack copy, and the version label
+   tooltip. Whatever a visitor copy-pastes to bring up a node has to
+   work against the current image.
+4. **Shell scripts** — `hive.sh`, `queen.sh`, `aggregator.sh` (and any
+   future launcher) must agree on env-var names and `HIVE_MODE`
+   defaults.
+5. **`docker-compose.yml`** — service names, container names, volume
+   names, env vars must match the launcher scripts.
+
+Things that drift first when this rule is broken: capybarahome `/hive`
+showing `bash hive.sh` while the README has moved to `queen.sh`; the
+UI badge saying `aggregator` while `/api/status` returns `queen`; a
+fresh operator following the README, hitting a "service not found"
+error, and assuming the project is broken.
+
+When in doubt, grep the repo (and `capybarahome/`) for the old name
+before you decide a rename is harmless. The compatibility shims we
+ship in code (e.g. `HIVE_MODE=aggregator` alias, `aggregator.sh`
+deprecation wrapper, `aggregator` network alias on the queen service)
+exist precisely because docs drift in the wild — they don't replace
+the obligation to update the docs.
+
+---
+
+## Current state: v0.7.0 — bee/queen role split shipped
+
+### v0.7.0 — `HIVE_MODE` lands (bee | queen | hive)
+The architectural split documented in the v0.7.0 roadmap section is
+now shipped. `HIVE_MODE=bee` runs a producer-only node (extractor +
+own Hypercore, no `/api/query`, no peer-core replication). `queen`
+(renamed from `aggregator`) runs the consumer-only node (Qdrant
+index + `/api/query` + LLM synthesis). `hive` (the default when
+`HIVE_MODE` is unset) keeps v0.6 behaviour — everything in one
+process — and is what `bash hive.sh` and the legacy
+single-container quickstart produce.
+
+Shipped pieces:
+- **v0.7.0.1** — `HIVE_MODE` env + six capability flags
+  (`HAS_EXTRACTOR`, `HAS_LOCAL_STORE`, `HAS_QUERY_API`,
+  `HAS_LOCAL_EMBED`, `HAS_REMOTE_REPLICATION`, `HAS_DASHBOARD_PROXY`).
+  `aggregator` accepted as a v0.6 alias with a deprecation warning.
+- **v0.7.0.2** — flags wired through `api_server.ts`: peer-meta
+  handler, `watchFragments`, `/api/query` registration,
+  `/api/fragments` source selection, extractor lifecycle, startup
+  logs.
+- **v0.7.0.3** — UI conditional rendering. `<body data-hive-mode>`
+  drives `.hide-on-bee` / `.hide-on-queen` CSS. Bee gets a
+  producer-identity welcome card; queen lights up the topbar badge.
+- **v0.7.0.4** — `docker-compose.yml` rename `aggregator` → `queen`
+  (container `hive-queen`). Volume `aggregator-data` preserved for
+  zero-loss migration. Network alias `aggregator` on the queen
+  service for backward-compat with external consumers. Bees get
+  explicit `HIVE_MODE=bee`. `queen.sh` is the new launcher;
+  `aggregator.sh` reduced to a deprecation wrapper.
+- **v0.7.0.5** — docs alignment: this entry, CHANGELOG, README
+  migration table, capybarahome `/hive` page updated.
+
+What v0.7.0 explicitly does **not** ship yet (planned for v0.7.1+):
+the source-driven refactor (`ForagerSource` interface, manifests,
+`scope`/`policy`), `HIVE_BEE_REPLICATE`, the recovery ladder, and
+HNSW removal from bees.
+
+### v0.6.4.4 — Qdrant readiness + runtime persistence (previous stable)
+The last v0.6 line. The v0.7.0 release-candidate inherits all of
+v0.6.4's properties (zero HTTP between nodes, Protomux v2,
+ed25519-verified replication, persistent runtime config) and adds
+the role split on top.
 
 ### v0.6.4 — Zero HTTP between nodes
 The bee↔aggregator channel is exclusively Hyperswarm + Hypercore.

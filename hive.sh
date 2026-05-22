@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# HIVE — single-BEE launcher (production)
+# HIVE — single-process all-in-one launcher (v0.7+)
+#
+# Runs a node with no HIVE_MODE set, which the api_server treats as
+# `HIVE_MODE=hive`: extractor + own Hypercore + embedder + /api/query
+# in a single process. This is the v0.6 behaviour, preserved for
+# backward compatibility, and the right choice for:
+#   - Local development.
+#   - Single-machine demos.
+#   - Anyone who just wants "knowledge in, queries out" without
+#     thinking about the bee/queen split.
+#
+# For multi-host or VPS deployments where bee and queen run on
+# separate processes/containers, use docker-compose (full stack) or
+# bash queen.sh / HIVE_MODE=bee bash hive.sh on separate hosts.
 #
 # Usage:
-#   bash hive.sh                         # start BEE on default port 8080
+#   bash hive.sh                         # start all-in-one node on default port 8080
 #   HIVE_PORT=8081 bash hive.sh          # custom port
 #   HIVE_BOOTSTRAP=http://peer.example   # connect to existing network
 #   BEE_TOPIC_DOMAIN=health bash hive.sh # soft topic preference
@@ -13,6 +26,7 @@
 #   LLM_API_KEY=your_api_key_here
 #
 # Optional env:
+#   HIVE_MODE                 (default: hive — set to 'bee' for producer-only)
 #   LLM_MODEL                 (override default model for the provider)
 #   HIVE_PORT                 (default: 8080)
 #   HIVE_EMBEDDER_PORT        (default: 7700)

@@ -5,6 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-05-22 — *Bee / queen role split*
+
+First release of the v0.7 cycle. Same codebase, same Docker image,
+**role selected at runtime** by `HIVE_MODE`. Backward-compat: no
+`HIVE_MODE` value means `hive` (full node = v0.6 behaviour),
+`HIVE_MODE=aggregator` is accepted as a deprecated alias for `queen`.
+
+The source-driven refactor (manifests, `scope`/`policy`, Common
+Crawl), bee↔bee replication topology, and HNSW removal from bees
+are **not** in this release — those land in v0.7.1+.
+
+### Added
+- `HIVE_MODE` env var with values `bee | queen | hive` (api_server, 0.7.0.1).
+- Six capability flags driving the API surface and runtime components:
+  `HAS_EXTRACTOR`, `HAS_LOCAL_STORE`, `HAS_QUERY_API`, `HAS_LOCAL_EMBED`,
+  `HAS_REMOTE_REPLICATION`, `HAS_DASHBOARD_PROXY` (0.7.0.2).
+- `<body data-hive-mode>` attribute + `.hide-on-bee` / `.hide-on-queen`
+  CSS classes drive UI section visibility (0.7.0.3). Bee mode now shows
+  a dedicated welcome card with node id + core key instead of a search box.
+- New launcher script `queen.sh` (0.7.0.4). Same shape as `aggregator.sh`
+  was, but sets `HIVE_MODE=queen`, data dir `~/.hive-queen`, log paths
+  `/tmp/hive_queen.log`.
+- Network alias `aggregator` on the queen compose service so external
+  consumers (capybarahome `/hive` widget, custom dashboards) that
+  reference `http://aggregator:8090` keep resolving (0.7.0.4).
+
+### Changed
+- Docker Compose service `aggregator` → `queen`. Container name
+  `hive-aggregator` → `hive-queen`. Caddy now reverse-proxies to
+  `queen:8090`. Volume **name kept as `aggregator-data`** so
+  `docker compose pull && docker compose up -d` from v0.6 preserves
+  fragments without manual migration (0.7.0.4).
+- Bee services in docker-compose declare `HIVE_MODE=bee` explicitly
+  (previously relied on the v0.6 implicit "full node" default).
+- Topbar mode badge now lights up for both `aggregator` (legacy) and
+  `queen` (canonical), uppercased from the actual `/api/status` value
+  instead of a hardcoded label.
+
+### Deprecated
+- `HIVE_MODE=aggregator` — alias for `queen`, prints a warning on boot.
+  Removed in v0.8.
+- `aggregator.sh` — reduced to a wrapper that prints a deprecation
+  notice and execs `queen.sh`. Removed in v0.8.
+
+### Migration from v0.6.x
+
+| What | Action | Why |
+|------|--------|-----|
+| Local dev with `bash hive.sh` | No change. Still works. Produces a `HIVE_MODE=hive` node = v0.6 behaviour. | Backward-compat preserved. |
+| Docker compose deployment | `git pull && docker compose pull && docker compose up -d`. Container `hive-aggregator` will stop, `hive-queen` will start. Volume `aggregator-data` is reused — no fragment loss. | Service rename only; storage path unchanged. |
+| Scripts that call `bash aggregator.sh` | Replace with `bash queen.sh`. The old script still works for one release with a deprecation banner. | Removed in v0.8. |
+| External consumer pointing at `http://aggregator:8090` (e.g. capybarahome reverse proxy) | No change required. The new compose service has an `aggregator` network alias. | Backward-compat DNS shim. |
+| Existing `.env` with `HIVE_MODE=aggregator` | Either rename to `queen` or leave it — the api_server accepts both, only `queen` is forward-compatible. | Removed in v0.8. |
+
+### Post-deploy verification on Hetzner
+
+1. `docker compose ps` → expect `hive-queen` (not `hive-aggregator`).
+2. `curl localhost:8090/api/status | jq .mode` → should return `"queen"`.
+3. `curl localhost:8080/api/status | jq .mode` → should return `"bee"`.
+4. UI on `http://<host>` should show `QUEEN` badge in the topbar.
+5. `docker volume ls | grep aggregator-data` → still present, same usage as before.
+6. Fragments count on `/api/status` should match v0.6 number within
+   normal extraction drift (i.e. not back at 0).
+
+---
+
 ## [0.6.4.5] — 2026-05-21 — *Restore /api/crawl dashboard proxy (not P2P sync)*
 
 The v0.6.4 removal of the aggregator's `/api/crawl` → bee proxy was

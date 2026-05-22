@@ -12,8 +12,8 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge from the
 ## Quick start
 
 The recommended deployment is the **full stack via Docker Compose** —
-that gives you a BEE, an aggregator, Qdrant, and a Caddy reverse proxy
-all wired up. You only need an LLM API key.
+that gives you a BEE, a queen, Qdrant, and a Caddy reverse proxy all
+wired up. You only need an LLM API key.
 
 ### 1. Full VPS stack (recommended)
 
@@ -21,13 +21,19 @@ all wired up. You only need an LLM API key.
 git clone https://github.com/capybarist/hive.git && cd hive
 cp .env.example .env
 nano .env                                # paste your LLM_API_KEY
-docker compose up -d                     # caddy + qdrant + bee-1 + aggregator
+docker compose up -d                     # caddy + qdrant + bee-1 + queen
 ```
 
 That's it. Open:
-- `http://<your-ip>` → aggregator UI (via Caddy)
+- `http://<your-ip>` → queen UI (via Caddy)
 - `http://<your-ip>:8080` → bee-1 dashboard (extraction activity)
-- `http://<your-ip>:8090` → aggregator dashboard (Qdrant-backed queries)
+- `http://<your-ip>:8090` → queen dashboard (Qdrant-backed queries)
+
+> 🔁 **Upgrading from v0.6.x?** Just `git pull && docker compose pull
+> && docker compose up -d`. The service rename `aggregator` → `queen`
+> reuses the existing `aggregator-data` volume — fragments survive.
+> See [CHANGELOG.md](./CHANGELOG.md#070--2026-05-22--bee--queen-role-split)
+> for the full migration table.
 
 Default provider is **Gemini Flash Lite** (free tier covers a 4 GB VPS
 with 1–2 BEEs easily). Get a key in <2 min at
@@ -35,13 +41,13 @@ with 1–2 BEEs easily). Get a key in <2 min at
 
 #### Add a second BEE
 
-> ⚠️  **Not recommended on v0.6.x with a 4 GB VPS.** Today each bee
-> carries an embedder + HNSW + sentence-transformers model
-> (~700 MB resident). Adding bee-2 alongside the queen + Qdrant + Caddy
-> stack on a 4 GB box has been observed to trigger OOM. Use only on
-> 8 GB+ VPS while v0.6.x. **v0.7 fixes this** by splitting the bee
-> into a producer-only mode (~150 MB), at which point 2-4 bees fit
-> comfortably on a 4 GB VPS.
+> ⚠️  **Still not recommended on a 4 GB VPS in v0.7.0.** The bee
+> container today carries an embedder + HNSW + sentence-transformers
+> model (~700 MB resident) — the same as in v0.6.x. v0.7.0 only ships
+> the role split scaffolding; HNSW is dropped from bees in v0.7.x once
+> the producer-only mode actually stops talking to the embedder, at
+> which point 2-4 bees fit comfortably on a 4 GB box. Until then,
+> use 8 GB+ VPS for multi-bee deployments.
 
 ```bash
 docker compose --profile bee-2 up -d   # 8 GB+ VPS only on v0.6.x
@@ -206,21 +212,25 @@ RAM guide: `qwen2.5:1.5b` ~950MB → safe on 4GB VPS. `qwen2.5:3b` ~1.9GB → ne
 
 ---
 
-## Aggregator node
+## Queen node (was: aggregator)
 
-An aggregator connects to all BEEs in the network, replicates their Hypercore data, and indexes everything into Qdrant for scalable vector search. It doesn't extract — it aggregates.
+A queen connects to all BEEs in the network, replicates their Hypercore data, and indexes everything into Qdrant for scalable vector search. It doesn't extract — it consumes. (Renamed from "aggregator" in v0.7.0 to keep the bee metaphor consistent: bees forage, queens organise.)
 
 ```bash
 # Requires Docker for Qdrant (started automatically)
-bash aggregator.sh
+bash queen.sh
 
 # Or with explicit Qdrant URL
-QDRANT_URL=http://localhost:6333 bash aggregator.sh
+QDRANT_URL=http://localhost:6333 bash queen.sh
 ```
 
-The aggregator's Qdrant dashboard is available at `http://localhost:6333/dashboard`.
+The queen's Qdrant dashboard is available at `http://localhost:6333/dashboard`.
 
-Any node can become an aggregator — it will automatically sync all existing fragments from peers via Hypercore replication + HTTP sync fallback.
+Any node can become a queen — it will automatically sync all existing fragments from peers via Hypercore replication.
+
+> ℹ️  `bash aggregator.sh` still works in v0.7.0: it's now a wrapper
+> that prints a deprecation notice and execs `queen.sh`. The wrapper
+> goes away in v0.8.
 
 ---
 
@@ -279,14 +289,17 @@ data/
 
 ---
 
-## Future architecture (v0.7+)
+## v0.7 architecture
 
-v0.7 brings two orthogonal architectural changes, both shipping in the
-same cycle. See [CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
+v0.7 brings two architectural changes. **Section 1 is shipped in
+v0.7.0**; sections 2-5 land progressively in v0.7.1+. See
+[CHANGELOG.md](./CHANGELOG.md) for what's released today and
+[CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
 
-### 1. Role split: `bee` / `queen` / `hive`
+### 1. Role split: `bee` / `queen` / `hive` *(shipped in v0.7.0)*
 
-Same binary, same Docker image, mode selected at runtime:
+Same binary, same Docker image, mode selected at runtime via the
+`HIVE_MODE` env var:
 
 | Mode | Role | Who runs it |
 |------|------|-------------|
@@ -367,9 +380,12 @@ index from scratch.
 
 ```bash
 tail -f /tmp/hive_api_bee-1.log   # BEE-1 activity
-tail -f /tmp/hive_embedder.log    # aggregator embedder
-tail -f /tmp/hive_aggregator.log  # aggregator P2P + sync
+tail -f /tmp/hive_embedder.log    # queen embedder
+tail -f /tmp/hive_queen.log       # queen P2P + sync (was: hive_aggregator.log)
 ```
+
+For Docker deployments use `docker compose logs -f <service>`
+(`bee-1`, `queen`, `qdrant`, `caddy`).
 
 ---
 
