@@ -351,15 +351,53 @@ seeded, growth is geometric.
                       "bee_id": "<ed25519 pubkey>",
                       "operator": "<free-text>",
                       "declared_sources": [
-                        { "id": "wikipedia-en", "config": { "language": "en" } },
-                        { "id": "arxiv", "config": { "categories": ["cs.LG", "cs.AI"] } }
+                        {
+                          "id": "wikipedia-en",
+                          "config": { "language": "en" },
+                          "scope":  { "category_tree": "Category:Medicine" },
+                          "policy": "exclusive"
+                        },
+                        {
+                          "id": "arxiv",
+                          "config": { "categories": ["q-bio.QM"] },
+                          "scope":  { "categories": ["q-bio.QM"] },
+                          "policy": "exclusive"
+                        }
                       ],
                       "declared_languages": ["en", "es"],
+                      "replication": "neighbors",
                       "version": "0.7.0"
                     }
                     ```
 
                     Declaration is self-sovereign: no central registry approves anything. Queens read manifests from the BEEs they replicate and build a directory of "which BEEs cover which sources". Reputation per source emerges from observation — does this BEE actually publish what it declares? Discrepancy is a signal, not enforced.
+
+                    **Fields explained:**
+
+                    - `id` — canonical source identifier. Must match a `ForagerSource` adapter shipped in the binary (or loaded as a plug-in).
+                    - `config` — adapter-specific runtime config (language, API key for premium feeds, etc.).
+                    - `scope` *(optional)* — constraint *within* the source. Per-adapter shape:
+                      - Wikipedia: `category_tree` root (e.g. `"Category:Medicine"`) — forager only follows links inside the transitive closure of that tree.
+                      - arXiv: `categories` list (e.g. `["q-bio.QM", "stat.AP"]`).
+                      - Common Crawl: `domains` list, `language` filter, snapshot ID.
+                      - RSS: feed URL whitelist.
+                    - `policy` — what the forager does with out-of-scope links it discovers:
+                      - `"exclusive"` — drop them. Bee stays focused. Best for specialists ("medicine bee", "ML papers bee").
+                      - `"drift-ok"` — follow anyway, marking the fragment with `out_of_scope: true`. This is the v0.6 behaviour — link-driven BFS without constraints.
+                    - `replication` — see "Bee replication topology" below. Values: `"none" | "neighbors" | "all"`.
+
+                    **How a BEE picks its scope.** In v0.7.0/.1/.2 the scope comes from env vars or a manifest file the operator writes. In v0.7.x+ a bee can auto-discover an under-covered scope by reading neighbouring queens' directories. Either way, **the scope is operator-declared, not network-imposed.**
+
+                    **Drift control.** Without a `scope`, a Wikipedia BEE that starts on "Aspirin" will, via BFS, reach "Michael Jackson" within ~6 hops. That is the v0.6 reality. `policy: "exclusive"` solves it: the adapter's `isInScope(url, scope)` runs before every fetch; out-of-scope links never enter the queue.
+
+                    **Dead-end recovery.** A bee with `policy: "exclusive"` *will* eventually exhaust its scope (forager metric: `new_links_per_cycle → 0` and queue depth at floor). The bee should not sit idle. Recovery ladder, applied automatically:
+
+                    1. **Expand scope to parent** — Wikipedia category tree has parents; arXiv categories have super-categories. One step up, retry.
+                    2. **Switch to a sibling scope** — if the bee declared multiple sources, rotate to the one with most remaining frontier.
+                    3. **Temporarily relax `policy` to `drift-ok`** — finite TTL, logs the relaxation.
+                    4. **Announce "scope-exhausted"** in the manifest — neighbouring queens see it; a human operator (or future auto-discovery) can assign a new scope.
+
+                    The recovery ladder is configurable per bee (`on_exhausted: ["expand", "rotate", "drift", "announce"]`). Default is the full ladder. A research-grade "stay focused or die" bee can set `["announce"]` only.
 
                     **3. No source tree in code.** This is the architectural commitment. The repo must not contain a `sources.json` analogous to today's `topic_tree.json`. Three layers cover the legitimate needs:
 
@@ -395,25 +433,56 @@ seeded, growth is geometric.
                     - **Loop detection.** A→B→A cycles must terminate via `visited`. Logging: count of "skipped, already visited" per cycle. Zero on a busy crawler = bug.
                     - **Queue cap.** Configurable per source. Overflow policy: drop oldest, drop random, or refuse new — operator choice.
                     - **Stagnation detection.** When `new_links_discovered / urls_processed` drops below a threshold, log it. Optional: pause that source's crawl cycle and let others advance.
+                    - **Exhaustion → recovery ladder.** When the queue is empty *and* stagnation triggers persistently, the forager runs the dead-end recovery ladder (expand scope → rotate source → relax policy → announce). See "Dead-end recovery" under item #2 above. A specialist bee never sits idle silently — it either keeps producing or it tells the network it ran out.
 
                     Today's Wikipedia forager implements most of this implicitly. v0.7 makes it the contract every source obeys.
+
+                    **7. Bee replication topology (opt-in).** In v0.6.x every bee replicates every other bee's Hypercore it can find — the v0.6.4 sync-everything default. That doesn't scale: a 100-bee network would have each bee carrying 100 cores, undoing the RAM savings of the bee/queen split. v0.7 makes peer replication **operator-controlled** via the `replication` manifest field (or `HIVE_BEE_REPLICATE` env var):
+
+                    | Value | Behaviour | Use case |
+                    |-------|-----------|----------|
+                    | `none` | Bee only authors its own core. Never downloads peer cores. Lightest, most isolated. | Producer-only nodes on tiny hardware; raspberry-pi flotilla. |
+                    | `neighbors` *(default)* | Bee replicates peers whose declared `scope` overlaps with its own (same Wikipedia category subtree, same arXiv super-category, etc.). | Specialist resilience: medicine bees back each other up; nobody hauls Michael Jackson articles. |
+                    | `all` | v0.6.4 behaviour — replicate every peer found via the DHT. | Small networks (< ~20 bees); single-machine multi-bee dev setups. |
+
+                    **What "neighbours" means.** A queen's `/api/directory` exposes the full source-scope graph it has observed. A bee with `replication: "neighbors"` reads this directory and replicates peers whose `scope` is within K hops in the source-specific scope tree (Wikipedia: K=2 category levels; arXiv: same primary super-category; Common Crawl: same language + ≥ 50% domain overlap). The exact K is per-adapter and tunable. **A bee with no declared scope has no neighbours** — it falls back to `replication: "none"` automatically.
+
+                    **Why opt-in not always-on.** Replication factor ≥ 3 is a network-level goal, not a per-bee obligation. Five medicine bees with `neighbors` replication produce the same `RF ≥ 3` for medicine fragments that today's "everyone replicates everyone" produces globally, but at 1/20 the RAM cost. Queens always replicate the bees they index (that is their job), so durability does not depend on bee↔bee replication — bee↔bee is a *resilience bonus*, not a correctness requirement.
+
+                    **8. Queen storage model — read replicas + Qdrant index.** A queen does two distinct things with each bee it follows:
+
+                    1. **Downloads the bee's Hypercore as a read replica.** Hypercore replication semantics require a local on-disk copy of the data the queen reads. This is durable storage of signed, append-only fragments. The queen cannot mutate it. If the originating bee disappears, the queen still has the full signed history of what that bee published.
+                    2. **Indexes new fragments into Qdrant** as they arrive on the replicated core. Qdrant is a *derived* index — a vector projection of the fragments. Qdrant is not the source of truth; it can be rebuilt from the replicated cores at any time by running the indexer over them.
+
+                    Two corollaries:
+
+                    - **Queens are durability nodes, not just query nodes.** A network of 1000 bees and 0 queens loses the convenience of semantic query but keeps cryptographic integrity (every bee has its own core). Add one queen and you regain query *plus* a read replica of every bee it follows. Lose all bees but keep a queen and you have a frozen-in-time read-only archive of every fragment that queen ever indexed — still signed, still verifiable, still queryable.
+                    - **Disk-cost scaling differs from bee disk-cost.** A bee carries its own append-only core (small — its own writes). A queen carries N replicated cores (large — N bees worth of fragments). A queen with `HIVE_QUEEN_FOLLOW=medicine-bees-only` only replicates those, capping its disk-cost. This is the operator's lever, not network-imposed.
+
+                    **What the queen does NOT store locally**: its own producer fragments (it has none — `HAS_LOCAL_STORE = false`). The capability flags from v0.7.0.1 enforce this at startup.
 
                     #### Migration path
 
                     1. **v0.7.0 — Role split (bee / queen / hive).** As documented in the v0.7.0 section above. Unblocks the rest by giving cleaner module boundaries.
                     2. **v0.7.1 — ForagerInterface introduced, Wikipedia migrated.** No behaviour change for operators. The Wikipedia forager becomes the reference implementation.
                     3. **v0.7.2 — Existing fetch tools refactored as adapters.** `arxiv_search`, `rss_fetch`, `web_fetch` rewritten over `ForagerSource`. Behaviour preserved.
-                    4. **v0.7.3 — Manifest format and `declared_sources`.** BEE manifests published at Hypercore start. Queen reads them and exposes `/api/directory`. `topic_tree.json` deprecated; warning on boot if still referenced.
+                    4. **v0.7.3 — Manifest format with `declared_sources`, `scope`, `policy`.** BEE manifests published at Hypercore start. Queen reads them and exposes `/api/directory`. `topic_tree.json` deprecated; warning on boot if still referenced. `policy: "exclusive"` enforced in all migrated adapters; `policy: "drift-ok"` reproduces v0.6 behaviour.
                     5. **v0.7.4 — Common Crawl adapter.** First non-curated open-web source. End-to-end demo of "two BEEs, same snapshot, corroborated fragments".
                     6. **v0.7.5 — Score-by-corroboration over sources.** `cos_sim × log(1 + corroboration_count)` where `corroboration_count` is the number of *distinct sources* (not BEEs) where the same content hash was independently extracted. Cross-BEE corroboration within the same source remains useful but lower weight.
-                    7. **v0.7.6 — Topic-tree code paths removed.** Final cleanup. `topic_tree.json` becomes `examples/seed-topics.json` if kept at all.
+                    7. **v0.7.6 — Bee replication topology (`HIVE_BEE_REPLICATE`).** Default `neighbors`. Uses scopes from v0.7.3 manifests to define neighbour set. Operator can override to `none` or `all`.
+                    8. **v0.7.7 — Dead-end recovery ladder.** Forager-level. Expand-scope → rotate-source → relax-policy → announce-exhausted. Configurable via manifest.
+                    9. **v0.7.8 — Topic-tree code paths removed.** Final cleanup. `topic_tree.json` becomes `examples/seed-topics.json` if kept at all.
 
                     #### Decisions explicitly made
 
                     - **No source tree in code.** Symmetry with topic-tree centralisation. Documentation and per-BEE manifest cover the legitimate needs.
+                    - **Source *adapters* live in code; source *scopes* do not.** This is the curation line. The repo ships a finite set of `ForagerSource` implementations (Wikipedia, arXiv, RSS, Common Crawl) because each one requires real code to talk to a heterogeneous endpoint. That is engineering, not editorial centralisation — equivalent to a Mastodon client speaking ActivityPub. What each bee covers *within* those adapters (the `scope` field) is operator-declared and never approved by any central authority. A third party can add a new adapter without asking permission: implement the `ForagerSource` interface, ship as a plug-in or a fork. There is no `sources.json` that gates which adapters exist at runtime.
                     - **Google and proprietary search not supported as sources.** Non-reproducible, ToS-hostile, recentralising. Common Crawl is the open-web vehicle.
                     - **Topic-tree expansion to 5000+ nodes — abandoned.** The forager has made it unnecessary. The original roadmap TODO is removed.
                     - **Source diversity is a v0.7 dependency, not a v0.8 nice-to-have.** Score-by-corroboration only becomes meaningful with multiple sources.
+                    - **Bee↔bee replication is opt-in, not always-on.** Default `neighbors`, configurable to `none` or `all`. Queens always replicate the bees they index — durability is a queen-side guarantee, not a per-bee obligation.
+                    - **Queens are durability nodes, not just query nodes.** They keep full read-replicas of every bee they follow. Qdrant is a derived index, rebuildable from the cores.
+                    - **Specialist bees auto-recover from forager exhaustion.** Default ladder: expand scope → rotate source → relax policy → announce. A bee that runs out of in-scope work never sits idle silently.
 
                     #### Open questions
 
@@ -422,6 +491,8 @@ seeded, growth is geometric.
                     - **Partition granularity for claims.** Sensible default partition for Wikipedia EN? Alphabetical 26 buckets? Hash-based? Per-language only? Empirical experimentation before committing.
                     - **What happens to URLs discovered in source A that belong to source B?** (Example: a Wikipedia article links to an arXiv paper.) Probably: the generic forager routes the URL to the adapter whose `owns()` returns true. Requires multiple sources enabled in the same BEE. Open design point.
                     - **Common Crawl snapshot freshness vs reproducibility.** Snapshots are monthly-ish. A BEE pinned to a snapshot has reproducibility but loses freshness. Probably: declare the snapshot in the manifest, allow operators to choose.
+                    - **Neighbour-distance constant K per adapter.** Wikipedia at K=2 categories, arXiv at "same super-category", Common Crawl at "language + 50% domain overlap" are starting guesses. Need empirical data once v0.7.3 ships manifests.
+                    - **Recovery-ladder defaults.** Is `["expand", "rotate", "drift", "announce"]` the right out-of-the-box ladder? Some operators may want `["announce"]` only (research-grade). Probably ship the full ladder and document how to override.
 
                     #### What this refactor does NOT change
 

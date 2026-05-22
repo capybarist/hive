@@ -101,6 +101,20 @@ HTTPS between nodes) and more P2P than Bluesky (no centralised relay,
 no PDS hosting bias) — while keeping the practical convenience of
 "there is a public endpoint you can query".
 
+**One subtle point on curation, since this is the question we get
+most.** HIVE ships a finite set of *source adapters* (Wikipedia,
+arXiv, RSS, Common Crawl). Each adapter is real code: it talks to a
+specific public endpoint, knows that endpoint's quirks, and is shipped
+in the binary. This is engineering, not editorial centralisation —
+the same way a Mastodon client speaks ActivityPub, or a torrent client
+speaks BitTorrent. *What each bee covers within those adapters* — its
+scope — is declared by the operator, never approved by anyone. A
+third party who wants a new adapter (Wikisource, PubMed, a national
+archive) writes one and ships it; there is no `sources.json` in the
+repo that gates which adapters exist at runtime. The curation line is
+drawn at "this code knows how to talk to that endpoint", not at
+"someone decided this knowledge matters".
+
 An LLM querying HIVE sends its question as a vector, receives the most
 semantically relevant verified fragments, and uses them as grounded
 context. No hallucinations about things that are in HIVE. Full source

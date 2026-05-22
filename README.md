@@ -329,6 +329,38 @@ The shift in framing:
 Closer to what HIVE has always wanted to be — Wikipedia for machines —
 without the last vestige of editorial centralisation.
 
+### 3. Bee specialisation: scope + policy + recovery
+
+A BEE's manifest can declare a **scope** within each source (Wikipedia
+`Category:Medicine` subtree; arXiv `q-bio.QM`; a list of domains in
+Common Crawl). The `policy` field controls what the forager does with
+out-of-scope links it discovers:
+
+- `"exclusive"` — drop them. Specialist bees stay focused.
+- `"drift-ok"` — follow them. Reproduces v0.6 BFS-everything behaviour.
+
+When a specialist bee exhausts its scope, the forager runs an
+automatic recovery ladder: **expand scope → rotate source → relax
+policy → announce exhausted**. A focused bee never sits idle silently.
+
+### 4. Bee replication topology (opt-in)
+
+Default `HIVE_BEE_REPLICATE=neighbors` — a bee only replicates peers
+whose declared scope overlaps with its own. `none` (lightest) and
+`all` (v0.6.4 behaviour) are also valid. Queens always replicate every
+bee they index, so network-level durability does not depend on
+bee↔bee replication — that is an extra resilience bonus.
+
+### 5. Queens are durability nodes, not just query nodes
+
+A queen does two things with each bee it follows: keeps a full
+**read-replica of the bee's Hypercore** on disk (signed,
+append-only, durable) and **indexes new fragments into Qdrant** as a
+derived vector index. Qdrant is rebuildable from the cores; the cores
+are the source of truth. If every queen disappeared, bees still hold
+their own signed cores; one operator restarting a queen rebuilds the
+index from scratch.
+
 ---
 
 ## Logs
