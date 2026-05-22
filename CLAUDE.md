@@ -44,7 +44,21 @@ the obligation to update the docs.
 
 ---
 
-## Current state: v0.7.0.6 — default = bee, deploy from git
+## Current state: v0.7.1 — ForagerSource interface lands
+
+### v0.7.1 — `ForagerSource` interface + WikipediaSource adapter
+First step of the source-driven refactor. The Wikipedia path inside
+`autonomous_extractor.ts` no longer calls `executeTool('wikipedia_*')`;
+it calls `wikipediaSource.seed()` / `wikipediaSource.fetch()` which
+return `FetchResult { fragments, outboundLinks, refreshPolicy }`. The
+adapter speaks URLs publicly so a future generic forager can dispatch
+a discovered link via `owns(url)`.
+
+What did NOT change: fragment IDs (`wiki_<slug>_<section>[_cN]`) are
+identical to v0.6, so existing Hypercores dedup against new extraction
+correctly. Aux RSS/arXiv branches still use `executeTool` — they
+migrate to adapters in v0.7.2. CrawlQueue still stores titles; v0.7.3
+migrates the queue to URL storage when it grows the manifest format.
 
 ### v0.7.0.6 — Default mode is `bee`; CI deploys from git checkout
 Two production lessons from the v0.7.0 deploy:

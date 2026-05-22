@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.1] — 2026-05-22 — *ForagerSource interface, Wikipedia migrated*
+
+First step of the v0.7 source-driven refactor. Introduces the
+`ForagerSource` interface — the contract every source adapter
+(Wikipedia, arXiv, RSS, Common Crawl, …) will implement going forward
+— and migrates the Wikipedia path to use it as the reference
+implementation. No behaviour change for operators. The auxiliary RSS
+and arXiv branches still call the legacy `executeTool` tools; they
+migrate to `ForagerSource` adapters in v0.7.2.
+
+### Added
+
+- `packages/agent/src/forager/source.ts` — `ForagerSource` interface
+  with four methods (`seed`, `fetch`, `normalize`, `owns`) and three
+  read-only fields (`id`, `displayName`, `licence`). The contract
+  speaks URLs publicly so the future generic forager can dispatch a
+  discovered link to the right adapter via `owns(url)`.
+- `packages/agent/src/forager/wikipedia_source.ts` — reference
+  implementation. Wraps the v0.6 `wikipedia_fetch` logic from
+  `tools_registry.ts` (same User-Agent, same chunking thresholds, same
+  fragment-id scheme, same SKIP_SECTIONS) but exposes them through the
+  new interface plus two adapter-internal helpers (`urlFromTitle`,
+  `titleFromUrl`) the autonomous extractor uses as a bridge.
+
+### Changed
+
+- `packages/agent/src/autonomous_extractor.ts` — Wikipedia seed and
+  fetch paths now go through `wikipediaSource.{seed,fetch}` instead
+  of `executeTool('wikipedia_search')` / `executeTool('wikipedia_fetch')`.
+  Fragments returned by the adapter flow through the unchanged
+  `onFragment` pipeline (dedup → TTL → supersede → Hypercore save →
+  embedder POST). The CrawlQueue still stores titles, with title↔URL
+  bridging at the extractor boundary; the queue migration to URLs is
+  v0.7.3 work.
+
+### Not changed
+
+- Fragment IDs (`wiki_<slug>_<section>[_cN]`) — keeping them stable
+  means existing Hypercores match against new extraction by id, so
+  there is no rewrite-storm on first run after upgrade.
+- Auxiliary sources (`rss_fetch`, `arxiv_search`, `web_fetch`) still
+  use the legacy tool registry. They become `ForagerSource` adapters
+  in v0.7.2.
+- The legacy `wikipedia_fetch` / `wikipedia_search` cases in
+  `tools_registry.ts` stay in place. They are dead code from the
+  autonomous extractor's perspective but the file is kept until the
+  v0.7.2 adapter migration is complete.
+
+### Verified
+
+- Adapter unit-level (pure functions): `id`, `owns()`, `normalize()`,
+  `urlFromTitle()`, `titleFromUrl()` all return expected values.
+- Adapter network-level: `seed("photosynthesis")` returns 3 canonical
+  Wikipedia URLs; `fetch("Photosynthesis")` returns 57 fragments and
+  1092 outbound links.
+- End-to-end: a fresh `HIVE_MODE=hive` node boots and logs
+  `🤖 Autonomous extractor starting (direct, no LLM) — wikipedia via ForagerSource`
+  followed by `wikipediaSource.seed(...)`, `wikipediaSource.fetch(...)`,
+  and a stream of `[+] Indexed: wiki_organic_chemistry_intro_c0 | ...`
+  with the expected IDs and confidence values.
+
+---
+
 ## [0.7.0.6] — 2026-05-22 — *Default mode = bee, deploy from git*
 
 Follow-up to v0.7.0 fixing two things we found while deploying to

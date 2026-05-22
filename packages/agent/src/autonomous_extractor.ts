@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
 import { executeTool, resetSeenTitles } from './tools_registry.js';
 import { CrawlQueue } from './crawl_queue.js';
+import { wikipediaSource } from './forager/wikipedia_source.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -166,7 +167,13 @@ export async function runAutonomousExtraction(
   // mechanical (drain queue → fetch each → enqueue links) so we run it
   // deterministically and skip the LLM altogether. Query synthesis still uses
   // the LLM in the aggregator — that's a different code path.
-  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM)`);
+  //
+  // v0.7.1 — the Wikipedia path now goes through the ForagerSource interface
+  // (packages/agent/src/forager/wikipedia_source.ts). Behaviour is bit-for-bit
+  // the same; what changed is the seam. Auxiliary RSS / arXiv branches below
+  // still call the legacy `executeTool` tools — they migrate to ForagerSource
+  // adapters in v0.7.2.
+  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM) — wikipedia via ForagerSource`);
   if (batchTitles.length === 0) {
     // Objectives are verbose LLM prompts like `Find recent content about
     // "Biodiversity and Conservation" (...)`. Wikipedia's search wants a
@@ -174,19 +181,20 @@ export async function runAutonomousExtraction(
     // the first ~50 chars if no quotes are present.
     const quoted = objective.match(/"([^"]+)"/);
     const searchQuery = quoted ? quoted[1] : objective.slice(0, 60);
-    console.log(`   Queue empty — seeding via wikipedia_search("${searchQuery}")`);
-    const seedResult = await executeTool('wikipedia_search', { query: searchQuery, limit: 10 }, {
-      embedderUrl: effectiveEmbedderUrl,
-      onFragment,
-      onCrawlEnqueue,
-    });
+    console.log(`   Queue empty — seeding via wikipediaSource.seed("${searchQuery}")`);
     let seedTitles: string[] = [];
-    if (seedResult.ok && (seedResult.data as any)?.titles) {
-      seedTitles = (seedResult.data as any).titles as string[];
+    try {
+      const seedUrls = await wikipediaSource.seed({ query: searchQuery, limit: 10 });
+      // Bridge until v0.7.3 moves the crawl queue itself to URL storage:
+      // the queue keeps storing Wikipedia titles, so map adapter-returned
+      // URLs back to titles here.
+      seedTitles = seedUrls
+        .map((u) => wikipediaSource.titleFromUrl(u))
+        .filter((t): t is string => t !== null);
       const added = crawlQueue.enqueueMany(seedTitles);
       console.log(`   Seeded queue with ${added}/${seedTitles.length} new titles (rest already visited)`);
-    } else {
-      console.warn(`   Seed search failed: ${seedResult.error ?? 'no results'}`);
+    } catch (e: any) {
+      console.warn(`   Seed search failed: ${e.message ?? e}`);
     }
     // Now refill our batch from the freshly-seeded queue
     const seededBatch = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
@@ -195,10 +203,10 @@ export async function runAutonomousExtraction(
     // Fallback: if seed returned only visited titles, the BFS frontier is
     // stuck. Re-fetch one of the seeded (visited) articles anyway — its
     // outgoing /wiki/ links are the lifeline that unblocks the queue.
-    // wikipedia_fetch's onFragment dedups by id so re-indexing is harmless;
-    // the side-effect we want is link discovery via enqueueCrawl.
+    // onFragment dedups by id so re-indexing is harmless; the side-effect
+    // we want is link discovery via outbound URLs.
     if (batchTitles.length === 0 && seedTitles.length > 0) {
-      const bootstrap = seedTitles[0];
+      const bootstrap = seedTitles[0]!;
       console.log(`   All ${seedTitles.length} seed titles already visited — bootstrap re-fetch of "${bootstrap}" to discover new links`);
       batchTitles.push(bootstrap);
     }
@@ -207,7 +215,7 @@ export async function runAutonomousExtraction(
   console.log(`   Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
   console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min\n`);
 
-  // Drain the batch deterministically — one wikipedia_fetch per title.
+  // Drain the batch deterministically — one wikipediaSource.fetch per title.
   // We only mark a title as `visited` if the fetch succeeded; transient
   // failures (network blip, Wikipedia 503) leave the title eligible for
   // re-enqueue by a future fetch that discovers the same link.
@@ -218,22 +226,24 @@ export async function runAutonomousExtraction(
       finalSummary = `Budget exhausted (${check.reason}). Indexed ${fragmentsIndexed} fragments.`;
       break;
     }
-    console.log(`  [fetch] wikipedia_fetch("${title}")`);
+    console.log(`  [fetch] wikipediaSource.fetch("${title}")`);
     try {
-      const result = await executeTool('wikipedia_fetch', { title }, {
-        embedderUrl: effectiveEmbedderUrl,
-        onFragment,
-        onCrawlEnqueue,
-      });
-      if (!result.ok) {
-        console.warn(`  [fetch] failed for "${title}": ${result.error} — leaving unvisited for retry`);
-      } else {
-        crawlQueue.markVisited(title);
-        const d = result.data as any;
-        console.log(`  [fetch] "${title}" → indexed ${d?.indexed_count ?? 0} sections, discovered ${d?.links_discovered ?? 0} links`);
+      const url = wikipediaSource.urlFromTitle(title);
+      const result = await wikipediaSource.fetch(url);
+      // Pipe fragments through onFragment so the existing dedup / TTL /
+      // supersede / Hypercore-save / embedder-POST pipeline applies
+      // unchanged. The adapter has no opinion on those concerns.
+      for (const frag of result.fragments) {
+        await onFragment(frag);
       }
+      const outboundTitles = result.outboundLinks
+        .map((u) => wikipediaSource.titleFromUrl(u))
+        .filter((t): t is string => t !== null);
+      if (outboundTitles.length > 0) onCrawlEnqueue(outboundTitles);
+      crawlQueue.markVisited(title);
+      console.log(`  [fetch] "${title}" → indexed ${result.fragments.length} sections, discovered ${outboundTitles.length} links`);
     } catch (e: any) {
-      console.warn(`  [fetch] exception for "${title}": ${e.message} — leaving unvisited for retry`);
+      console.warn(`  [fetch] failed for "${title}": ${e.message ?? e} — leaving unvisited for retry`);
     }
   }
 
