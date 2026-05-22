@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2.2] — 2026-05-22 — *UI polish: capybarahome palette, aggregated network panel, bee dashboard*
+
+UI-only release answering three usability complaints:
+
+### Changed
+
+- **Colour palette aligned with capybarahome**
+  (`src/app/globals.css`). Main content stays white; sidebar moves to
+  `slate-100` (`#f1f5f9`) with a `slate-300` border so the two regions
+  read as distinct without going dark-mode. Accent switches from
+  indigo (`#6366f1`) to capybarahome's violet (`#8b5cf6`), and a new
+  `--brand` (`#0ea5e9`, sky blue) joins the gradient on the logo. The
+  prior "everything's pure white" look is gone.
+- **Queen network panel reshaped from per-peer list to aggregated
+  view.** The v0.7.1 panel listed every peer with its first 3 topic
+  titles; this works at 5 peers and breaks at 100. The new layout:
+  a single summary line (`N peers · X frags`), a sorted list of
+  top-level domains with bee counts (`science 3 bees`, `history 1
+  bee`, …), and "this node's claims" highlighted. A toggle expands
+  the detailed per-peer view lazily (no DOM build cost until clicked),
+  preserving the v0.7.1 behaviour for operators that want it.
+- **Bee main area is now a forager dashboard.** v0.7.0.3 hid the
+  query box on bees and replaced it with a small welcome card,
+  leaving most of the screen empty. The new dashboard occupies that
+  space with:
+  - A live status row (animated when extracting, "Next cycle in Xm Ys"
+    when idle).
+  - Two stat cards for queue / visited counts.
+  - The current objective, verbatim.
+  - Next-up and recently-fetched title lists (10 each).
+  - A 30-event activity feed mirroring the sidebar.
+  - Identity footer with node id + Hypercore key.
+- **`loadCrawl()` added** as a third polling loop (every 8 s) driving
+  the bee dashboard. DOM nodes are guarded; the function is a no-op
+  in queen / hive mode.
+- **`.brand-logo` gradient** now uses `--accent` (violet) and
+  `--brand` (sky) variables instead of literals, so future palette
+  tweaks land in one place.
+
+### Verified
+
+- Tag balance check on `index.html`: `<div>` open/close 110/110;
+  `<script>` 1/1; `<style>` 1/1.
+- Smoke test against a fresh `HIVE_MODE=bee` boot: `/api/status`,
+  `/api/crawl`, `/api/activity` all serve the expected payloads;
+  the served HTML contains all 21 selectors the new dashboard
+  needs (`bee-dashboard`, `bee-stat-queue`, `bee-objective`,
+  `bee-status-row`, `net-summary`, `net-cov-row`, …).
+- Hetzner v0.7.2.1 deploy confirmed healthy before this change:
+  queen at v0.7.2.1, indexed 123843 (vs 123797 ~1h earlier — grew
+  46 fragments naturally, no rewrite-storm from the v0.7.2 cycle).
+
+### Not changed
+
+- API surface. All new dashboard data comes from existing endpoints
+  (`/api/crawl`, `/api/activity`, `/api/topics`, `/api/state`).
+- Mode-routing logic. The same `<body data-hive-mode>` attribute set
+  in `checkStatus()` continues to drive `.hide-on-bee` /
+  `.hide-on-queen` CSS visibility; the new dashboard sits inside the
+  existing `#bee-placeholder` container.
+
+---
+
 ## [0.7.2.1] — 2026-05-22 — *Fix v0.7.2 Dockerfile: rocksdb-native prebuild missing*
 
 The v0.7.2 image broke at runtime on Hetzner. Both queen and bee

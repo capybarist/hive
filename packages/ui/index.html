@@ -7,21 +7,27 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #f8fafc;
-      --sidebar-bg: #ffffff;
+      /* v0.7.2.2 — palette aligned with capybarahome (src/app/globals.css).
+         Main content stays white; sidebar uses slate-100 with a stronger
+         slate-300 border so the regions read as distinct without going
+         dark-on-light. Accents adopt capybarahome's purple + sky-blue. */
+      --bg: #ffffff;
+      --sidebar-bg: #f1f5f9;          /* slate-100 — was #ffffff */
+      --sidebar-border: #cbd5e1;      /* slate-300 — was #e2e8f0 */
       --surface: #ffffff;
-      --surface2: #f1f5f9;
-      --border: #e2e8f0;
-      --accent: #6366f1;
-      --accent2: #4f46e5;
-      --accent-glow: rgba(99,102,241,.10);
-      --green: #059669;
+      --surface2: #f8fafc;            /* slate-50 — cards inside main */
+      --border: #e2e8f0;              /* slate-200 — used inside main */
+      --accent: #8b5cf6;              /* capybarahome --accent (violet-500) */
+      --accent2: #7c3aed;             /* violet-600 */
+      --accent-glow: rgba(139,92,246,.10);
+      --brand:  #0ea5e9;              /* capybarahome --brand (sky-500) */
+      --green:  #10b981;              /* aligned with capybarahome --green */
       --yellow: #d97706;
-      --red: #dc2626;
-      --purple: #7c3aed;
-      --text: #0f172a;
-      --muted: #64748b;
-      --radius: 10px;
+      --red:    #dc2626;
+      --purple: #8b5cf6;
+      --text:   #0f172a;
+      --muted:  #64748b;
+      --radius: 12px;                 /* capybarahome --radius */
     }
     html, body { height: 100%; overflow: hidden; }
     body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; }
@@ -35,18 +41,18 @@
     .sidebar {
       width: 272px; flex-shrink: 0;
       background: var(--sidebar-bg);
-      border-right: 1px solid var(--border);
+      border-right: 1px solid var(--sidebar-border);
       display: flex; flex-direction: column;
       height: 100vh; overflow: hidden;
     }
     .sidebar-brand {
       padding: 20px 18px 16px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--sidebar-border);
       flex-shrink: 0;
     }
     .brand-logo {
       font-size: 18px; font-weight: 900; letter-spacing: 5px;
-      background: linear-gradient(135deg, #6366f1, #a855f7);
+      background: linear-gradient(135deg, var(--accent), var(--brand));
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
       background-clip: text; display: block;
     }
@@ -68,7 +74,7 @@
 
     .sidebar-scroll { flex: 1; overflow-y: auto; padding-bottom: 16px; }
 
-    .nav-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .nav-section { padding: 14px 16px; border-bottom: 1px solid var(--sidebar-border); }
     .nav-title {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px;
@@ -152,12 +158,45 @@
     .network-node:last-child { margin-bottom: 0; }
     .net-header { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
     .net-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 9px; white-space: nowrap; }
-    .net-local  { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(99,102,241,.3); }
-    .net-remote { background: rgba(168,85,247,.12); color: var(--purple); border: 1px solid rgba(168,85,247,.3); }
+    .net-local  { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(139,92,246,.3); }
+    .net-remote { background: rgba(139,92,246,.12); color: var(--purple); border: 1px solid rgba(139,92,246,.3); }
     .net-id { font-size: 10px; font-family: monospace; color: var(--muted); }
     .net-count { margin-left: auto; font-size: 10px; color: var(--muted); }
     .net-topics { display: flex; flex-direction: column; gap: 2px; }
     .net-topic { font-size: 11px; color: var(--muted); padding: 2px 0; border-top: 1px solid var(--border); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* v0.7.2.2 — aggregated network panel. Replaces the per-peer list
+       (which scaled badly: 100 peers = unusable). Default view shows:
+         · summary line (N peers · X fragments)
+         · top-level domain coverage (domain → bee count)
+         · this node's own claims, if any
+       The detailed per-peer list lives behind a toggle, kept for ops. */
+    .net-summary {
+      display: flex; align-items: baseline; gap: 6px;
+      padding: 8px 0; font-size: 12px; color: var(--text);
+    }
+    .net-summary .num { font-weight: 700; }
+    .net-summary .sep { color: var(--muted); }
+    .net-summary .sub { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+    .net-coverage { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+    .net-cov-row {
+      display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; font-size: 11px;
+    }
+    .net-cov-domain { font-weight: 600; color: var(--text); }
+    .net-cov-bees   { margin-left: auto; color: var(--muted); font-size: 10px; }
+
+    .net-peers-toggle {
+      width: 100%; margin-top: 8px; padding: 5px 8px;
+      background: transparent; border: 1px dashed var(--border);
+      border-radius: 8px; color: var(--muted); font-size: 11px;
+      cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    .net-peers-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .net-peers-detail { margin-top: 8px; }
+    .net-peers-detail.hidden { display: none; }
 
     /* ── Main wrapper ── */
     .main-wrapper { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; min-width: 0; }
@@ -279,15 +318,71 @@
     body[data-hive-mode="queen"] .hide-on-queen { display: none !important; }
     /* "hive" mode shows everything (backward-compat with v0.6). */
 
-    .bee-welcome {
-      max-width: 540px; margin: 60px auto; padding: 36px 32px; text-align: center;
-      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    /* v0.7.2.2 — bee main-area dashboard. Replaces the centred welcome card
+       (which made the bee UI look broken by leaving most of the screen
+       empty). Two-column grid of forager metrics on top, then objective,
+       next-up titles, recently fetched, and a live event feed. */
+    .bee-dashboard {
+      max-width: 900px; margin: 24px auto; padding: 0 20px;
+      display: flex; flex-direction: column; gap: 16px;
     }
-    .bee-welcome h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
-    .bee-welcome p  { margin: 8px 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .bee-welcome .bee-kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 14px; margin-top: 18px; text-align: left; font-size: 12px; }
-    .bee-welcome .bee-kv dt { color: var(--muted); }
-    .bee-welcome .bee-kv dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+    .bee-dashboard.hidden { display: none; }
+    .bee-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 720px) { .bee-grid-2 { grid-template-columns: 1fr; } }
+
+    .bee-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 18px;
+    }
+    .bee-card-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px;
+    }
+    .bee-stat-num {
+      font-size: 26px; font-weight: 800; color: var(--text); line-height: 1.1;
+      font-variant-numeric: tabular-nums;
+    }
+    .bee-stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    .bee-status-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 18px; border-radius: var(--radius);
+      background: var(--accent-glow); border: 1px solid rgba(139,92,246,.25);
+      font-size: 13px; color: var(--text);
+    }
+    .bee-status-row.idle { background: var(--surface2); border-color: var(--border); color: var(--muted); }
+    .bee-status-pulse {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      animation: bee-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes bee-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: .4; transform: scale(1.4); }
+    }
+
+    .bee-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+    .bee-list-item {
+      font-size: 12px; padding: 4px 6px; color: var(--text);
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .bee-list-item:last-child { border-bottom: none; }
+    .bee-list-item .ts { color: var(--muted); margin-right: 8px; font-family: ui-monospace, monospace; font-size: 11px; }
+
+    .bee-objective {
+      font-size: 13px; line-height: 1.55; color: var(--text);
+      font-family: ui-monospace, monospace; word-break: break-word;
+    }
+
+    .bee-identity {
+      display: flex; gap: 14px; font-size: 11px; color: var(--muted);
+      font-family: ui-monospace, monospace;
+      padding: 10px 14px; border-radius: var(--radius);
+      background: var(--surface2); border: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .bee-identity span { word-break: break-all; }
+    .bee-identity .lbl { color: var(--muted); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -364,16 +459,58 @@
       </div>
     </div>
 
-    <!-- Bee welcome — producer node, no query UI -->
-    <div class="bee-welcome hidden" id="bee-placeholder">
-      <div class="welcome-glyph">🐝</div>
-      <h2>Producer node</h2>
-      <p>This BEE extracts and signs knowledge into its Hypercore. Querying happens on queens.</p>
-      <p>Watch the sidebar for live extraction activity and forager state.</p>
-      <dl class="bee-kv">
-        <dt>node:</dt>      <dd id="bee-node-id">—</dd>
-        <dt>core key:</dt>  <dd id="bee-core-key">—</dd>
-      </dl>
+    <!-- Bee dashboard — producer node, no query UI. Populated by loadCrawl() + loadActivity(). -->
+    <div class="bee-dashboard hidden" id="bee-placeholder">
+
+      <!-- Live extraction status -->
+      <div class="bee-status-row" id="bee-status-row">
+        <div class="bee-status-pulse"></div>
+        <div id="bee-status-text">Loading extraction state…</div>
+      </div>
+
+      <!-- Forager metrics, 2-col grid -->
+      <div class="bee-grid-2">
+        <div class="bee-card">
+          <div class="bee-card-label">Queue</div>
+          <div class="bee-stat-num" id="bee-stat-queue">—</div>
+          <div class="bee-stat-sub">Articles waiting to fetch</div>
+        </div>
+        <div class="bee-card">
+          <div class="bee-card-label">Visited</div>
+          <div class="bee-stat-num" id="bee-stat-visited">—</div>
+          <div class="bee-stat-sub">Articles already fetched</div>
+        </div>
+      </div>
+
+      <!-- Objective -->
+      <div class="bee-card">
+        <div class="bee-card-label">Current objective</div>
+        <div class="bee-objective" id="bee-objective">—</div>
+      </div>
+
+      <!-- Next-up + recently fetched lists -->
+      <div class="bee-grid-2">
+        <div class="bee-card">
+          <div class="bee-card-label">Next up</div>
+          <div class="bee-list" id="bee-next-list"><div class="bee-list-item" style="color:var(--muted)">—</div></div>
+        </div>
+        <div class="bee-card">
+          <div class="bee-card-label">Recently fetched</div>
+          <div class="bee-list" id="bee-visited-list"><div class="bee-list-item" style="color:var(--muted)">—</div></div>
+        </div>
+      </div>
+
+      <!-- Recent events (mirrors the sidebar activity feed but in the main area) -->
+      <div class="bee-card">
+        <div class="bee-card-label">Recent activity</div>
+        <div class="bee-list" id="bee-event-list"><div class="bee-list-item" style="color:var(--muted)">—</div></div>
+      </div>
+
+      <!-- Identity footer (small) -->
+      <div class="bee-identity">
+        <span><span class="lbl">node</span> <span id="bee-node-id">—</span></span>
+        <span><span class="lbl">core</span> <span id="bee-core-key">—</span></span>
+      </div>
     </div>
 
     <!-- Legacy single-result area (hidden, kept for JS compatibility) -->
@@ -639,18 +776,99 @@ async function loadActivity() {
 
     const feed = document.getElementById('activity-feed');
     const events = (d.events ?? []).slice(0, 20);
-    if (!events.length) { feed.innerHTML = '<div class="net-empty">No activity yet</div>'; return; }
-    feed.innerHTML = '';
-    for (const ev of events) {
-      const t = new Date(ev.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const icons = { start: '▶', fragment: '📄', done: '✓', error: '✗', sync: '↔' };
-      feed.insertAdjacentHTML('beforeend', `
-        <div class="activity-item ${ev.type}">
-          <span class="activity-ts">${t}</span>
-          <span class="activity-msg">${icons[ev.type] ?? '·'} ${ev.msg}</span>
-        </div>`);
+    const icons = { start: '▶', fragment: '📄', done: '✓', error: '✗', sync: '↔' };
+    if (!events.length) {
+      feed.innerHTML = '<div class="net-empty">No activity yet</div>';
+    } else {
+      feed.innerHTML = '';
+      for (const ev of events) {
+        const t = new Date(ev.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        feed.insertAdjacentHTML('beforeend', `
+          <div class="activity-item ${ev.type}">
+            <span class="activity-ts">${t}</span>
+            <span class="activity-msg">${icons[ev.type] ?? '·'} ${ev.msg}</span>
+          </div>`);
+      }
+    }
+
+    // ── v0.7.2.2: also populate the bee main-area dashboard ──
+    // The bee mode lost its query box in v0.7.0.3, leaving the centre
+    // empty. Reuse the activity payload to drive a structured dashboard
+    // (status row, objective, recent event list) without an extra API
+    // round-trip. These DOM nodes only exist in mode=bee; we guard.
+    const beeStatusRow  = document.getElementById('bee-status-row');
+    const beeStatusText = document.getElementById('bee-status-text');
+    const beeObjective  = document.getElementById('bee-objective');
+    const beeEventList  = document.getElementById('bee-event-list');
+    if (beeStatusRow && beeStatusText) {
+      if (d.extracting) {
+        beeStatusRow.classList.remove('idle');
+        beeStatusText.textContent = 'Extracting knowledge — fetching, signing, appending to Hypercore…';
+      } else if (d.nextCycleAt) {
+        const mins = Math.max(0, Math.round((d.nextCycleAt - Date.now()) / 60_000));
+        const secs = Math.max(0, Math.round((d.nextCycleAt - Date.now()) / 1_000) % 60);
+        beeStatusRow.classList.add('idle');
+        beeStatusText.textContent = `Idle. Next extraction cycle in ${mins}m ${secs}s.`;
+      } else {
+        beeStatusRow.classList.add('idle');
+        beeStatusText.textContent = 'Idle.';
+      }
+    }
+    if (beeObjective) beeObjective.textContent = d.objective ?? 'No objective set yet (assigned on next cycle).';
+    if (beeEventList) {
+      if (!events.length) {
+        beeEventList.innerHTML = '<div class="bee-list-item" style="color:var(--muted)">No activity yet — first cycle in flight.</div>';
+      } else {
+        beeEventList.innerHTML = '';
+        for (const ev of events.slice(0, 30)) {
+          const t = new Date(ev.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const li = document.createElement('div');
+          li.className = 'bee-list-item';
+          const ts = document.createElement('span'); ts.className = 'ts'; ts.textContent = t;
+          const msg = document.createTextNode(` ${icons[ev.type] ?? '·'} ${ev.msg}`);
+          li.appendChild(ts); li.appendChild(msg);
+          beeEventList.appendChild(li);
+        }
+      }
     }
   } catch { document.getElementById('activity-feed').innerHTML = '<div class="net-empty">Activity unavailable</div>'; }
+}
+
+// ── Forager state (bee dashboard only) ────────────────────────────────────────
+// Polls /api/crawl every 8 s and updates the queue/visited counters plus the
+// next-up and recently-fetched title lists. Safe to call on any mode — the
+// DOM nodes only exist when bee-dashboard is rendered (mode=bee); we guard.
+async function loadCrawl() {
+  const queueEl   = document.getElementById('bee-stat-queue');
+  const visitedEl = document.getElementById('bee-stat-visited');
+  if (!queueEl || !visitedEl) return;
+  try {
+    const d = await fetch(`${API}/api/crawl`).then(r => r.json());
+    queueEl.textContent = (d.queue_size ?? 0).toLocaleString();
+    visitedEl.textContent = (d.visited_size ?? 0).toLocaleString();
+
+    const renderList = (id, items) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (!items || !items.length) {
+        el.innerHTML = '<div class="bee-list-item" style="color:var(--muted)">—</div>';
+        return;
+      }
+      el.innerHTML = '';
+      for (const t of items.slice(0, 10)) {
+        const li = document.createElement('div');
+        li.className = 'bee-list-item';
+        li.title = t;
+        li.textContent = t;
+        el.appendChild(li);
+      }
+    };
+    renderList('bee-next-list',    d.next_in_queue);
+    renderList('bee-visited-list', d.recent_visited);
+  } catch {
+    queueEl.textContent = '—';
+    visitedEl.textContent = '—';
+  }
 }
 
 // ── Network panel ─────────────────────────────────────────────────────────────
@@ -661,49 +879,118 @@ async function loadNetwork() {
       fetch(`${API}/api/state`).then(r => r.json()).catch(() => ({})),
     ]);
     const panel = document.getElementById('network-panel');
-    const nodes = (topicsData.nodes ?? []).sort((a, b) => (a.nodeId === MY_NODE_ID ? -1 : 1));
-    const myClaims = (stateData.myClaims ?? []).map(c => c.topicId.split('/').pop());
+    const nodes = (topicsData.nodes ?? []);
+    const myClaims = (stateData.myClaims ?? []).map(c => c.topicId);
 
     if (!nodes.length && !myClaims.length) {
       panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>';
       return;
     }
 
-    panel.innerHTML = '';
+    // ── Aggregate ─────────────────────────────────────────────────────────
+    // Count peers (excluding self) and total fragments across the network.
+    const peerNodes = nodes.filter(n => n.nodeId !== MY_NODE_ID);
+    const totalFragments = nodes.reduce((s, n) => s + (n.count ?? 0), 0);
+    const myCount = nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0;
+
+    // Bucket topics by their first slash-separated segment. Topic IDs look
+    // like "science/physics/cosmology" → domain "science". Aggregates how
+    // many distinct bees are working each domain, which is the useful
+    // signal at network scale (not "what is bee X doing").
+    const domainBees = new Map(); // domain → Set of nodeIds
+    for (const n of nodes) {
+      const titles = n.titles ?? [];
+      const seen = new Set();
+      for (const t of titles) {
+        const domain = (t.split('/')[0] ?? t).trim();
+        if (!domain || seen.has(domain)) continue;
+        seen.add(domain);
+        if (!domainBees.has(domain)) domainBees.set(domain, new Set());
+        domainBees.get(domain).add(n.nodeId);
+      }
+    }
+    const coverage = Array.from(domainBees.entries())
+      .map(([d, set]) => ({ domain: d, bees: set.size }))
+      .sort((a, b) => b.bees - a.bees);
+
+    // ── Render ────────────────────────────────────────────────────────────
+    let html = `
+      <div class="net-summary">
+        <span class="num">${peerNodes.length}</span>
+        <span>peer${peerNodes.length === 1 ? '' : 's'}</span>
+        <span class="sep">·</span>
+        <span class="num">${totalFragments.toLocaleString()}</span>
+        <span>frags</span>
+      </div>`;
+
+    if (coverage.length) {
+      html += '<div class="net-coverage">';
+      for (const c of coverage.slice(0, 8)) {
+        html += `
+          <div class="net-cov-row">
+            <span class="net-cov-domain">${c.domain}</span>
+            <span class="net-cov-bees">${c.bees} bee${c.bees === 1 ? '' : 's'}</span>
+          </div>`;
+      }
+      if (coverage.length > 8) {
+        html += `<div class="net-cov-row" style="justify-content:center;color:var(--muted)">+${coverage.length - 8} more domains</div>`;
+      }
+      html += '</div>';
+    }
 
     if (myClaims.length) {
-      panel.insertAdjacentHTML('beforeend', `
-        <div class="network-node" style="border-color:rgba(99,102,241,.4)">
+      html += `
+        <div class="network-node" style="margin-top:10px;border-color:rgba(139,92,246,.4)">
           <div class="net-header">
             <span class="net-badge net-local">THIS NODE</span>
-            <span class="net-id">${MY_NODE_ID.replace('node_','').slice(0,12)}</span>
-            <span class="net-count">${(nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0)} frags</span>
+            <span class="net-count">${myCount.toLocaleString()} frags</span>
           </div>
           <div class="net-topics">
-            ${myClaims.map(t => `<div class="net-topic">📌 ${t}</div>`).join('')}
+            ${myClaims.map(t => `<div class="net-topic" title="${t}">📌 ${t}</div>`).join('')}
           </div>
-        </div>`);
+        </div>`;
     }
 
-    for (const n of nodes) {
-      if (n.nodeId === MY_NODE_ID) continue;
-      const shortId = n.nodeId.replace('node_', '').slice(0, 12);
-      panel.insertAdjacentHTML('beforeend', `
-        <div class="network-node">
-          <div class="net-header">
-            <span class="net-badge net-remote">PEER</span>
-            <span class="net-id">${shortId}</span>
-            <span class="net-count">${n.count} frags</span>
-          </div>
-          <div class="net-topics">
-            ${n.titles.slice(0,3).map(t => `<div class="net-topic" title="${t}">${t}</div>`).join('')}
-            ${n.titles.length > 3 ? `<div class="net-topic" style="font-style:italic">+${n.titles.length - 3} more…</div>` : ''}
-            ${!n.titles.length ? '<div class="net-empty">Indexing…</div>' : ''}
-          </div>
-        </div>`);
+    if (peerNodes.length) {
+      html += `<button class="net-peers-toggle" id="net-peers-toggle">▾ Show ${peerNodes.length} peer${peerNodes.length === 1 ? '' : 's'}</button>`;
+      html += '<div class="net-peers-detail hidden" id="net-peers-detail"></div>';
     }
 
-    if (!panel.children.length) panel.innerHTML = '<div class="net-empty">No knowledge indexed yet</div>';
+    panel.innerHTML = html;
+
+    // Wire the toggle. Renders the per-peer list lazily on first click so
+    // it never costs anything until an operator actually wants the detail.
+    const toggle = document.getElementById('net-peers-toggle');
+    if (toggle) {
+      toggle.addEventListener('click', () => {
+        const detail = document.getElementById('net-peers-detail');
+        const opening = detail.classList.contains('hidden');
+        if (opening && !detail.dataset.rendered) {
+          let inner = '';
+          for (const n of peerNodes) {
+            const shortId = (n.nodeId ?? '').replace('node_', '').slice(0, 12);
+            const titles = (n.titles ?? []);
+            inner += `
+              <div class="network-node">
+                <div class="net-header">
+                  <span class="net-badge net-remote">PEER</span>
+                  <span class="net-id">${shortId}</span>
+                  <span class="net-count">${(n.count ?? 0).toLocaleString()} frags</span>
+                </div>
+                <div class="net-topics">
+                  ${titles.slice(0, 3).map(t => `<div class="net-topic" title="${t}">${t}</div>`).join('')}
+                  ${titles.length > 3 ? `<div class="net-topic" style="font-style:italic">+${titles.length - 3} more…</div>` : ''}
+                  ${!titles.length ? '<div class="net-empty">Indexing…</div>' : ''}
+                </div>
+              </div>`;
+          }
+          detail.innerHTML = inner;
+          detail.dataset.rendered = '1';
+        }
+        detail.classList.toggle('hidden');
+        toggle.textContent = (opening ? '▴ Hide ' : '▾ Show ') + `${peerNodes.length} peer${peerNodes.length === 1 ? '' : 's'}`;
+      });
+    }
   } catch { document.getElementById('network-panel').innerHTML = '<div class="net-empty">Could not load network</div>'; }
 }
 
@@ -859,10 +1146,14 @@ document.getElementById('clear-btn').addEventListener('click', () => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await checkStatus();
-  await Promise.all([loadNetwork(), loadActivity()]);
+  await Promise.all([loadNetwork(), loadActivity(), loadCrawl()]);
 }
 init();
 setInterval(async () => { await checkStatus(); await loadNetwork(); }, 10_000);
+// v0.7.2.2 — refresh the bee forager dashboard on its own interval. 8 s is
+// a compromise: the crawl queue moves fast during extraction but reading
+// the JSONL files is cheap. No-op when not in bee mode (DOM guards inside).
+setInterval(loadCrawl, 8_000);
 setInterval(loadActivity, 4_000);
 </script>
 </body>
