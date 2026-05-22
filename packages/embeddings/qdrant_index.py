@@ -121,14 +121,31 @@ class QdrantIndex:
             if conditions:
                 qdrant_filter = Filter(must=conditions)
 
-        result = self._client.query_points(
+        # v0.7.2.4: switched from query_points() back to search().
+        #
+        # query_points() was added in qdrant-client 1.10 and calls the
+        # /collections/{name}/points/query endpoint introduced in Qdrant
+        # SERVER 1.10. Our docker-compose pins qdrant/qdrant:v1.9.2; the
+        # server returns 404 Not Found for that path, surfaced as
+        # `UnexpectedResponse: 404` in the embedder's /search handler.
+        # Net effect: /api/query always returned zero fragments and the
+        # LLM fell back to "general knowledge" for every question, even
+        # for content the queen had indexed.
+        #
+        # search() targets the older /collections/{name}/points/search
+        # endpoint that's present in every Qdrant >= 1.0. Functionally
+        # equivalent for our use (single dense-vector query, payload
+        # filter, top-k limit). Upgrading the Qdrant server to 1.10+ is
+        # the longer-term move; for now the client-side fix avoids the
+        # risk of touching a collection with 100k+ live vectors.
+        result = self._client.search(
             collection_name=self._collection,
-            query=vector.astype(np.float32).tolist(),
+            query_vector=vector.astype(np.float32).tolist(),
             limit=k,
             with_payload=True,
             query_filter=qdrant_filter,
         )
-        return [{"score": round(h.score, 4), **(h.payload or {})} for h in result.points]
+        return [{"score": round(h.score, 4), **(h.payload or {})} for h in result]
 
     def list_all(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """

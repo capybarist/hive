@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2.4] — 2026-05-22 — *Fix /api/query always returning zero fragments (qdrant 404)*
+
+Critical query-path bug surfaced by the v0.7.2.3 review: every query
+on the live queen returned "⚠ Not verified by HIVE — answering from
+general knowledge", even for content the queen had clearly indexed
+(123 k vectors in Qdrant, fragments visible in the dashboard).
+
+Root cause: `packages/embeddings/qdrant_index.py` called
+`self._client.query_points()`, which is a `qdrant-client` method
+introduced in v1.10 that talks to the new
+`/collections/{name}/points/query` endpoint on the Qdrant SERVER —
+also added in Qdrant 1.10. Our `docker-compose.yml` pins
+`qdrant/qdrant:v1.9.2`. The 1.9 server returned `404 Not Found` for
+the new endpoint, surfaced by qdrant-client as
+`UnexpectedResponse: 404` and bubbled up as `Internal Server Error`
+on `/search`. The embedder's `/search` was failing silently; the
+queen's `query_engine.queryByText` got an empty `results` array and
+fell through to the "no relevant fragments → LLM-only answer" path.
+
+`requirements.txt` pinned `qdrant-client>=1.9.0` with no upper
+bound, so a normal `pip install` pulled a 1.10+ client at image
+build time — the bug only manifested after the next image rebuild
+from an unrelated change.
+
+### Changed
+
+- `packages/embeddings/qdrant_index.py::query()` now calls the
+  pre-1.10 `search()` API (`/collections/{name}/points/search`),
+  which every Qdrant 1.0+ server speaks. Functionally identical for
+  our use (single dense-vector query + payload filter + top-k). The
+  return shape differs (`List[ScoredPoint]` instead of
+  `QueryResponse.points`); the iteration is adjusted accordingly.
+
+### Verified pre-deploy
+
+- The /search → /collections/.../points/search endpoint on the
+  running Qdrant 1.9.2 returns 200 + payload for plain dense-vector
+  queries (verified via `curl` from inside the queen container).
+- Same `qdrant-client.search()` signature is documented for both
+  the 1.7 and 1.13 client lines; the call works regardless of which
+  client version `pip install` resolves.
+
+### Will verify post-deploy
+
+- `POST /api/query` with `"tell me about SEMA"` and `use_llm=false`
+  should return non-empty `fragments` (we previously saw
+  `wiki_sema_association_*` indexed in Qdrant).
+- `POST /api/query` with `use_llm=true` should return a verified
+  HIVE answer instead of the "Not verified by HIVE" fallback.
+
+### Backlog
+
+- Pin `qdrant-client<1.10` in `requirements.txt` (or upper-bound it)
+  so a fresh `pip install` won't reintroduce this silent break.
+  Skipped for now to keep the patch surface small; the code change
+  is the load-bearing fix.
+- Upgrade the Qdrant SERVER to `1.10+` at some point. That unblocks
+  using `query_points()` (the modern unified API) and removes the
+  client/server version-skew class of issue. Touch a 123 k-vector
+  collection carefully — it has data we don't want to migrate twice.
+
+---
+
 ## [0.7.2.3] — 2026-05-22 — *Continuous extraction; sidebar parity; UI polish*
 
 Follow-up to v0.7.2.2 fixing five things from the live review.
