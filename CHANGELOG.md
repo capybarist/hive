@@ -5,6 +5,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2.1] — 2026-05-22 — *Fix v0.7.2 Dockerfile: rocksdb-native prebuild missing*
+
+The v0.7.2 image broke at runtime on Hetzner. Both queen and bee
+containers crashed in a restart loop immediately after `Starting
+queen on :8090…` / `Starting node on :8080 …` with:
+
+```
+Error: Cannot find module '/prebuilds/linux-x64/rocksdb-native.node'
+  at corestore/index.js → hypercore/index.js → hypercore-crypto →
+     sodium-universal → sodium-native → require-addon
+```
+
+`rocksdb-native` ships a prebuilt `.node` binary per platform; the
+file was missing in the v0.7.2 image's `node_modules`. The two
+v0.7.2 Dockerfile changes that touched the npm phase were:
+
+  - `apt-get install -y --no-install-recommends` (removed recommended
+    OS packages — could have dropped a transitive build/fetch dep).
+  - `npm install && npm cache clean --force` (clean step at end).
+
+Either could plausibly have interfered with the prebuild fetch under
+buildx's `linux/amd64` target. Reverted both. The image-size win
+that *did* matter — installing torch from the PyTorch CPU wheel
+index before sentence-transformers — is preserved.
+
+### Changed
+
+- Dockerfile: revert `--no-install-recommends` to plain
+  `apt-get install -y`, and the `npm cache clean --force` step.
+  Torch CPU wheel install kept as-is.
+
+### Verified
+
+- Same fix applied locally: rocksdb-native prebuild present after
+  `npm install` against the reverted Dockerfile, and the test image
+  starts api_server cleanly.
+- CI build + Hetzner deploy expected to recover queen / bee to
+  v0.7.2.1 with v0.7.0 fragment-id format preserved (no rewrite-
+  storm).
+
+---
+
 ## [0.7.2] — 2026-05-22 — *arXiv / RSS / web as ForagerSource adapters; Docker slim*
 
 Completes the source-driven migration started in v0.7.1. All four
