@@ -274,8 +274,12 @@ data/
 
 ## Future architecture (v0.7+)
 
-The next major version will split a bee's two responsibilities into
-selectable modes, all from the same binary and the same Docker image:
+v0.7 brings two orthogonal architectural changes, both shipping in the
+same cycle. See [CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
+
+### 1. Role split: `bee` / `queen` / `hive`
+
+Same binary, same Docker image, mode selected at runtime:
 
 | Mode | Role | Who runs it |
 |------|------|-------------|
@@ -284,13 +288,39 @@ selectable modes, all from the same binary and the same Docker image:
 | `HIVE_MODE=hive` | Both in one process. | Single-machine quickstart — preserves v0.6 behaviour for backward compatibility. |
 
 The metaphor stays: bees forage, the queen organises. Splitting roles
-amplifies Hypercore's single-writer pattern (which Holepunch already
-uses for Keet, Hyperdrive, etc.) — it does not break P2P. No
-"HIVE Inc." middle layer; anyone can run their own queen indexing
+amplifies Hypercore's single-writer pattern — it does not break P2P.
+No "HIVE Inc." middle layer; anyone can run their own queen indexing
 whichever bees they care about.
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full release history and
-[CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
+### 2. Source-driven extraction (replaces topic-driven)
+
+The v0.6 `topic_tree.json` was a static taxonomy committed in the repo
+— a soft point of centralisation. v0.7 replaces it with **per-BEE
+source declarations**:
+
+Each BEE publishes a self-declared manifest at the start of its
+Hypercore listing which sources it covers (`wikipedia-en`, `arxiv`,
+`common-crawl-2026-04` …). Queens read manifests and build a directory
+of "which BEEs cover which sources". No central source list lives in
+the repo.
+
+All source adapters implement the same `ForagerSource` interface
+(`seed`, `fetch`, `normalize`, `owns`). The generic forager owns
+queue + visited + dedup + budgeting + claims. Adding a new source =
+one file.
+
+Open-web extraction goes through **Common Crawl** (publicly hosted,
+reproducible, snapshot-versioned). Google / Bing / proprietary search
+are explicitly out of scope: non-reproducible, ToS-hostile,
+recentralising.
+
+The shift in framing:
+
+- **v0.6:** *a P2P network of BEEs that extract from configured fetch tools, organised by a shared topic taxonomy.*
+- **v0.7+:** *a P2P network of BEEs that extract from objectively-identifiable public sources they self-declare, organised by what each BEE chose to cover.*
+
+Closer to what HIVE has always wanted to be — Wikipedia for machines —
+without the last vestige of editorial centralisation.
 
 ---
 

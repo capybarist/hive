@@ -206,10 +206,9 @@ seeded, growth is geometric.
                     | **v0.6.4.5** — HNSW wrapper upsert semantics | After container recreate, bee's `indexed` count is far below the Hypercore length because `usearch` rejects duplicate-label adds during replay. Hypercore is fine, queries via the aggregator are fine, but the bee dashboard misreports its own coverage. | Fix in `packages/embeddings/hnsw_index.py`: dedupe by id before re-adding, or rotate labels deterministically. ~20 LoC. |
 
                     ### v0.7.0 — `bee` vs `queen` (architectural separation)
-                    The biggest design change planned. This is what Daniel
-                    (Holepunch CEO) will ask about, and the answer should be:
-                    "yes, we split roles to amplify Hypercore's single-writer
-                    pattern, not to break it".
+                    The biggest design change planned. The framing: this
+                    split amplifies Hypercore's single-writer pattern, it
+                    does not break it.
 
                     **Today (v0.6.x)**: a single bee binary does everything —
                     extract + sign + serve queries + LLM synthesis + embedder
@@ -298,18 +297,159 @@ seeded, growth is geometric.
                       another producer that happens to also have a vector
                       index.
 
-                    ### v0.7.x — Scale & economics
+                    ### v0.7 — Architectural refactor: from topic-driven to source-driven
+
+                    #### Motivation
+
+                    v0.6.x ships a working but architecturally inconsistent topic system:
+
+                    - `data/topic_tree.json` is a static, committed taxonomy (95 nodes, 9 domains) — a soft point of centralisation in an otherwise P2P system.
+                    - Since v0.6.1 the Wikipedia forager has reduced the topic tree to a seed file: after first boot, growth is link-driven, not topic-driven. The tree is read once and effectively bypassed.
+                    - The previously-planned "expand topic tree to 5000+ nodes" TODO assumes the tree governs indexing. It doesn't anymore. The TODO is obsolete.
+                    - Per-source fetch tools (`wikipedia_fetch`, `arxiv_search`, `rss_fetch`, `web_fetch`) implement heterogeneous logic. Only Wikipedia has a real forager. Adding a new source today means writing both an adapter and ad-hoc orchestration.
+
+                    The v0.7 refactor replaces topic-as-unit-of-coordination with **source-as-unit-of-coordination**, and unifies extraction behind a generic forager that treats every source through the same interface.
+
+                    This reframes what HIVE is:
+
+                    > HIVE does not decide what topics exist or which sources matter. HIVE provides a mechanism for any publicly-identifiable, objectively-reproducible source to be extracted by any BEE that chooses to cover it, with cryptographic traceability of the process.
+
+                    #### Why source-driven, not topic-driven
+
+                    - **Topics are subjective.** "Is paediatric oncology under paediatrics or oncology?" has no canonical answer. Imposing one is editorial.
+                    - **Sources are objective.** "Does pubmed.ncbi.nlm.nih.gov exist?" has a yes/no answer. So does "is this Common Crawl snapshot 2026-04 reachable?".
+                    - **Sources align with single-writer + manifest self-declaration.** A BEE declares the sources it covers as part of its identity. A topic claim is a promise; a source declaration is an operational commitment.
+                    - **Sources enable real corroboration.** Two BEEs extracting from the same source produce comparable fragments. Two BEEs claiming the same "topic" may be extracting from incompatible places. Cross-source corroboration only becomes meaningful with source diversity, and source diversity requires the architecture to treat sources as first-class.
+                    - **Symmetry test for "is this proposal centralising?":** if HIVE ships a curated list of sources in code, we have reproduced the topic-tree problem under a different name. The refactor must avoid that.
+
+                    #### Architectural pieces
+
+                    **1. Unified ForagerInterface.** A single interface every source adapter implements:
+
+                    ```ts
+                    interface ForagerSource {
+                      readonly id: string;                    // e.g. "wikipedia-en", "arxiv", "common-crawl-2026-04"
+                      readonly displayName: string;
+                      readonly licence: string;               // e.g. "CC-BY-SA-4.0", "public-domain"
+                      seed(opts: SeedOptions): Promise<string[]>;
+                      fetch(url: string): Promise<{
+                        fragments: VerbatimFragment[];
+                        outboundLinks: string[];
+                        refreshPolicy: { ttlSeconds: number };
+                      }>;
+                      normalize(url: string): string;         // canonical URL
+                      owns(url: string): boolean;             // does this URL belong to this source?
+                    }
+                    ```
+
+                    The generic forager owns the queue, visited set, dedup, budgeting, claims coordination, and supersede logic. Source adapters only know how to talk to their respective source. Adding a source = one file implementing the interface. The crawl-mode/seed-mode dynamic from v0.6.1 generalises to all sources. `wikipedia_fetch`, `arxiv_search`, `rss_fetch` etc. are reduced to thin wrappers during transition.
+
+                    **2. Source declaration in BEE manifest.** Each BEE publishes a self-declared manifest at the start of its Hypercore:
+
+                    ```json
+                    {
+                      "bee_id": "<ed25519 pubkey>",
+                      "operator": "<free-text>",
+                      "declared_sources": [
+                        { "id": "wikipedia-en", "config": { "language": "en" } },
+                        { "id": "arxiv", "config": { "categories": ["cs.LG", "cs.AI"] } }
+                      ],
+                      "declared_languages": ["en", "es"],
+                      "version": "0.7.0"
+                    }
+                    ```
+
+                    Declaration is self-sovereign: no central registry approves anything. Queens read manifests from the BEEs they replicate and build a directory of "which BEEs cover which sources". Reputation per source emerges from observation — does this BEE actually publish what it declares? Discrepancy is a signal, not enforced.
+
+                    **3. No source tree in code.** This is the architectural commitment. The repo must not contain a `sources.json` analogous to today's `topic_tree.json`. Three layers cover the legitimate needs:
+
+                    - `docs/suggested-sources.md` — human-readable, non-authoritative. Lists sources that make sense to cover, with example adapter configs. **Code never reads this.** Pure orientation for new operators.
+                    - **Quickstart defaults** — `docker compose up` starts a BEE pre-configured for Wikipedia EN as a sensible default. Starting example, not doctrine. Operator changes it via env vars or manifest.
+                    - **Per-BEE manifest** (above) — the actual operational source of truth, declared by each BEE for itself.
+
+                    This resolves the symmetry problem: a curated source tree would just be the topic tree under another name. Code depends on nothing committed in the repo, docs orient without dictating, quickstart works without locking anyone in.
+
+                    **4. Source-driven coordination replaces topic claims.** Today's `ClaimRegistry` allocates **topic-tree leaves** to BEEs. In v0.7 it allocates **(source, partition)** pairs.
+
+                    - For sources with natural partitioning (Wikipedia: alphabetical ranges; arXiv: categories; Common Crawl: shard files), BEEs claim partitions to avoid duplicating work.
+                    - For sources without natural partitioning (small RSS feeds, specialised domains), claims become trivial.
+                    - Same per-BEE claims Hypercore, same TTL renewal logic, same release-on-expiry semantics. Only the unit changes.
+
+                    **5. Open web as a first-class source via Common Crawl.** The forager must support "the open web" without Google or proprietary search:
+
+                    - Publicly hosted, versioned snapshots (each snapshot has a stable ID).
+                    - Open licence, no rate limits comparable to web scraping.
+                    - Reproducible: two BEEs starting from the same snapshot ID reach the same URL set.
+                    - Composable with the forager: a Common Crawl adapter implements `ForagerSource` with `seed()` returning URLs from the snapshot, `fetch()` retrieving page content, `normalize()` and `owns()` for routing.
+
+                    **Explicitly not supported as sources:**
+                    - Google / Bing / proprietary search APIs. Non-reproducible, non-deterministic, ToS-incompatible with systematic extraction, central dependency that contradicts the P2P model.
+                    - Anything that requires authentication or scraping bypass. If two BEEs cannot independently reach the source, corroboration is meaningless.
+
+                    **Rule of thumb for source legitimacy:** *"Can two BEEs in different jurisdictions, with no coordination, reach the same content independently?"* If yes, it is a valid source. If no, it is not.
+
+                    **6. Forager guarantees (carried over from Wikipedia forager and formalised).** The generic forager enforces, for every source:
+
+                    - **URL normalisation before dedup.** Strip fragments, normalise casing per source convention, resolve redirects to canonical form, drop tracking params.
+                    - **Persistent `visited` set.** Survives restarts. Per-source namespace to avoid cross-contamination.
+                    - **Loop detection.** A→B→A cycles must terminate via `visited`. Logging: count of "skipped, already visited" per cycle. Zero on a busy crawler = bug.
+                    - **Queue cap.** Configurable per source. Overflow policy: drop oldest, drop random, or refuse new — operator choice.
+                    - **Stagnation detection.** When `new_links_discovered / urls_processed` drops below a threshold, log it. Optional: pause that source's crawl cycle and let others advance.
+
+                    Today's Wikipedia forager implements most of this implicitly. v0.7 makes it the contract every source obeys.
+
+                    #### Migration path
+
+                    1. **v0.7.0 — Role split (bee / queen / hive).** As documented in the v0.7.0 section above. Unblocks the rest by giving cleaner module boundaries.
+                    2. **v0.7.1 — ForagerInterface introduced, Wikipedia migrated.** No behaviour change for operators. The Wikipedia forager becomes the reference implementation.
+                    3. **v0.7.2 — Existing fetch tools refactored as adapters.** `arxiv_search`, `rss_fetch`, `web_fetch` rewritten over `ForagerSource`. Behaviour preserved.
+                    4. **v0.7.3 — Manifest format and `declared_sources`.** BEE manifests published at Hypercore start. Queen reads them and exposes `/api/directory`. `topic_tree.json` deprecated; warning on boot if still referenced.
+                    5. **v0.7.4 — Common Crawl adapter.** First non-curated open-web source. End-to-end demo of "two BEEs, same snapshot, corroborated fragments".
+                    6. **v0.7.5 — Score-by-corroboration over sources.** `cos_sim × log(1 + corroboration_count)` where `corroboration_count` is the number of *distinct sources* (not BEEs) where the same content hash was independently extracted. Cross-BEE corroboration within the same source remains useful but lower weight.
+                    7. **v0.7.6 — Topic-tree code paths removed.** Final cleanup. `topic_tree.json` becomes `examples/seed-topics.json` if kept at all.
+
+                    #### Decisions explicitly made
+
+                    - **No source tree in code.** Symmetry with topic-tree centralisation. Documentation and per-BEE manifest cover the legitimate needs.
+                    - **Google and proprietary search not supported as sources.** Non-reproducible, ToS-hostile, recentralising. Common Crawl is the open-web vehicle.
+                    - **Topic-tree expansion to 5000+ nodes — abandoned.** The forager has made it unnecessary. The original roadmap TODO is removed.
+                    - **Source diversity is a v0.7 dependency, not a v0.8 nice-to-have.** Score-by-corroboration only becomes meaningful with multiple sources.
+
+                    #### Open questions
+
+                    - **Manifest mutability.** Does `declared_sources` evolve over time? Likely yes (BEE may add a new source). How does this interact with the append-only Hypercore? Probably as a new manifest entry that supersedes the previous, leaving history.
+                    - **Source identity collisions.** Two BEEs declaring `id: "wikipedia-en"` should refer to the same source. Soft registry of canonical source IDs in `docs/suggested-sources.md` — non-authoritative, human-readable.
+                    - **Partition granularity for claims.** Sensible default partition for Wikipedia EN? Alphabetical 26 buckets? Hash-based? Per-language only? Empirical experimentation before committing.
+                    - **What happens to URLs discovered in source A that belong to source B?** (Example: a Wikipedia article links to an arXiv paper.) Probably: the generic forager routes the URL to the adapter whose `owns()` returns true. Requires multiple sources enabled in the same BEE. Open design point.
+                    - **Common Crawl snapshot freshness vs reproducibility.** Snapshots are monthly-ish. A BEE pinned to a snapshot has reproducibility but loses freshness. Probably: declare the snapshot in the manifest, allow operators to choose.
+
+                    #### What this refactor does NOT change
+
+                    - Single-writer per BEE (each BEE owns its Hypercore).
+                    - Per-BEE claims Hypercore (already correct, just changes the unit of claim).
+                    - ed25519 signature on every fragment.
+                    - HNSW/Qdrant as derived index, not source of truth.
+                    - The bee/queen role split planned in v0.7.0 (orthogonal; both ship in the same v0.7 cycle).
+                    - Multi-agent voting / Byzantine consensus — already abandoned in favour of score-by-corroboration.
+                    - Autobase / multi-writer — already abandoned in v0.2.1, not revisited.
+
+                    #### Strategic framing
+
+                    - **v0.6:** "a P2P network of BEEs that extract content from configured fetch tools, organised by a shared topic taxonomy."
+                    - **v0.7+:** "a P2P network of BEEs that extract from objectively-identifiable public sources they self-declare, organised by what each BEE chose to cover."
+
+                    The v0.7 framing is closer to what HIVE has always wanted to be — Wikipedia for machines — and removes the last vestige of editorial centralisation the v0.6 architecture still carried.
+
+                    ### v0.7.x — Scale & economics (orthogonal to the source-driven refactor)
 
                     | Item | Why |
                     |------|-----|
-                    | **Drop HNSW from bees** | Once roles are split (above), bees no longer need an in-process vector index. Removes 200 MB of `sentence-transformers` weight from the bee Docker image and eliminates the upsert-on-rehydrate bug entirely. Aggregator keeps Qdrant. Considered but rejected for v0.6.x because it would break the "single bee can answer queries" quickstart. |
-                    | BulkImporter — Wikipedia dump | LLM-per-fragment is too slow for Wikipedia-scale (~46 years on Ollama CPU). Direct chunking of Wikipedia XML dumps, no LLM, into Hypercore. |
-                    | Semantic routing / VecDHT | All BEEs reply to all queries; should route to relevant nodes only. Requires v0.7.0 role split first. |
-                    | Score-by-corroboration | When multiple bees independently index the same `(source, content_hash)`, boost confidence in queries: `cos_sim × log(1 + corroboration_count)`. NOT bizantine consensus — just a soft trust signal. User-requested 2026-05-21 as a replacement for the original (abandoned) IConsensus. |
-                    | QVAC integration | `LLM_PROVIDER=qvac` for on-device inference without Ollama overhead |
-                    | Token economics (WDK) | Extractors earn USD₮ per query served; consumers pay per query |
-                    | Replication factor ≥ 3 | Fragments may exist on only 1 BEE — single point of failure |
-                    | Topic tree expansion | 95 topics → 5000+ for meaningful coverage |
+                    | **Drop HNSW from bees** | Once roles are split, bees no longer need an in-process vector index. Removes 200 MB of `sentence-transformers` weight from the bee Docker image and eliminates the upsert-on-rehydrate bug entirely. Queen keeps Qdrant. |
+                    | BulkImporter — Wikipedia dump | Direct chunking of Wikipedia XML dumps into Hypercore. Becomes a `ForagerSource` adapter in the v0.7 model: source id `wikipedia-dump`, seed returns article IDs from the XML index, no LLM involved. |
+                    | Semantic routing / VecDHT | All BEEs reply to all queries; should route to relevant nodes only. Requires v0.7.0 role split + source-driven model first. |
+                    | QVAC integration | `LLM_PROVIDER=qvac` for on-device inference without Ollama overhead. |
+                    | Token economics (WDK) | Extractors earn USD₮ per query served; consumers pay per query. Source declaration in manifest provides the natural unit for fee attribution. |
+                    | Replication factor ≥ 3 | Fragments may exist on only 1 BEE — single point of failure. |
 
                     ---
 

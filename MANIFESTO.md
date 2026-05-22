@@ -26,16 +26,21 @@ does both; from v0.7 onward they are selectable at runtime.
 Each contributor runs a **BEE**: a node that forages knowledge for the
 hive. BEEs are autonomous agents that:
 
-1. **Choose a knowledge domain** — by reading the network and finding uncovered topics
-2. **Extract content** from verified sources: Wikipedia, arXiv, CrossRef, news feeds, the open web
-3. **Sign** each fragment with their ed25519 identity
-4. **Propagate** via native Hypercore P2P replication
+1. **Declare the sources they cover** — Wikipedia, arXiv, CrossRef, news feeds, Common Crawl snapshots — publicly, in a self-signed manifest. No central registry approves anything.
+2. **Extract content verbatim** from those sources via a uniform forager interface.
+3. **Sign** each fragment with their ed25519 identity.
+4. **Propagate** via native Hypercore P2P replication.
 
 BEEs discover each other via Hyperswarm (the same DHT layer behind Keet
 and Pear). Each BEE's Hypercore is a single-writer, append-only,
 cryptographically verifiable log — peers replicate it read-only.
 Nothing in the log is ever rewritten or deleted; updates happen by
 *superseding* old fragments, leaving the full history auditable.
+
+HIVE does not decide what topics exist or which sources matter. It
+provides a mechanism for any publicly-identifiable, objectively-
+reproducible source to be extracted by any BEE that chooses to cover
+it, with cryptographic traceability of the process.
 
 ### Queens — the consumers
 
