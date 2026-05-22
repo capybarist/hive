@@ -23,8 +23,49 @@ try {
 } catch { /* fall back to 'unknown' */ }
 
 const PORT = Number(process.env.HIVE_PORT ?? 8080);
-const HIVE_MODE = (process.env.HIVE_MODE ?? 'bee') as 'bee' | 'aggregator';
-const IS_AGGREGATOR = HIVE_MODE === 'aggregator';
+// ── HIVE_MODE (v0.7) ────────────────────────────────────────────────────────
+// Three modes selectable at runtime, all served by the same binary:
+//   bee   — producer only: extractor + Hypercore + Hyperswarm. No embedder,
+//           no LLM, no query API. ~150 MB target after v0.7 cleanup.
+//   queen — consumer/indexer: Qdrant + embedder + LLM + queries. No local
+//           extractor, no local Hypercore writes. Replaces the legacy
+//           `aggregator` name (still accepted as a v0.6 alias).
+//   hive  — both in one process. Backward-compat with v0.6 single-machine
+//           deployments. This is the default when HIVE_MODE is not set so
+//           upgrades from v0.6.x require no operator action.
+//
+// Capability flags below let the rest of the code ask "do I run X?"
+// without sprinkling HIVE_MODE checks everywhere. Add a new flag instead
+// of branching on the literal string.
+const RAW_HIVE_MODE = (process.env.HIVE_MODE ?? 'hive').toLowerCase();
+const HIVE_MODE = (
+  RAW_HIVE_MODE === 'aggregator' ? 'queen' :          // v0.6 alias
+  RAW_HIVE_MODE === 'bee' || RAW_HIVE_MODE === 'queen' || RAW_HIVE_MODE === 'hive' ? RAW_HIVE_MODE :
+  'hive'                                              // unknown values fall back to 'hive'
+) as 'bee' | 'queen' | 'hive';
+if (RAW_HIVE_MODE === 'aggregator') {
+  console.warn(`[v0.7] HIVE_MODE=aggregator is a v0.6 alias and will be removed in v0.8. Use HIVE_MODE=queen.`);
+}
+if (RAW_HIVE_MODE !== HIVE_MODE && RAW_HIVE_MODE !== 'aggregator') {
+  console.warn(`[v0.7] Unknown HIVE_MODE=${RAW_HIVE_MODE}, defaulting to '${HIVE_MODE}'. Valid: bee | queen | hive.`);
+}
+
+const IS_BEE   = HIVE_MODE === 'bee';
+const IS_QUEEN = HIVE_MODE === 'queen';
+const IS_HIVE  = HIVE_MODE === 'hive';
+
+// Capability flags (what does this mode do?). These are derived once at
+// boot so the rest of the file reads as "if (HAS_EXTRACTOR) ..." instead
+// of "if (HIVE_MODE === 'bee' || HIVE_MODE === 'hive') ...".
+const HAS_EXTRACTOR     = IS_BEE  || IS_HIVE;   // runs the autonomous Wikipedia forager
+const HAS_LOCAL_STORE   = IS_BEE  || IS_HIVE;   // owns a Hypercore where it writes fragments
+const HAS_QUERY_API     = IS_QUEEN || IS_HIVE;  // /api/query + LLM synthesis
+const HAS_LOCAL_EMBED   = IS_QUEEN || IS_HIVE;  // talks to embedder for /add and /search
+const REPLICATES_PEERS  = true;                  // every mode reads peer Hypercores
+const HAS_DASHBOARD_PROXY = IS_QUEEN;            // /api/crawl proxies a bee for external dashboards
+
+// Backward-compat alias for code that hasn't been migrated yet.
+const IS_AGGREGATOR = IS_QUEEN;
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 // HIVE_PEER is DEPRECATED since v0.6.4: discovery is fully Hyperswarm-based and
@@ -317,7 +358,7 @@ app.get('/api/crawl', async () => {
   // (defaults to `http://bee-1:8080` for the standard docker-compose
   // topology). Without an explicit bee URL, returns an empty-queue
   // payload so dashboards don't break.
-  if (HIVE_MODE === 'aggregator') {
+  if (HAS_DASHBOARD_PROXY) {
     const beeUrl = process.env.HIVE_DASHBOARD_BEE_URL ?? 'http://bee-1:8080';
     try {
       const res = await fetch(`${beeUrl}/api/crawl`, { signal: AbortSignal.timeout(5000) });
