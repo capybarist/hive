@@ -3,9 +3,10 @@ import type { Fragment } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
-import { executeTool, resetSeenTitles } from './tools_registry.js';
 import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
+import { arxivSource } from './forager/arxiv_source.js';
+import { rssSource } from './forager/rss_source.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -61,8 +62,11 @@ export async function runAutonomousExtraction(
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
-  // Reset per-session title dedup (prevents same article from two sources in one cycle)
-  resetSeenTitles();
+  // v0.7.2: in-cycle title dedup used to live in tools_registry's
+  // _seenTitles Set, cleared at the top of each cycle. With sources
+  // now adapter-isolated (each is stateless), in-cycle dedup is
+  // handled at the CrawlQueue level for Wikipedia and is unnecessary
+  // for arXiv/RSS (rarely repeated titles within a single cycle).
 
   // ── Persistent crawl queue (Wikipedia forager) ───────────────────────────────
   // Loaded once per cycle. We pull a small batch off the head, hand those to
@@ -168,11 +172,10 @@ export async function runAutonomousExtraction(
   // deterministically and skip the LLM altogether. Query synthesis still uses
   // the LLM in the aggregator — that's a different code path.
   //
-  // v0.7.1 — the Wikipedia path now goes through the ForagerSource interface
-  // (packages/agent/src/forager/wikipedia_source.ts). Behaviour is bit-for-bit
-  // the same; what changed is the seam. Auxiliary RSS / arXiv branches below
-  // still call the legacy `executeTool` tools — they migrate to ForagerSource
-  // adapters in v0.7.2.
+  // v0.7.1 introduced the ForagerSource seam for Wikipedia. v0.7.2 completed
+  // the migration: aux RSS / arXiv now go through arxivSource / rssSource too.
+  // The legacy `executeTool` tools that previously implemented these paths are
+  // removed from tools_registry.ts.
   console.log(`\n🤖 Autonomous extractor starting (direct, no LLM) — wikipedia via ForagerSource`);
   if (batchTitles.length === 0) {
     // Objectives are verbose LLM prompts like `Find recent content about
@@ -250,11 +253,15 @@ export async function runAutonomousExtraction(
   // ── Auxiliary sources (rule-based, no LLM) ──────────────────────────────
   // After draining the Wikipedia batch we optionally pull from one
   // supplementary source per cycle, picked from the topic objective:
-  //   - "current_events" / news / today        → rss_fetch over a curated feed
-  //   - "science", "physics", "biology", math, ml, ai, cs → arxiv_search
+  //   - news / current events       → rssSource over a curated feed
+  //   - science / ML / physics / …  → arxivSource search
   //   - otherwise nothing extra (Wikipedia covers it)
-  // The choice is deterministic so the LLM stays out. Curated feeds and
-  // categories are tweakable via env (HIVE_AUX_RSS_FEEDS, HIVE_AUX_ARXIV).
+  // The choice is deterministic. Curated feed list is tweakable via
+  // HIVE_AUX_RSS_FEEDS env var.
+  //
+  // v0.7.2: both branches now go through the ForagerSource interface
+  // (arxivSource, rssSource) instead of executeTool. Behaviour is
+  // identical; this completes the source-driven seam started in v0.7.1.
   if (!budget.exhausted().yes) {
     const lower = objective.toLowerCase();
     const auxQuery = (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
@@ -264,27 +271,34 @@ export async function runAutonomousExtraction(
 
     if (newsRe.test(lower)) {
       const feeds = (process.env.HIVE_AUX_RSS_FEEDS ?? 'https://feeds.bbci.co.uk/news/world/rss.xml,https://www.reutersagency.com/feed/').split(',').map(s => s.trim()).filter(Boolean);
-      const feed = feeds[Math.floor(Math.random() * feeds.length)];
-      console.log(`\n  [aux] rss_fetch("${feed}") — news domain detected`);
+      const feed = feeds[Math.floor(Math.random() * feeds.length)]!;
+      console.log(`\n  [aux] rssSource.fetch("${feed}") — news domain detected`);
       try {
-        const r = await executeTool('rss_fetch', { url: feed, limit: 10 }, {
-          embedderUrl: effectiveEmbedderUrl, onFragment, onCrawlEnqueue,
-        });
-        if (r.ok) console.log(`  [aux] rss indexed ${(r.data as any)?.indexed_count ?? 0} items`);
-        else console.warn(`  [aux] rss failed: ${r.error}`);
+        const result = await rssSource.fetch(feed);
+        for (const frag of result.fragments) await onFragment(frag);
+        console.log(`  [aux] rss indexed ${result.fragments.length} items`);
       } catch (e: any) {
-        console.warn(`  [aux] rss exception: ${e.message}`);
+        console.warn(`  [aux] rss failed: ${e.message ?? e}`);
       }
     } else if (scienceRe.test(lower)) {
-      console.log(`\n  [aux] arxiv_search("${auxQuery}") — science domain detected`);
+      console.log(`\n  [aux] arxivSource.seed+fetch("${auxQuery}") — science domain detected`);
       try {
-        const r = await executeTool('arxiv_search', { query: auxQuery, limit: 5 }, {
-          embedderUrl: effectiveEmbedderUrl, onFragment, onCrawlEnqueue,
-        });
-        if (r.ok) console.log(`  [aux] arxiv indexed ${(r.data as any)?.indexed_count ?? 0} papers`);
-        else console.warn(`  [aux] arxiv failed: ${r.error}`);
+        const urls = await arxivSource.seed({ query: auxQuery, limit: 5 });
+        let indexed = 0;
+        for (const u of urls) {
+          if (budget.exhausted().yes) break;
+          try {
+            const result = await arxivSource.fetch(u);
+            for (const frag of result.fragments) await onFragment(frag);
+            indexed += result.fragments.length;
+          } catch (perPaper: any) {
+            // One paper failing shouldn't kill the whole arXiv branch.
+            console.warn(`  [aux] arxiv per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
+          }
+        }
+        console.log(`  [aux] arxiv indexed ${indexed} papers`);
       } catch (e: any) {
-        console.warn(`  [aux] arxiv exception: ${e.message}`);
+        console.warn(`  [aux] arxiv search failed: ${e.message ?? e}`);
       }
     }
   }

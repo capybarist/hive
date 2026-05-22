@@ -120,6 +120,20 @@ jobs:
         # local diverging changes — if the server has drifted, the deploy
         # fails loudly instead of silently. To clean up, SSH and reset
         # manually, then re-run the workflow.
+        #
+        # `docker image prune -f` is run AFTER the pull (so the new image
+        # has tagged the previous `:latest` as dangling first). Each HIVE
+        # image is ~1-2 GB on disk (post-v0.7.2 slim pass; was ~10 GB
+        # before). Without pruning, every deploy leaves the previous
+        # `:latest` as a dangling layer pile; nine of those filled the
+        # 75 GB Hetzner disk during the v0.7.1 deploy.
+        #
+        # We use `-f` (dangling only), NOT `-af`. `-a` would also remove
+        # tagged-but-unused images like `ollama/ollama:latest` when the
+        # ollama profile is off — annoying to re-pull. Dangling-only is
+        # the right tradeoff: it catches our HIVE image cycle (where each
+        # deploy untags the prior `:latest`) without touching opt-in
+        # images that may legitimately sit idle between profile toggles.
         run: |
           ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} '
             set -e
@@ -127,6 +141,7 @@ jobs:
             git fetch origin main
             git pull --ff-only origin main
             docker compose pull
+            docker image prune -f
             docker compose up -d --remove-orphans
             sleep 5
             docker compose ps

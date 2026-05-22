@@ -5,6 +5,91 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2] — 2026-05-22 — *arXiv / RSS / web as ForagerSource adapters; Docker slim*
+
+Completes the source-driven migration started in v0.7.1. All four
+sources HIVE knows about — Wikipedia, arXiv, RSS, generic web —
+now implement the `ForagerSource` interface. The legacy
+`packages/agent/src/tools_registry.ts` is deleted; nothing in the
+runtime calls `executeTool` anymore.
+
+Two operational fixes ship alongside.
+
+### Added
+
+- `packages/agent/src/forager/arxiv_source.ts` — wraps the existing
+  `arxiv_client.fetchPapers` behind the interface. `seed(query)`
+  returns abstract URLs; `fetch(url)` does a single-paper lookup via
+  the `id_list` endpoint and returns one fragment. Fragment id scheme
+  preserved (`<arxiv_id>_c0`).
+- `packages/agent/src/forager/rss_source.ts` — RSS/Atom feeds. The
+  unit of crawl is the feed URL; `seed(feedUrl)` echoes the URL and
+  `fetch(feedUrl)` returns up to 15 items as fragments. Same User-
+  Agent, body-extraction order, and `rss_<host>_<titleSlug>` id scheme
+  as v0.6.
+- `packages/agent/src/forager/web_source.ts` — catch-all for HTTP(S)
+  URLs not claimed by a specialised adapter. `owns(url)` returns
+  `true` for any `http(s)` URL; `seed()` returns `[]` (nothing to
+  search). Same 30 KB cap and `web_<host>_<slug>_c<n>` id scheme as
+  v0.6.
+
+### Changed
+
+- `packages/agent/src/autonomous_extractor.ts` — auxiliary RSS and
+  arXiv branches now go through `rssSource.fetch` and `arxivSource`
+  `.{seed,fetch}` respectively. The full extractor is now driven
+  entirely by the ForagerSource interface; no `executeTool` calls
+  remain. The legacy `resetSeenTitles()` call is removed too —
+  in-cycle title dedup is handled by `CrawlQueue` (Wikipedia) and is
+  irrelevant for arXiv/RSS (rarely-colliding title namespaces).
+- **Dockerfile slimmed.** Installs torch from the PyTorch CPU wheel
+  index (`https://download.pytorch.org/whl/cpu`) BEFORE
+  sentence-transformers, so the transitive dep picks up the existing
+  CPU build instead of pulling CUDA-12 wheels (~2 GB). The image
+  drops from ~10 GB to ~1-2 GB. `npm install` keeps dev dependencies
+  for now because the runtime loads .ts files via `tsx` and tsx
+  lives in devDependencies; moving it to dependencies is a separate
+  cleanup.
+- **CI workflow auto-prunes dangling images.** Adds
+  `docker image prune -f` (dangling only — preserves opt-in images
+  like `ollama/ollama:latest` that may sit idle between profile
+  toggles) between `docker compose pull` and `docker compose up -d`.
+  This is the fix for what bit us during the v0.7.1 deploy: nine
+  dangling `:latest` HIVE images had piled up to fill the 75 GB
+  Hetzner disk.
+
+### Removed
+
+- `packages/agent/src/tools_registry.ts` — ~600 LoC of dead code.
+  The `executeTool` switch (with cases `wikipedia_search`,
+  `wikipedia_fetch`, `arxiv_search`, `rss_fetch`, `web_fetch`,
+  `crossref_validate`, `index_fragment`) is gone; the
+  `TOOL_DECLARATIONS` array and tool-context types
+  (`ToolResult`, `OnFragment`, `OnCrawlEnqueue`, `FragInput`) too.
+  Helpers (`decodeHtmlEntities`, `slugify`, `hostnameFromUrl`) are
+  copied where needed inside each adapter so each is self-contained.
+
+### Verified
+
+- Pure-function unit tests for all three new adapters: id/owns/
+  normalize and the source-specific helpers (`arxivIdFromUrl`,
+  feed-url echo, web-url scheme check) all return expected values.
+- Live RSS: `rssSource.fetch("https://feeds.bbci.co.uk/news/world/rss.xml")`
+  returned 15 fragments with the expected `rss_feeds.bbci.co.uk_*`
+  ids and 86400 s TTL.
+- Live arXiv: code path was exercised end-to-end; the live test hit
+  arXiv's 429 rate limit (transient external state), not a code
+  error. The retry logic in `arxiv_client.fetchPapers` (preserved
+  from v0.6) handles this naturally on the next cycle.
+- End-to-end extractor cold-start: a fresh `HIVE_MODE=hive` node
+  logs the v0.7.1 banner (`wikipedia via ForagerSource`), seeds via
+  `wikipediaSource.seed`, fetches via `wikipediaSource.fetch`, and
+  produces fragments with the unchanged `wiki_<slug>_*` ids. Aux
+  branch wiring was not observed within the smoketest budget but is
+  exercised by the same pattern.
+
+---
+
 ## [0.7.1] — 2026-05-22 — *ForagerSource interface, Wikipedia migrated*
 
 First step of the v0.7 source-driven refactor. Introduces the

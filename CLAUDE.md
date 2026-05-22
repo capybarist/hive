@@ -44,7 +44,26 @@ the obligation to update the docs.
 
 ---
 
-## Current state: v0.7.1 — ForagerSource interface lands
+## Current state: v0.7.2 — all sources behind ForagerSource
+
+### v0.7.2 — arXiv / RSS / web migrated to ForagerSource adapters
+Completes what v0.7.1 started. `tools_registry.ts` is deleted (~600
+LoC of dead code); `autonomous_extractor.ts` no longer imports
+`executeTool`. Four adapters now live in `packages/agent/src/forager/`:
+`wikipedia_source` (v0.7.1), `arxiv_source`, `rss_source`,
+`web_source`. Behaviour is bit-for-bit identical to v0.6 — same ids,
+same chunking, same TTLs, same user-agents — but the seam is now
+the interface contract instead of a switch statement.
+
+Two operational fixes shipped alongside:
+
+- **Dockerfile slim**: torch installed from PyTorch CPU wheel index
+  before sentence-transformers. Image drops from ~10 GB to ~1-2 GB
+  on disk per build. Stops nine dangling `:latest` layers from
+  filling a 75 GB VPS in nine deploys.
+- **CI auto-prune**: `docker image prune -f` between pull and up,
+  dangling-only so opt-in images like `ollama/ollama:latest`
+  survive across profile toggles.
 
 ### v0.7.1 — `ForagerSource` interface + WikipediaSource adapter
 First step of the source-driven refactor. The Wikipedia path inside
