@@ -414,12 +414,74 @@
     }
     .bee-identity span { word-break: break-all; }
     .bee-identity .lbl { color: var(--muted); font-weight: 600; }
+
+    /* ── Hamburger (mobile only) ── */
+    .hamburger-btn {
+      display: none; align-items: center; justify-content: center;
+      background: none; border: 1px solid var(--border); border-radius: 8px;
+      padding: 5px 7px; cursor: pointer; color: var(--muted);
+      transition: color .15s, border-color .15s; flex-shrink: 0;
+    }
+    .hamburger-btn:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ── Sidebar overlay (mobile) ── */
+    .sidebar-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(15,23,42,.45); z-index: 99;
+      pointer-events: none; opacity: 0; transition: opacity .25s;
+    }
+    .sidebar-overlay.visible { pointer-events: auto; opacity: 1; }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      html, body { overflow: auto; }
+      body { flex-direction: column; height: auto; min-height: 100dvh; }
+
+      .sidebar {
+        position: fixed; top: 0; left: 0; bottom: 0; height: 100dvh;
+        width: min(272px, 88vw);
+        transform: translateX(-100%); transition: transform .25s ease;
+        z-index: 100; box-shadow: none;
+        border-right: 1px solid var(--sidebar-border);
+      }
+      .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 6px 0 24px rgba(15,23,42,.18);
+      }
+      .sidebar-overlay { display: block; }
+
+      .hamburger-btn { display: flex; }
+
+      .main-wrapper { width: 100%; height: 100dvh; display: flex; flex-direction: column; }
+
+      .topbar { padding: 8px 12px; gap: 8px; }
+      .topbar-pills { gap: 6px; }
+      .pill { padding: 3px 8px; font-size: 11px; }
+      .node-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+      .conversation { padding: 0 12px 16px; -webkit-overflow-scrolling: touch; }
+      .welcome { min-height: auto; padding: 28px 16px; }
+      .welcome-chips { gap: 6px; }
+      .chip { font-size: 12px; padding: 6px 10px; }
+
+      .conv-answer-text, .conv-sources, .conv-mode { padding-left: 0; }
+
+      .frag-grid { grid-template-columns: 1fr; }
+
+      .input-area { padding: 8px 12px 14px; }
+      .input-hint { display: none; }
+
+      .bee-dashboard { margin: 16px 0; padding: 0 12px; }
+      .bee-grid-2 { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
 <!-- ── Sidebar ── -->
-<aside class="sidebar">
+<aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
     <span class="brand-logo">HIVE <span id="hive-version" class="brand-version" title="HIVE version">v—</span></span>
     <span class="brand-sub">Heuristic Intelligent Vector Extraction</span>
@@ -463,6 +525,13 @@
 
   <!-- Topbar -->
   <div class="topbar">
+    <button class="hamburger-btn" id="hamburger-btn" aria-label="Menu">
+      <svg width="16" height="14" viewBox="0 0 16 14" fill="currentColor">
+        <rect x="0" y="0"   width="16" height="2" rx="1"/>
+        <rect x="0" y="6"   width="16" height="2" rx="1"/>
+        <rect x="0" y="12"  width="16" height="2" rx="1"/>
+      </svg>
+    </button>
     <div style="display:flex;align-items:center;gap:10px">
       <span class="node-label" id="node-id-label">node: —</span>
       <span id="mode-badge" class="hidden" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 10px;border-radius:20px;background:var(--accent-glow);color:var(--accent2);border:1px solid rgba(99,102,241,.3)">AGGREGATOR</span>
@@ -1212,6 +1281,23 @@ setInterval(async () => { await checkStatus(); await loadNetwork(); }, 10_000);
 // the JSONL files is cheap. No-op when not in bee mode (DOM guards inside).
 setInterval(loadCrawl, 8_000);
 setInterval(loadActivity, 4_000);
+
+// ── Mobile sidebar toggle ─────────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById('hamburger-btn');
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  function close() { sidebar.classList.remove('open'); overlay.classList.remove('visible'); }
+  btn?.addEventListener('click', () => {
+    const open = sidebar.classList.contains('open');
+    if (open) { close(); } else { sidebar.classList.add('open'); overlay.classList.add('visible'); }
+  });
+  overlay?.addEventListener('click', close);
+  // Close sidebar when user selects a nav section on mobile
+  document.querySelectorAll('.nav-section').forEach(el => el.addEventListener('click', () => {
+    if (window.innerWidth <= 700) close();
+  }));
+})();
 </script>
 </body>
 </html>

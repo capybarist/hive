@@ -301,25 +301,14 @@ app.get('/api/peers', async () => ({
 
 // ── GET /api/topics ──────────────────────────────────────────────────────────
 // Returns knowledge summary grouped by node_id.
-// Fragment scan (limit=1000) gives article titles; claim registry fills in any
-// active peer that the 1000-sample missed (large indexes = sparse coverage).
+// 1. Claim registry → which bees are active (always accurate, synced over Hypercore)
+// 2. Fragment scan (limit=1000) → article titles for the listed bees
+// 3. /count-by-node → exact Qdrant count per node_id (replaces the misleading
+//    sample-proportional counts that come from step 2)
 app.get('/api/topics', async () => {
   const byNode: Record<string, { nodeId: string; titles: string[]; count: number }> = {};
-  const seenTitles = new Set<string>();
-  try {
-    const res = await fetch(`${embedderUrl}/fragments?limit=1000`, { signal: AbortSignal.timeout(3000) });
-    if (res.ok) {
-      const data = (await res.json()) as { fragments: any[] };
-      for (const f of data.fragments ?? []) {
-        const nid: string = f.node_id ?? 'unknown';
-        if (!byNode[nid]) byNode[nid] = { nodeId: nid, titles: [], count: 0 };
-        byNode[nid].count++;
-        if (f.title && !seenTitles.has(f.title)) { seenTitles.add(f.title); byNode[nid].titles.push(f.title); }
-      }
-    }
-  } catch {}
-  // Merge claim registry: peers with active claims always appear even if the
-  // fragment sample didn't include any of their vectors yet.
+
+  // Step 1 — claim registry (source of truth for active peers)
   try {
     const activeClaims = await claimRegistry.getAllActiveClaims();
     for (const [topicId, beeIds] of Object.entries(activeClaims)) {
@@ -329,6 +318,41 @@ app.get('/api/topics', async () => {
       }
     }
   } catch {}
+
+  // Step 2 — fragment sample for article titles (includes peers not yet in claims)
+  const seenTitles = new Set<string>();
+  try {
+    const res = await fetch(`${embedderUrl}/fragments?limit=1000`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const data = (await res.json()) as { fragments: any[] };
+      for (const f of data.fragments ?? []) {
+        const nid: string = f.node_id ?? 'unknown';
+        if (!byNode[nid]) byNode[nid] = { nodeId: nid, titles: [], count: 0 };
+        byNode[nid].count++;  // preliminary; overwritten in step 3
+        if (f.title && !seenTitles.has(f.title)) { seenTitles.add(f.title); byNode[nid].titles.push(f.title); }
+      }
+    }
+  } catch {}
+
+  // Step 3 — accurate per-node counts from Qdrant (O(N peers) count queries, fast)
+  const nodeIds = Object.keys(byNode);
+  if (nodeIds.length > 0) {
+    try {
+      const countRes = await fetch(`${embedderUrl}/count-by-node`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_ids: nodeIds }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (countRes.ok) {
+        const counts = (await countRes.json()) as Record<string, number>;
+        for (const [nid, cnt] of Object.entries(counts)) {
+          if (byNode[nid]) byNode[nid].count = cnt;
+        }
+      }
+    } catch {}
+  }
+
   return { nodes: Object.values(byNode) };
 });
 

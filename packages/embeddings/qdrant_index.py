@@ -185,6 +185,18 @@ class QdrantIndex:
         except Exception as e:
             return {"fragments": self.size, "bees": 0, "topics": 0, "error": str(e)}
 
+    def count_for_node(self, node_id: str) -> int:
+        """Return exact fragment count for a single node_id via Qdrant filter."""
+        try:
+            result = self._client.count(
+                collection_name=self._collection,
+                count_filter=Filter(must=[FieldCondition(key="node_id", match=MatchValue(value=node_id))]),
+                exact=True,
+            )
+            return result.count or 0
+        except Exception:
+            return 0
+
     def save(self, base_path: str) -> None:
         pass  # Qdrant persists to its own storage directory
 

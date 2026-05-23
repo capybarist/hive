@@ -75,6 +75,10 @@ class SearchRequest(BaseModel):
     filters: dict[str, Any] | None = None  # aggregator mode: filter by topic, node_id, etc.
 
 
+class CountByNodeRequest(BaseModel):
+    node_ids: list[str]
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/embed")
@@ -129,6 +133,14 @@ def get_fragment(fragment_id: str):
     if label is None:
         raise HTTPException(status_code=404, detail="Fragment not found")
     return index._meta[label]
+
+
+@app.post("/count-by-node")
+def count_by_node(req: CountByNodeRequest):
+    """Return exact fragment count per node_id (used by /api/topics for accurate panel data)."""
+    if BACKEND != "qdrant":
+        return {nid: sum(1 for m in index._meta.values() if m.get("node_id") == nid) for nid in req.node_ids}
+    return {nid: index.count_for_node(nid) for nid in req.node_ids}
 
 
 @app.get("/stats")
