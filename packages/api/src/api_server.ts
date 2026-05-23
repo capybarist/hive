@@ -307,19 +307,21 @@ app.get('/api/peers', async () => ({
 //    sample-proportional counts that come from step 2)
 app.get('/api/topics', async () => {
   const byNode: Record<string, { nodeId: string; titles: string[]; count: number }> = {};
+  const activeClaimNodes = new Set<string>();
 
   // Step 1 — claim registry (source of truth for active peers)
   try {
     const activeClaims = await claimRegistry.getAllActiveClaims();
     for (const [topicId, beeIds] of Object.entries(activeClaims)) {
       for (const beeId of beeIds) {
+        activeClaimNodes.add(beeId);
         if (!byNode[beeId]) byNode[beeId] = { nodeId: beeId, titles: [], count: 0 };
         if (!byNode[beeId].titles.includes(topicId)) byNode[beeId].titles.push(topicId);
       }
     }
   } catch {}
 
-  // Step 2 — fragment sample for article titles (includes peers not yet in claims)
+  // Step 2 — fragment sample for article titles
   const seenTitles = new Set<string>();
   try {
     const res = await fetch(`${embedderUrl}/fragments?limit=1000`, { signal: AbortSignal.timeout(3000) });
@@ -334,7 +336,7 @@ app.get('/api/topics', async () => {
     }
   } catch {}
 
-  // Step 3 — accurate per-node counts from Qdrant (O(N peers) count queries, fast)
+  // Step 3 — accurate per-node counts from Qdrant (fast with node_id payload index)
   const nodeIds = Object.keys(byNode);
   if (nodeIds.length > 0) {
     try {
@@ -353,7 +355,13 @@ app.get('/api/topics', async () => {
     } catch {}
   }
 
-  return { nodes: Object.values(byNode) };
+  // Step 4 — filter zombie peers: no active claim + fewer than 500 fragments
+  // means it's a disconnected peer whose Qdrant data is historical only.
+  const nodes = Object.values(byNode).filter(n =>
+    activeClaimNodes.has(n.nodeId) || n.count >= 500,
+  );
+
+  return { nodes };
 });
 
 // ── GET /api/claims ──────────────────────────────────────────────────────────

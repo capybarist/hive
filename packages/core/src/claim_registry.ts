@@ -2,6 +2,17 @@ import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
 import { join } from 'node:path';
 
+function attachConflictHandler(core: any, label: string): void {
+  let logged = false;
+  core.on('conflict', () => {
+    if (!logged) {
+      const key = core.key?.toString('hex')?.slice(0, 16) ?? '?';
+      console.warn(`[claims] Hypercore conflict in ${label} core (${key}) — last write before crash may be missing. Safe to ignore.`);
+      logged = true;
+    }
+  });
+}
+
 const CLAIM_TTL_MS = 30 * 60 * 1000; // 30 min — BEE must renew or claim expires
 
 export interface TopicClaim {
@@ -52,6 +63,7 @@ export class ClaimRegistry {
       await this.store.ready();
       this.core = this.store.get({ name: 'claims' });
       await this.core.ready();
+      attachConflictHandler(this.core, 'claims');
       this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await this.bee.ready();
       this._ready = true;
@@ -76,6 +88,7 @@ export class ClaimRegistry {
     const runOnce = async () => {
       const remoteCore = (this.store as any).get({ key: remoteCoreKey });
       await remoteCore.ready();
+      attachConflictHandler(remoteCore, `remote-claims-${remoteCoreKey.toString('hex').slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();

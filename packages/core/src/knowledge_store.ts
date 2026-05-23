@@ -13,6 +13,20 @@ const K = {
   hist: (id: string, ts: string)     => `hist:${id}:${ts}`,
 };
 
+// Hypercore emits 'conflict' when disk state disagrees with a received proof
+// (typically from an unclean shutdown / OOM kill). Log once per core then silence —
+// the core remains readable, writes from before the crash may be absent.
+function attachConflictHandler(core: any, label: string): void {
+  let logged = false;
+  core.on('conflict', () => {
+    if (!logged) {
+      const key = core.key?.toString('hex')?.slice(0, 16) ?? '?';
+      console.warn(`[store] Hypercore conflict in ${label} core (${key}) — last write before crash may be missing. This is safe to ignore.`);
+      logged = true;
+    }
+  });
+}
+
 export class KnowledgeStore implements IKnowledgeGraph {
   private store: Corestore;
   private core!: any;       // strong reference prevents GC from closing the Hypercore
@@ -52,6 +66,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       // would close the Hypercore, causing SESSION_CLOSED on subsequent writes.
       this.core = this.store.get({ name: 'fragments' });
       await this.core.ready();
+      attachConflictHandler(this.core, 'fragments');
       this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await this.bee.ready();
       this._ready = true;
@@ -277,6 +292,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       // length naturally.
       const remoteCore = (this.store as any).get({ key: remoteCoreKey });
       await remoteCore.ready();
+      attachConflictHandler(remoteCore, `remote-${remoteCoreKey.toString('hex').slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
       console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
