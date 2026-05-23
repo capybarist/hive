@@ -52,7 +52,7 @@ services:
 
   # ── Vector database ───────────────────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    image: qdrant/qdrant:v1.13.6
     container_name: hive-qdrant
     restart: unless-stopped
     volumes:
