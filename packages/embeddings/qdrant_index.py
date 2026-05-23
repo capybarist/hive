@@ -63,6 +63,17 @@ class QdrantIndex:
         else:
             count = self._client.get_collection(self._collection).points_count or 0
             print(f"[qdrant] Connected to '{self._collection}' ({count} points)")
+        # Payload index on node_id enables fast per-node count queries.
+        # Idempotent: silently succeeds if the index already exists.
+        try:
+            from qdrant_client.models import PayloadSchemaType
+            self._client.create_payload_index(
+                collection_name=self._collection,
+                field_name="node_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            pass
 
     def _load_known_ids(self) -> None:
         """Scroll all existing fragment IDs into memory for fast dedup."""
@@ -186,7 +197,7 @@ class QdrantIndex:
             return {"fragments": self.size, "bees": 0, "topics": 0, "error": str(e)}
 
     def count_for_node(self, node_id: str) -> int:
-        """Return exact fragment count for a single node_id via Qdrant filter."""
+        """Return exact fragment count for a node_id. Fast once node_id payload index exists."""
         try:
             result = self._client.count(
                 collection_name=self._collection,
