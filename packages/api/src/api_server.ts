@@ -300,19 +300,33 @@ app.get('/api/peers', async () => ({
 }));
 
 // ── GET /api/topics ──────────────────────────────────────────────────────────
-// Returns knowledge summary grouped by node_id — reads from HNSW (has titles)
+// Returns knowledge summary grouped by node_id.
+// Fragment scan (limit=1000) gives article titles; claim registry fills in any
+// active peer that the 1000-sample missed (large indexes = sparse coverage).
 app.get('/api/topics', async () => {
   const byNode: Record<string, { nodeId: string; titles: string[]; count: number }> = {};
   const seenTitles = new Set<string>();
   try {
     const res = await fetch(`${embedderUrl}/fragments?limit=1000`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return { nodes: [] };
-    const data = (await res.json()) as { fragments: any[] };
-    for (const f of data.fragments ?? []) {
-      const nid: string = f.node_id ?? 'unknown';
-      if (!byNode[nid]) byNode[nid] = { nodeId: nid, titles: [], count: 0 };
-      byNode[nid].count++;
-      if (f.title && !seenTitles.has(f.title)) { seenTitles.add(f.title); byNode[nid].titles.push(f.title); }
+    if (res.ok) {
+      const data = (await res.json()) as { fragments: any[] };
+      for (const f of data.fragments ?? []) {
+        const nid: string = f.node_id ?? 'unknown';
+        if (!byNode[nid]) byNode[nid] = { nodeId: nid, titles: [], count: 0 };
+        byNode[nid].count++;
+        if (f.title && !seenTitles.has(f.title)) { seenTitles.add(f.title); byNode[nid].titles.push(f.title); }
+      }
+    }
+  } catch {}
+  // Merge claim registry: peers with active claims always appear even if the
+  // fragment sample didn't include any of their vectors yet.
+  try {
+    const activeClaims = await claimRegistry.getAllActiveClaims();
+    for (const [topicId, beeIds] of Object.entries(activeClaims)) {
+      for (const beeId of beeIds) {
+        if (!byNode[beeId]) byNode[beeId] = { nodeId: beeId, titles: [], count: 0 };
+        if (!byNode[beeId].titles.includes(topicId)) byNode[beeId].titles.push(topicId);
+      }
     }
   } catch {}
   return { nodes: Object.values(byNode) };

@@ -80,8 +80,10 @@ for cfg in "${CONFIGS[@]}"; do
   # Create data directories
   mkdir -p "$abs_data/identity" "$abs_data/vectors" "$abs_data/corestore" "$abs_data/cache"
 
-  # ── Embedder ────────────────────────────────────────────────────────────────
-  if alive "http://127.0.0.1:$emb_port/health"; then
+  # ── Embedder (skipped in bee mode — HAS_LOCAL_EMBED=false) ─────────────────
+  if [ "${HIVE_MODE:-}" = "bee" ]; then
+    ok "Embedder skipped (HIVE_MODE=bee)"
+  elif alive "http://127.0.0.1:$emb_port/health"; then
     ok "Embedder :$emb_port already running"
   else
     run "Starting embedder :$emb_port ..."
@@ -109,7 +111,7 @@ for cfg in "${CONFIGS[@]}"; do
     fi
 
     run "Starting API :$port ..."
-    tmp_env=$(mktemp /tmp/hive_bee_XXXXXX.env)
+    tmp_env=$(mktemp /tmp/hive_bee_XXXXXX)  # no suffix — macOS mktemp requires Xs at end
     # Append .env then bee config — echo ensures a newline between them even if
     # .env lacks a trailing newline (otherwise the first bee var merges with the last
     # .env line, corrupting multi-line values like LLM_API_KEY).
@@ -131,7 +133,9 @@ done
 echo ""
 run "Waiting for embedders to load model..."
 for cfg in "${CONFIGS[@]}"; do
+  unset HIVE_MODE
   source "$cfg" 2>/dev/null
+  [ "${HIVE_MODE:-}" = "bee" ] && continue   # bee mode has no embedder
   port="${BEE_EMBEDDER_PORT:-7700}"
   for i in $(seq 1 45); do
     alive "http://127.0.0.1:$port/health" && break
