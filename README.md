@@ -216,6 +216,13 @@ HIVE_PEER=http://peer.example.com
 # Suggest a domain (BEE still decides autonomously)
 BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
 
+# Source declaration (v0.7.3 BeeManifest)
+HIVE_SOURCES=wikipedia-en           # comma-separated: wikipedia-en, arxiv, rss, web
+HIVE_POLICY=drift-ok                # drift-ok (follow all links) | exclusive (stay in scope)
+HIVE_SCOPE='{"category_tree":"Category:Medicine"}'  # JSON scope — optional
+HIVE_BEE_REPLICATE=all              # all | neighbors | none (peer-to-peer replication)
+HIVE_LANGUAGES=en                   # comma-separated BCP-47 language codes
+
 # Extraction tuning
 HIVE_EXTRACT_MAX_FRAGMENTS=9        # fragments per cycle, split across claimed topics
 HIVE_EXTRACT_INTERVAL_MS=60000      # pause between cycles (1 min = near-continuous)
@@ -352,11 +359,19 @@ The v0.6 `topic_tree.json` was a static taxonomy committed in the repo
 — a soft point of centralisation. v0.7 replaces it with **per-BEE
 source declarations**:
 
-Each BEE publishes a self-declared manifest at the start of its
-Hypercore listing which sources it covers (`wikipedia-en`, `arxiv`,
-`common-crawl-2026-04` …). Queens read manifests and build a directory
-of "which BEEs cover which sources". No central source list lives in
-the repo.
+Each BEE publishes a self-declared **BeeManifest** to its Hyperbee at
+startup, listing which sources it covers (`wikipedia-en`, `arxiv`,
+`common-crawl-2026-04` …). Queens read manifests when they replicate a
+core and expose `GET /api/directory` — a live view of all known BEE
+declarations. No central source list lives in the repo.
+
+```
+GET /api/directory          → all known BeeManifests (queen: all peers; bee: self only)
+GET /api/status             → node health, mode, version, peer count
+GET /api/topics             → Knowledge Network panel data (fragment counts per node)
+GET /api/crawl              → forager state (queue, visited, next titles)  [bee/hive]
+GET /api/query?q=…          → vector search + LLM synthesis                [queen/hive]
+```
 
 All source adapters implement the same `ForagerSource` interface
 (`seed`, `fetch`, `normalize`, `owns`). The generic forager owns

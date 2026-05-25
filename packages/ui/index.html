@@ -346,8 +346,16 @@
     .bee-card.accent-queue::before    { opacity: 1; background: var(--accent); }
     .bee-card.accent-visited::before  { opacity: 1; background: var(--green); }
     .bee-card.accent-objective::before { opacity: 1; background: var(--brand); }
+    .bee-card.accent-manifest::before  { opacity: 1; background: #f59e0b; }
     .bee-card.accent-queue    { background: linear-gradient(135deg, rgba(139,92,246,.04) 0%, var(--surface) 60%); }
     .bee-card.accent-visited  { background: linear-gradient(135deg, rgba(16,185,129,.05) 0%, var(--surface) 60%); }
+    .bee-card.accent-manifest { background: linear-gradient(135deg, rgba(245,158,11,.04) 0%, var(--surface) 60%); }
+    .manifest-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .manifest-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600;
+                    padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(245,158,11,.3);
+                    background: rgba(245,158,11,.08); color: #b45309; }
+    .manifest-policy { font-size: 9px; opacity: .7; font-weight: 400; }
+    .manifest-meta { font-size: 10px; color: var(--muted); margin-top: 5px; }
     .bee-card.accent-objective { background: linear-gradient(135deg, rgba(14,165,233,.04) 0%, var(--surface) 60%); }
 
     .bee-card-label {
@@ -588,6 +596,15 @@
       <div class="bee-card accent-objective">
         <div class="bee-card-label"><span class="glyph">🎯</span><span>Current objective</span></div>
         <div class="bee-objective" id="bee-objective">—</div>
+      </div>
+
+      <!-- Manifest (v0.7.3) — declared sources + policy -->
+      <div class="bee-card accent-manifest" id="bee-manifest-card">
+        <div class="bee-card-label"><span class="glyph">🧩</span><span>Declared sources</span></div>
+        <div class="manifest-sources" id="bee-manifest-sources">
+          <span style="color:var(--muted);font-size:10px">Loading…</span>
+        </div>
+        <div class="manifest-meta" id="bee-manifest-meta"></div>
       </div>
 
       <!-- Next-up + recently fetched lists -->
@@ -979,6 +996,37 @@ async function loadCrawl() {
   }
 }
 
+// ── Manifest card (bee dashboard, v0.7.3) ─────────────────────────────────────
+// Fetches /api/directory once at startup and renders the declared sources card.
+async function loadManifest() {
+  const sourcesEl = document.getElementById('bee-manifest-sources');
+  const metaEl    = document.getElementById('bee-manifest-meta');
+  if (!sourcesEl) return;
+  try {
+    const d = await fetch(`${API}/api/directory`).then(r => r.json());
+    const self = (d.bees ?? []).find(b => b.is_self) ?? (d.bees ?? [])[0];
+    if (!self) {
+      sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">No manifest yet</span>';
+      return;
+    }
+    const sources = self.declared_sources ?? [];
+    if (!sources.length) {
+      sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">No sources declared</span>';
+      return;
+    }
+    sourcesEl.innerHTML = sources.map(s => `
+      <span class="manifest-tag">
+        ${s.id}
+        <span class="manifest-policy">${s.policy ?? 'drift-ok'}</span>
+      </span>`).join('');
+    const repl = self.replication ?? 'all';
+    const langs = (self.declared_languages ?? ['en']).join(', ');
+    metaEl.textContent = `replication: ${repl} · languages: ${langs}`;
+  } catch {
+    if (sourcesEl) sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">Unavailable</span>';
+  }
+}
+
 // ── Network panel ─────────────────────────────────────────────────────────────
 async function loadNetwork() {
   try {
@@ -1272,7 +1320,7 @@ document.getElementById('clear-btn').addEventListener('click', () => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await checkStatus();
-  await Promise.all([loadNetwork(), loadActivity(), loadCrawl()]);
+  await Promise.all([loadNetwork(), loadActivity(), loadCrawl(), loadManifest()]);
 }
 init();
 setInterval(async () => { await checkStatus(); await loadNetwork(); }, 10_000);
