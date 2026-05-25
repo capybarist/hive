@@ -44,7 +44,58 @@ the obligation to update the docs.
 
 ---
 
-## Current state: v0.7.2 — all sources behind ForagerSource
+## Current state: v0.7.5 — manifest drives extraction
+
+### v0.7.5 — Manifest→extractor wiring
+`autonomous_extractor.ts` now reads `store.getLocalManifest()` at the start
+of every extraction cycle. `declared_sources` from the BEE's own manifest
+determines which source adapters run and in what configuration:
+
+- **wikipedia-en**: Wikipedia BFS crawl (existing). If `scope.category_tree`
+  is set (e.g. `"Category:Medicine"`), that string is used as the seed
+  query instead of the LLM objective.
+- **arxiv**: arXiv abstract fetch. If `scope.categories` is set
+  (e.g. `["cs.AI", "stat.ML"]`), those are passed as seed query.
+- **rss**: RSS feed fetch. If `scope.feeds` is set, those feed URLs are used
+  instead of `HIVE_AUX_RSS_FEEDS` env var or the BBC default.
+- **common-crawl**: Common Crawl CDX+WARC fetch. Requires `scope.domains`
+  and optionally `scope.snapshot`. Never runs as a heuristic — explicit
+  declaration required.
+
+Fallback (no manifest published yet): `[{id:"wikipedia-en", policy:"drift-ok"}]`
+— bit-for-bit identical to v0.6 behaviour.
+
+Backward-compat: arXiv and RSS still run as objective-text heuristics when
+no manifest is present (pre-v0.7.3 bees). Once a manifest is published both
+heuristics are disabled — the manifest is the sole authority on sources.
+
+### v0.7.4 — Common Crawl CDX + WARC adapter
+`packages/agent/src/forager/common_crawl_source.ts` — first non-curated
+open-web source. Implements `ForagerSource` via:
+
+1. **CDX API** (`index.commoncrawl.org/{snapshot}-index`) — domain query
+   returns NDJSON with `{ filename, offset, length, url }` WARC entries.
+2. **WARC range fetch** (`data.commoncrawl.org/{filename}`) — HTTP `Range:
+   bytes=offset-end` retrieves a single independently-gzip-compressed record.
+3. **WARC parse → HTML strip → chunk** — `parseWarcBody()` extracts HTML
+   body from WARC headers + HTTP headers; `stripHtml()` removes tags; text
+   is chunked via `chunkText()` at 350-token / 50-token overlap.
+
+Fragment IDs: `cc_{slugify(url)}[_cN]`. Confidence: 0.65 (lower than
+Wikipedia 0.9 — CC pages are unvetted public web).
+
+Scope: `{ domains: ["pubmed.ncbi.nlm.nih.gov"], snapshot: "CC-MAIN-2025-08" }`.
+Two BEEs with the same snapshot + domains reach the same URL set
+independently → satisfies the reproducibility rule.
+
+### v0.7.3 — BeeManifest: source-driven identity
+`packages/core/src/bee_manifest.ts` — `BeeManifest` type + `DeclaredSource`
+interface. Every BEE publishes its manifest to Hyperbee at startup
+(`bee:manifest` key). Queens read remote manifests in `watchRemoteCore` →
+`getRemoteManifests()`. `GET /api/directory` endpoint returns all known
+BeeManifests. New env vars: `HIVE_SOURCES`, `HIVE_POLICY`, `HIVE_SCOPE`,
+`HIVE_BEE_REPLICATE`, `HIVE_LANGUAGES`. `topic_tree.json` deprecation
+warning added in `loadTree()`.
 
 ### v0.7.2 — arXiv / RSS / web migrated to ForagerSource adapters
 Completes what v0.7.1 started. `tools_registry.ts` is deleted (~600
@@ -593,15 +644,16 @@ seeded, growth is geometric.
 
                     #### Migration path
 
-                    1. **v0.7.0 — Role split (bee / queen / hive).** As documented in the v0.7.0 section above. Unblocks the rest by giving cleaner module boundaries.
-                    2. **v0.7.1 — ForagerInterface introduced, Wikipedia migrated.** No behaviour change for operators. The Wikipedia forager becomes the reference implementation.
-                    3. **v0.7.2 — Existing fetch tools refactored as adapters.** `arxiv_search`, `rss_fetch`, `web_fetch` rewritten over `ForagerSource`. Behaviour preserved.
-                    4. **v0.7.3 — Manifest format with `declared_sources`, `scope`, `policy`.** BEE manifests published at Hypercore start. Queen reads them and exposes `/api/directory`. `topic_tree.json` deprecated; warning on boot if still referenced. `policy: "exclusive"` enforced in all migrated adapters; `policy: "drift-ok"` reproduces v0.6 behaviour.
-                    5. **v0.7.4 — Common Crawl adapter.** First non-curated open-web source. End-to-end demo of "two BEEs, same snapshot, corroborated fragments".
-                    6. **v0.7.5 — Score-by-corroboration over sources.** `cos_sim × log(1 + corroboration_count)` where `corroboration_count` is the number of *distinct sources* (not BEEs) where the same content hash was independently extracted. Cross-BEE corroboration within the same source remains useful but lower weight.
-                    7. **v0.7.6 — Bee replication topology (`HIVE_BEE_REPLICATE`).** Default `neighbors`. Uses scopes from v0.7.3 manifests to define neighbour set. Operator can override to `none` or `all`.
-                    8. **v0.7.7 — Dead-end recovery ladder.** Forager-level. Expand-scope → rotate-source → relax-policy → announce-exhausted. Configurable via manifest.
-                    9. **v0.7.8 — Topic-tree code paths removed.** Final cleanup. `topic_tree.json` becomes `examples/seed-topics.json` if kept at all.
+                    1. ✅ **v0.7.0 — Role split (bee / queen / hive).** `HIVE_MODE` env, six capability flags, `queen.sh`, docker-compose rename.
+                    2. ✅ **v0.7.1 — ForagerInterface introduced, Wikipedia migrated.** Wikipedia uses `ForagerSource` seam.
+                    3. ✅ **v0.7.2 — Existing fetch tools refactored as adapters.** `arxiv_search`, `rss_fetch`, `web_fetch` → `ForagerSource`. `tools_registry.ts` deleted.
+                    4. ✅ **v0.7.3 — BeeManifest published at startup.** `bee:manifest` key in Hyperbee. `GET /api/directory`. `topic_tree.json` deprecation warning. New env vars: `HIVE_SOURCES`, `HIVE_POLICY`, `HIVE_SCOPE`, `HIVE_BEE_REPLICATE`, `HIVE_LANGUAGES`.
+                    5. ✅ **v0.7.4 — Common Crawl CDX + WARC adapter.** `common_crawl_source.ts` — CDX API + range-fetch WARC → HTML strip → chunk. Scope: `{domains, snapshot}`. Reproducibility guaranteed.
+                    6. ✅ **v0.7.5 — Manifest→extractor wiring.** `autonomous_extractor.ts` reads `store.getLocalManifest()`. `declared_sources` drives which adapters run, with scope-aware seeding. Fallback: wikipedia-only (v0.6 behaviour). Heuristic RSS/arXiv only fires when no manifest is published.
+                    7. **v0.7.6 — Claims migration: topicId → (source, partition).** `ClaimRegistry` allocates `(source_id, partition_key)` pairs instead of topic-tree leaves. Wikipedia: alphabetical A-Z buckets. arXiv: categories. CC: domain groups. Same Hypercore, same TTL/release semantics — only the claim unit changes.
+                    8. **v0.7.7 — Dead-end recovery ladder.** Forager-level. `new_links_per_cycle → 0` triggers: expand scope → rotate source → relax policy → announce-exhausted. Configurable per bee via manifest `on_exhausted` field.
+                    9. **v0.7.8 — Topic-tree code paths removed.** `loadTree()` deprecation warning removed; `topic_tree.json` becomes `examples/seed-topics.json`. Full cleanup of `topic_assignment.ts`.
+                    10. **v0.7.9 — Score-by-corroboration.** `cos_sim × log(1 + corroboration_count)` where `corroboration_count` = distinct sources that independently produced fragments with the same content hash. Requires source diversity (v0.7.4+) to be meaningful.
 
                     #### Decisions explicitly made
 

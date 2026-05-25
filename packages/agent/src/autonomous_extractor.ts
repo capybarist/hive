@@ -1,5 +1,5 @@
 import { KnowledgeStore, loadOrCreateIdentity, buildEmbedderPayload } from '@hive/core';
-import type { Fragment } from '@hive/core';
+import type { BeeManifest, DeclaredSource, Fragment } from '@hive/core';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
@@ -7,6 +7,7 @@ import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
 import { arxivSource } from './forager/arxiv_source.js';
 import { rssSource } from './forager/rss_source.js';
+import { CommonCrawlSource } from './forager/common_crawl_source.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -68,6 +69,34 @@ export async function runAutonomousExtraction(
   // handled at the CrawlQueue level for Wikipedia and is unnecessary
   // for arXiv/RSS (rarely repeated titles within a single cycle).
 
+  // ── Manifest-driven source selection (v0.7.5) ───────────────────────────────
+  // Read the BEE's own manifest from Hypercore to learn which sources it has
+  // declared. Fallback: no manifest → [{id:'wikipedia-en', policy:'drift-ok'}]
+  // (v0.6 behaviour preserved). Queens (HAS_LOCAL_STORE=false) never publish a
+  // manifest so they stay on the fallback path, which is fine — they don't run
+  // extraction.
+  let manifest: BeeManifest | null = null;
+  try {
+    manifest = await store.getLocalManifest();
+  } catch { /* manifest not published yet — first boot, use defaults */ }
+
+  const declaredSources: DeclaredSource[] = manifest?.declared_sources?.length
+    ? manifest.declared_sources
+    : [{ id: 'wikipedia-en', policy: 'drift-ok' }];
+
+  const wikiDecl   = declaredSources.find(s => s.id === 'wikipedia-en');
+  const arxivDecl  = declaredSources.find(s => s.id === 'arxiv');
+  const rssDecl    = declaredSources.find(s => s.id === 'rss');
+  const ccDecl     = declaredSources.find(s => s.id === 'common-crawl' || s.id.startsWith('common-crawl-'));
+
+  console.log(`[manifest] Active sources: ${declaredSources.map(s => s.id).join(', ')} (from ${manifest ? 'published manifest' : 'defaults'})`);
+
+  // Build a scoped Common Crawl instance if declared (scope carries snapshot + domains)
+  const ccSource = ccDecl ? new CommonCrawlSource({
+    snapshot: (ccDecl.scope?.snapshot as string | undefined) ?? undefined,
+    domains:  Array.isArray(ccDecl.scope?.domains) ? ccDecl.scope!.domains as string[] : [],
+  }) : null;
+
   // ── Persistent crawl queue (Wikipedia forager) ───────────────────────────────
   // Loaded once per cycle. We pull a small batch off the head, hand those to
   // the LLM as the cycle's work, and any new links wikipedia_fetch discovers
@@ -76,7 +105,7 @@ export async function runAutonomousExtraction(
   const crawlQueue = new CrawlQueue({ dataDir: DATA_DIR });
   await crawlQueue.load();
   const BATCH_PER_CYCLE = 5;
-  const batchTitles = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
+  const batchTitles = wikiDecl ? crawlQueue.dequeueBatch(BATCH_PER_CYCLE) : [];
   const queueSummary = crawlQueue.summary();
 
   // TTL by source type — how long before stale content should be superseded
@@ -165,141 +194,142 @@ export async function runAutonomousExtraction(
   };
 
   // ── Direct-mode crawler (NO LLM) ────────────────────────────────────────────
-  // The 1.5B Ollama model was unreliable as an orchestrator: it called
-  // wikipedia_search, then narrated about "next cycle" instead of fetching,
-  // or passed wrong argument shapes to wikipedia_fetch. The crawler is purely
-  // mechanical (drain queue → fetch each → enqueue links) so we run it
-  // deterministically and skip the LLM altogether. Query synthesis still uses
-  // the LLM in the aggregator — that's a different code path.
-  //
-  // v0.7.1 introduced the ForagerSource seam for Wikipedia. v0.7.2 completed
-  // the migration: aux RSS / arXiv now go through arxivSource / rssSource too.
-  // The legacy `executeTool` tools that previously implemented these paths are
-  // removed from tools_registry.ts.
-  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM) — wikipedia via ForagerSource`);
-  if (batchTitles.length === 0) {
-    // Objectives are verbose LLM prompts like `Find recent content about
-    // "Biodiversity and Conservation" (...)`. Wikipedia's search wants a
-    // short noun phrase — extract the quoted topic name, or fall back to
-    // the first ~50 chars if no quotes are present.
+  // v0.7.5: sources are now driven by the BEE manifest (declared_sources).
+  // Sources not declared in the manifest are skipped; fallback (no manifest)
+  // runs Wikipedia-only, preserving v0.6 behaviour.
+  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM)`);
+  console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min`);
+
+  // ── Wikipedia (BFS crawler) ──────────────────────────────────────────────
+  if (wikiDecl) {
+    // Seed query: prefer scope.category_tree from manifest, then objective topic
+    const scopeCat = typeof wikiDecl.scope?.category_tree === 'string'
+      ? (wikiDecl.scope.category_tree as string).replace(/^Category:/i, '')
+      : null;
     const quoted = objective.match(/"([^"]+)"/);
-    const searchQuery = quoted ? quoted[1] : objective.slice(0, 60);
-    console.log(`   Queue empty — seeding via wikipediaSource.seed("${searchQuery}")`);
-    let seedTitles: string[] = [];
-    try {
-      const seedUrls = await wikipediaSource.seed({ query: searchQuery, limit: 10 });
-      // Bridge until v0.7.3 moves the crawl queue itself to URL storage:
-      // the queue keeps storing Wikipedia titles, so map adapter-returned
-      // URLs back to titles here.
-      seedTitles = seedUrls
-        .map((u) => wikipediaSource.titleFromUrl(u))
-        .filter((t): t is string => t !== null);
-      const added = crawlQueue.enqueueMany(seedTitles);
-      console.log(`   Seeded queue with ${added}/${seedTitles.length} new titles (rest already visited)`);
-    } catch (e: any) {
-      console.warn(`   Seed search failed: ${e.message ?? e}`);
-    }
-    // Now refill our batch from the freshly-seeded queue
-    const seededBatch = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
-    batchTitles.push(...seededBatch);
+    const seedQuery = scopeCat ?? (quoted ? quoted[1] : objective.slice(0, 60));
 
-    // Fallback: if seed returned only visited titles, the BFS frontier is
-    // stuck. Re-fetch one of the seeded (visited) articles anyway — its
-    // outgoing /wiki/ links are the lifeline that unblocks the queue.
-    // onFragment dedups by id so re-indexing is harmless; the side-effect
-    // we want is link discovery via outbound URLs.
-    if (batchTitles.length === 0 && seedTitles.length > 0) {
-      const bootstrap = seedTitles[0]!;
-      console.log(`   All ${seedTitles.length} seed titles already visited — bootstrap re-fetch of "${bootstrap}" to discover new links`);
-      batchTitles.push(bootstrap);
-    }
-  }
-
-  console.log(`   Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
-  console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min\n`);
-
-  // Drain the batch deterministically — one wikipediaSource.fetch per title.
-  // We only mark a title as `visited` if the fetch succeeded; transient
-  // failures (network blip, Wikipedia 503) leave the title eligible for
-  // re-enqueue by a future fetch that discovers the same link.
-  for (const title of batchTitles) {
-    const check = budget.exhausted();
-    if (check.yes) {
-      console.log(`[budget] Exhausted: ${check.reason}`);
-      finalSummary = `Budget exhausted (${check.reason}). Indexed ${fragmentsIndexed} fragments.`;
-      break;
-    }
-    console.log(`  [fetch] wikipediaSource.fetch("${title}")`);
-    try {
-      const url = wikipediaSource.urlFromTitle(title);
-      const result = await wikipediaSource.fetch(url);
-      // Pipe fragments through onFragment so the existing dedup / TTL /
-      // supersede / Hypercore-save / embedder-POST pipeline applies
-      // unchanged. The adapter has no opinion on those concerns.
-      for (const frag of result.fragments) {
-        await onFragment(frag);
-      }
-      const outboundTitles = result.outboundLinks
-        .map((u) => wikipediaSource.titleFromUrl(u))
-        .filter((t): t is string => t !== null);
-      if (outboundTitles.length > 0) onCrawlEnqueue(outboundTitles);
-      crawlQueue.markVisited(title);
-      console.log(`  [fetch] "${title}" → indexed ${result.fragments.length} sections, discovered ${outboundTitles.length} links`);
-    } catch (e: any) {
-      console.warn(`  [fetch] failed for "${title}": ${e.message ?? e} — leaving unvisited for retry`);
-    }
-  }
-
-  // ── Auxiliary sources (rule-based, no LLM) ──────────────────────────────
-  // After draining the Wikipedia batch we optionally pull from one
-  // supplementary source per cycle, picked from the topic objective:
-  //   - news / current events       → rssSource over a curated feed
-  //   - science / ML / physics / …  → arxivSource search
-  //   - otherwise nothing extra (Wikipedia covers it)
-  // The choice is deterministic. Curated feed list is tweakable via
-  // HIVE_AUX_RSS_FEEDS env var.
-  //
-  // v0.7.2: both branches now go through the ForagerSource interface
-  // (arxivSource, rssSource) instead of executeTool. Behaviour is
-  // identical; this completes the source-driven seam started in v0.7.1.
-  if (!budget.exhausted().yes) {
-    const lower = objective.toLowerCase();
-    const auxQuery = (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
-
-    const newsRe = /current[\s_-]?events|news|today|breaking|headline|politics|election/;
-    const scienceRe = /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/;
-
-    if (newsRe.test(lower)) {
-      const feeds = (process.env.HIVE_AUX_RSS_FEEDS ?? 'https://feeds.bbci.co.uk/news/world/rss.xml,https://www.reutersagency.com/feed/').split(',').map(s => s.trim()).filter(Boolean);
-      const feed = feeds[Math.floor(Math.random() * feeds.length)]!;
-      console.log(`\n  [aux] rssSource.fetch("${feed}") — news domain detected`);
+    if (batchTitles.length === 0) {
+      console.log(`   [wiki] Queue empty — seeding via wikipediaSource.seed("${seedQuery}")`);
+      let seedTitles: string[] = [];
       try {
-        const result = await rssSource.fetch(feed);
+        const seedUrls = await wikipediaSource.seed({ query: seedQuery, limit: 10 });
+        seedTitles = seedUrls.map((u) => wikipediaSource.titleFromUrl(u)).filter((t): t is string => t !== null);
+        const added = crawlQueue.enqueueMany(seedTitles);
+        console.log(`   [wiki] Seeded queue with ${added}/${seedTitles.length} new titles`);
+      } catch (e: any) {
+        console.warn(`   [wiki] Seed search failed: ${e.message ?? e}`);
+      }
+      batchTitles.push(...crawlQueue.dequeueBatch(BATCH_PER_CYCLE));
+      // BFS frontier stuck — bootstrap re-fetch to discover new links
+      if (batchTitles.length === 0 && seedTitles.length > 0) {
+        const bootstrap = seedTitles[0]!;
+        console.log(`   [wiki] All seed titles visited — bootstrap re-fetch of "${bootstrap}"`);
+        batchTitles.push(bootstrap);
+      }
+    }
+
+    console.log(`   [wiki] Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
+
+    for (const title of batchTitles) {
+      const check = budget.exhausted();
+      if (check.yes) {
+        console.log(`[budget] Exhausted: ${check.reason}`);
+        finalSummary = `Budget exhausted (${check.reason}). Indexed ${fragmentsIndexed} fragments.`;
+        break;
+      }
+      try {
+        const url = wikipediaSource.urlFromTitle(title);
+        const result = await wikipediaSource.fetch(url);
         for (const frag of result.fragments) await onFragment(frag);
-        console.log(`  [aux] rss indexed ${result.fragments.length} items`);
+        const outboundTitles = result.outboundLinks
+          .map((u) => wikipediaSource.titleFromUrl(u))
+          .filter((t): t is string => t !== null);
+        if (outboundTitles.length > 0) onCrawlEnqueue(outboundTitles);
+        crawlQueue.markVisited(title);
+        console.log(`  [wiki] "${title}" → ${result.fragments.length} sections, ${outboundTitles.length} links`);
       } catch (e: any) {
-        console.warn(`  [aux] rss failed: ${e.message ?? e}`);
+        console.warn(`  [wiki] failed for "${title}": ${e.message ?? e}`);
       }
-    } else if (scienceRe.test(lower)) {
-      console.log(`\n  [aux] arxivSource.seed+fetch("${auxQuery}") — science domain detected`);
-      try {
-        const urls = await arxivSource.seed({ query: auxQuery, limit: 5 });
-        let indexed = 0;
-        for (const u of urls) {
-          if (budget.exhausted().yes) break;
-          try {
-            const result = await arxivSource.fetch(u);
-            for (const frag of result.fragments) await onFragment(frag);
-            indexed += result.fragments.length;
-          } catch (perPaper: any) {
-            // One paper failing shouldn't kill the whole arXiv branch.
-            console.warn(`  [aux] arxiv per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
-          }
+    }
+  }
+
+  // ── arXiv ────────────────────────────────────────────────────────────────
+  // Runs when 'arxiv' is declared in the manifest (v0.7.5+), OR as an
+  // aux heuristic when NOT manifest-driven and objective looks like science.
+  const manifestDrivenArxiv = !!arxivDecl;
+  const heuristicArxiv = !manifest && /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective);
+  if ((manifestDrivenArxiv || heuristicArxiv) && !budget.exhausted().yes) {
+    // Scope categories from manifest take priority over objective-derived query
+    const arxivQuery = (Array.isArray(arxivDecl?.scope?.categories) && (arxivDecl!.scope!.categories as string[]).length > 0)
+      ? (arxivDecl!.scope!.categories as string[]).join(' ')
+      : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+    console.log(`\n  [arxiv] seed+fetch("${arxivQuery}")`);
+    try {
+      const urls = await arxivSource.seed({ query: arxivQuery, limit: 5 });
+      let indexed = 0;
+      for (const u of urls) {
+        if (budget.exhausted().yes) break;
+        try {
+          const result = await arxivSource.fetch(u);
+          for (const frag of result.fragments) await onFragment(frag);
+          indexed += result.fragments.length;
+        } catch (perPaper: any) {
+          console.warn(`  [arxiv] per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
         }
-        console.log(`  [aux] arxiv indexed ${indexed} papers`);
-      } catch (e: any) {
-        console.warn(`  [aux] arxiv search failed: ${e.message ?? e}`);
       }
+      console.log(`  [arxiv] indexed ${indexed} papers`);
+    } catch (e: any) {
+      console.warn(`  [arxiv] search failed: ${e.message ?? e}`);
+    }
+  }
+
+  // ── RSS ──────────────────────────────────────────────────────────────────
+  // Runs when 'rss' is declared, OR as aux heuristic for news objectives.
+  const manifestDrivenRss = !!rssDecl;
+  const heuristicRss = !manifest && /current[\s_-]?events|news|today|breaking|headline|politics|election/i.test(objective);
+  if ((manifestDrivenRss || heuristicRss) && !budget.exhausted().yes) {
+    // Manifest scope.feeds takes priority; fallback to env var or BBC world
+    const declaredFeeds = Array.isArray(rssDecl?.scope?.feeds) ? rssDecl!.scope!.feeds as string[] : [];
+    const envFeeds = (process.env.HIVE_AUX_RSS_FEEDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+    const defaultFeeds = ['https://feeds.bbci.co.uk/news/world/rss.xml'];
+    const feeds = declaredFeeds.length > 0 ? declaredFeeds : (envFeeds.length > 0 ? envFeeds : defaultFeeds);
+    const feed = feeds[Math.floor(Math.random() * feeds.length)]!;
+    console.log(`\n  [rss] fetch("${feed}")`);
+    try {
+      const result = await rssSource.fetch(feed);
+      for (const frag of result.fragments) await onFragment(frag);
+      console.log(`  [rss] indexed ${result.fragments.length} items`);
+    } catch (e: any) {
+      console.warn(`  [rss] failed: ${e.message ?? e}`);
+    }
+  }
+
+  // ── Common Crawl ─────────────────────────────────────────────────────────
+  // Only runs when explicitly declared in the manifest — no heuristic fallback.
+  // Requires scope.domains (or HIVE_CC_DOMAINS env var) to be non-empty;
+  // without a domain target, seed() would query the entire CC snapshot.
+  if (ccSource && !budget.exhausted().yes) {
+    const domains = (ccDecl?.scope?.domains as string[] | undefined) ?? [];
+    const snapshot = (ccDecl?.scope?.snapshot as string | undefined) ?? 'env/default';
+    console.log(`\n  [cc] snapshot=${snapshot} domains=${domains.join(',') || '(env)'}`);
+    try {
+      const seedQuery = domains[0] ?? objective.slice(0, 60);
+      const urls = await ccSource.seed({ query: seedQuery, limit: 10 });
+      let indexed = 0;
+      for (const u of urls) {
+        if (budget.exhausted().yes) break;
+        try {
+          const result = await ccSource.fetch(u);
+          for (const frag of result.fragments) await onFragment(frag);
+          indexed += result.fragments.length;
+        } catch (perPage: any) {
+          console.warn(`  [cc] per-page failed ${u}: ${perPage.message ?? perPage}`);
+        }
+      }
+      console.log(`  [cc] indexed ${indexed} fragments`);
+    } catch (e: any) {
+      console.warn(`  [cc] failed: ${e.message ?? e}`);
     }
   }
 
