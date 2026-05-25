@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.5.3] — 2026-05-25 — *Stop blocking /api/query on /health under load; smaller flush batches*
+
+After v0.7.5.2 the embedder happily processed /add_batch (every recent
+log line is 200 OK) and Qdrant points were trickling up. But
+/api/query returned `fragments: []` and `embedder_online: false`.
+Root cause: `isEmbedderOnline()` used a 2 s timeout against /health,
+and under heavy GIL load (Python doing batch encodes) /health was
+exceeding it. The queen thus reported the embedder offline and
+short-circuited `queryByText` before even trying /search.
+
+Box memory hit 2.15 GB on the queen + 85% on the 4 GB box, which is
+also where the GIL contention came from. Lowering peak memory per
+batch reduces both pressure and /health latency.
+
+### Changed
+
+- `query_engine.ts::isEmbedderOnline()` timeout 2 s → 6 s. The
+  embedder responds in <50 ms when idle but >2 s when batch-encoding
+  64 texts; 2 s was a noise threshold from when /add was per-item.
+- `query_engine.ts::queryByText()` no longer pre-checks /health. It
+  just calls /search; if /search fails, return empty with
+  `embedder_online: false`. The /health pre-check existed to short-
+  circuit a 10 s /search timeout, but in practice it was the
+  short-circuit that hurt us — the embedder was always able to do
+  /search even when /health was GIL-blocked.
+- `knowledge_store.ts::_consumeRemoteStream` FLUSH_SIZE 50 → 20.
+  50 was too aggressive on the 4 GB Hetzner box: peak memory while
+  encoding 50 texts at once pushed the queen to ~2.15 GB and
+  contributed to /health timeouts. 20 gives ~10× throughput vs the
+  pre-v0.7.5.1 serial path while keeping headroom for the api_server,
+  Hypercore replication, and Qdrant client on the same process.
+
+### Verified pre-deploy
+
+- knowledge_store.ts and query_engine.ts both load cleanly via tsx.
+
+### Will verify post-deploy
+
+- queen `/api/status` returns `embedder_online: true` again.
+- `/api/query "photosynthesis"` returns non-empty `fragments`.
+- Queen memory drops below 1.8 GB.
+
+---
+
 ## [0.7.5.2] — 2026-05-25 — *Guard /add_batch against malformed Hyperbee entries*
 
 Post-deploy of v0.7.5.1, the embedder log showed `POST /add_batch

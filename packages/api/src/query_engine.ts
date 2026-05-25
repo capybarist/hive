@@ -39,7 +39,12 @@ export interface QueryResult {
 
 export async function isEmbedderOnline(): Promise<boolean> {
   try {
-    const res = await fetch(`${EMBEDDER}/health`, { signal: AbortSignal.timeout(2000) });
+    // v0.7.5.3 — bumped to 6 s. Under heavy /add_batch load the embedder's
+    // /health response is GIL-blocked and exceeds 2 s. We were returning
+    // embedder_online=false on a perfectly working embedder, which
+    // short-circuited /api/query — so users saw "no fragments" while the
+    // batched ingest was streaming /add_batch 200s through the same socket.
+    const res = await fetch(`${EMBEDDER}/health`, { signal: AbortSignal.timeout(6000) });
     return res.ok;
   } catch {
     return false;
@@ -51,17 +56,18 @@ export async function queryByText(
   topK = 5,
   filters?: Record<string, unknown>,
 ): Promise<QueryResult> {
-  const online = await isEmbedderOnline();
-  if (!online) return { fragments: [], has_hive_data: false, embedder_online: false };
-
+  // v0.7.5.3 — skip the pre-check entirely and let /search be the source of
+  // truth. If the embedder is genuinely down the /search call below fails
+  // and we return empty; the extra round-trip to /health bought us nothing
+  // except a way to wrongly say "offline" when /health timed out under load.
   const res = await fetch(`${EMBEDDER}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: question, top_k: topK, ...(filters ? { filters } : {}) }),
-    signal: AbortSignal.timeout(10000),
-  });
+    signal: AbortSignal.timeout(15000),
+  }).catch(() => null);
 
-  if (!res.ok) return { fragments: [], has_hive_data: false, embedder_online: true };
+  if (!res || !res.ok) return { fragments: [], has_hive_data: false, embedder_online: false };
 
   const data = (await res.json()) as { results: any[]; count: number };
 

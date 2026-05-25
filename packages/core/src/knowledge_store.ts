@@ -393,7 +393,15 @@ export class KnowledgeStore implements IKnowledgeGraph {
     },
   ): Promise<void> {
     type BatchItem = { id: string; text: string; metadata: ReturnType<typeof buildEmbedderPayload> };
-    const FLUSH_SIZE = 50;
+    // v0.7.5.3 — FLUSH_SIZE 50 → 20.
+    //
+    // 50 was too aggressive on the Hetzner 4 GB box. Each batch of 50
+    // pushed the embedder's working set up enough to lift queen memory
+    // to ~2.15 GB and block /health responses on the GIL under load. 20
+    // keeps the throughput speedup (~10×, not 25×) while leaving more
+    // headroom for the api_server, Hypercore replication, and other
+    // queen components on a memory-tight box.
+    const FLUSH_SIZE = 20;
     const FLUSH_INTERVAL_MS = 500;
 
     let buffer: BatchItem[] = [];
