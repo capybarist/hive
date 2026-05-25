@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.5.2] — 2026-05-25 — *Guard /add_batch against malformed Hyperbee entries*
+
+Post-deploy of v0.7.5.1, the embedder log showed `POST /add_batch
+HTTP/1.1 422 Unprocessable Entity` on the majority of batches with
+the occasional 200 mixed in. Manual `curl` with valid items always
+returned 200, so the bug was in what `_consumeRemoteStream` sent —
+not in the new endpoint.
+
+Pydantic's response body confirmed the trigger:
+`{"type":"dict_type","loc":["body","items",N,"metadata"],"input":null}`.
+For a fraction of Hyperbee entries, `buildEmbedderPayload(frag)`
+returned a partially-populated object that serialised in a way
+Pydantic v2 rejects. Pydantic validates every item in the batch;
+one bad item fails the whole request — which is why the entire
+batch returned 422 and 50 fragments were lost.
+
+### Changed
+
+- `_consumeRemoteStream` now coerces `buildEmbedderPayload(frag)`
+  via `|| {}` and runs a defensive check on `frag.id`, `frag.text`,
+  and the metadata object before pushing into the flush buffer.
+  Items that don't qualify are dropped quietly — they've already
+  passed signature verification, so they're not a security issue,
+  just garbage we can't index.
+
+### Why this matters
+
+Without the guard, every batch that contained even one
+malformed-fragment-from-an-old-bee would 422 and the whole batch
+of ~50 valid fragments would be lost (we kept them in `buffer` for
+retry but the retry produced the same 422). The queen's indexed
+count stayed flat at 491,108 despite hours of bee output.
+
+### Verified pre-deploy
+
+- TypeScript runtime import of `knowledge_store.ts` clean.
+
+---
+
 ## [0.7.5.1] — 2026-05-22 — *Batched queen ingest; cleaner LLM answers; clickable sources*
 
 Root-cause fix for "queen returns no fragments / LLM falls back to

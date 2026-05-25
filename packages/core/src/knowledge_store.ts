@@ -471,10 +471,28 @@ export class KnowledgeStore implements IKnowledgeGraph {
             }
           }
 
+          // v0.7.5.2 — guard against malformed Hyperbee entries.
+          // /add_batch was returning 422 "metadata: null" for a fraction of
+          // batches on Hetzner. Root cause traced to fragments where
+          // buildEmbedderPayload returns a partially-populated object
+          // (some Hypercore entries from older bee versions lack fields
+          // like status or extracted_at). Pydantic v2 on the embedder side
+          // is strict — one bad item fails the whole batch.
+          //
+          // Defensive coercion: ensure id + text are strings and metadata
+          // is an object before queuing. Items that don't qualify are
+          // dropped quietly (we already verified the signature, so it's
+          // not a security concern — just garbage we can't index).
+          const metadata = buildEmbedderPayload(frag) || {};
+          if (typeof frag.id !== 'string' || !frag.id ||
+              typeof frag.text !== 'string' || !frag.text ||
+              typeof metadata !== 'object' || metadata === null) {
+            continue;
+          }
           buffer.push({
             id: frag.id,
             text: frag.text,
-            metadata: buildEmbedderPayload(frag),
+            metadata,
           });
 
           if (buffer.length >= FLUSH_SIZE) {
