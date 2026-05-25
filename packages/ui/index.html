@@ -241,9 +241,25 @@
     .conv-question::before { content: 'Q'; font-size: 11px; font-weight: 800; background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(99,102,241,.3); border-radius: 5px; padding: 2px 7px; flex-shrink: 0; margin-top: 1px; }
     .conv-answer-text { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; padding-left: 32px; margin-bottom: 12px; }
     .conv-answer-text strong { font-weight: 600; color: var(--accent2); }
+    /* v0.7.2.5 — inline source links from markdown [text](url). */
+    .answer-link {
+      color: var(--accent); text-decoration: underline;
+      text-underline-offset: 2px; text-decoration-color: rgba(139,92,246,.4);
+      transition: text-decoration-color .15s, color .15s;
+    }
+    .answer-link:hover { color: var(--accent2); text-decoration-color: var(--accent2); }
     .conv-sources { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 32px; margin-bottom: 8px; }
-    .conv-source-chip { font-size: 11px; padding: 3px 10px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-    .conv-source-chip.local { border-color: rgba(99,102,241,.3); color: var(--accent); }
+    .conv-source-chip {
+      font-size: 11px; padding: 3px 10px; border-radius: 20px;
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; max-width: 220px;
+      /* v0.7.2.5: chips are anchors now — reset link styling. */
+      text-decoration: none; display: inline-block;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    a.conv-source-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
+    .conv-source-chip.local { border-color: rgba(139,92,246,.3); color: var(--accent); }
     .conv-mode { font-size: 11px; color: var(--muted); padding-left: 32px; }
     .conv-turn.conv-error .conv-answer-text { color: var(--red); }
 
@@ -1113,8 +1129,17 @@ function renderConversationTurn(question, data) {
   const modeIcon = data.mode === 'verified' ? '✓' : '⚠';
   const modeText = data.mode === 'verified' ? 'In HIVE' : 'LLM knowledge';
 
+  // v0.7.2.5 — render markdown links [text](url) as clickable anchors.
+  // The pre-v0.7.2.5 renderer only handled bold / italic / headers, so any
+  // [foo](https://…) the LLM produced showed as literal brackets text in
+  // the chat. We escape first, then run replacements on the already-safe
+  // string. URLs go through a separate sanitiser so a markdown link of
+  // [click](javascript:alert(1)) can't smuggle JS through the renderer.
+  const safeUrl = (u) => /^https?:\/\//i.test(u) ? u : '#';
   const answerHtml = (data.answer ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) =>
+      `<a href="${safeUrl(u)}" target="_blank" rel="noopener noreferrer" class="answer-link">${t}</a>`)
     .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
     .replace(/\*(.+?)\*/g,'<em>$1</em>')
     .replace(/###\s(.+)/g,'<strong style="font-size:15px">$1</strong>')
@@ -1122,10 +1147,15 @@ function renderConversationTurn(question, data) {
 
   const frags = data.fragments ?? [];
   const relevant = frags.filter(f => f.relevant !== false);
+  // v0.7.2.5 — source chips are now anchors. Title is truncated but the
+  // tooltip carries the full source URL for hover-preview. The chip
+  // navigates to the verbatim source so the user can re-verify the claim
+  // against the original Wikipedia/arXiv page.
   const sourceChips = relevant.slice(0, 4).map(f => {
     const isLocal = f.node_id === MY_NODE_ID;
-    const label = (f.title ? f.title.slice(0, 42) : f.source.slice(0, 42));
-    return `<span class="conv-source-chip ${isLocal?'local':''}" title="${f.source}">${sourceIcon(f.source)} ${label}</span>`;
+    const url = f.source ?? '#';
+    const label = (f.title ? f.title.slice(0, 42) : (f.source ?? '').slice(0, 42));
+    return `<a class="conv-source-chip ${isLocal?'local':''}" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" title="${url}">${sourceIcon(f.source ?? '')} ${label}</a>`;
   }).join('');
 
   turn.innerHTML = `

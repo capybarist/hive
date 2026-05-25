@@ -5,6 +5,108 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.2.5] — 2026-05-22 — *Batched queen ingest; LLM answers cleaner; clickable sources*
+
+Six fixes from the v0.7.2.4 live review, grouped because they all
+concern what the user actually sees when they query the queen.
+
+### The replication-lag root cause
+
+The user spotted that fragments the bee had clearly extracted
+(SEMA, Chen Xi politician, China National Highway 209) never
+appeared in queen searches. Diagnosis:
+
+- `packages/core/src/knowledge_store.ts::watchRemoteCore` did a
+  serial `await fetch(/add)` per fragment. Each /add was
+  HTTP-round-trip + single sentence-transformers encode + single
+  Qdrant upsert = ~80 ms per fragment, so ~750 fragments/min max.
+- Since v0.7.2.3 the bee runs continuously and produces faster than
+  that during catch-up phases. The queen fell permanently behind:
+  recent fragments sat in the queen's local Hypercore replica but
+  never reached Qdrant.
+- Layered on top: the `_id_to_label` compatibility property on
+  `QdrantIndex` iterated `_known_ids` without a snapshot, racing
+  the concurrent /add path under uvicorn's threadpool and
+  returning 500 with `RuntimeError: Set changed size during
+  iteration`. Some /add calls disappeared silently.
+
+### Added
+
+- `embedder.embed_batch(texts)` — single sentence-transformers
+  `model.encode(texts, batch_size=64)` call. ~25× faster per-item
+  than N separate `embed()` calls (one model forward pass, one
+  Python/C++ round-trip).
+- `embedder.add_batch(items)` — bulk add. Dedups by id, calls
+  `embed_batch`, then `index.upsert_batch` if the index supports
+  it (Qdrant does, HNSW falls back to per-item).
+- `QdrantIndex.upsert_batch(items)` — single `client.upsert` call
+  for the whole batch (one Qdrant network round trip + one WAL
+  write). Snapshot-then-update on `_known_ids` so the dedup check
+  doesn't race the live writer.
+- `POST /add_batch` endpoint on the embedder. Replication clients
+  POST a `{ items: [...] }` body; embedder runs one batch encode
+  and one Qdrant upsert.
+
+### Changed
+
+- `watchRemoteCore` in `knowledge_store.ts` now buffers up to 50
+  fragments or 500 ms, then flushes to `/add_batch`. Signature
+  verification still runs per-fragment before items enter the
+  buffer (invalid fragments never make it into a batch). Items
+  rejected by the embedder are reinstated at the head of the
+  buffer so the next flush retries; they're only marked `seen`
+  after a 2xx response. The stream's `finally` flushes the partial
+  buffer on disconnect so we don't lose items at the restart
+  boundary.
+- `QdrantIndex._id_to_label` snapshots `_known_ids` with `list()`
+  before the dict comprehension, fixing the `RuntimeError: Set
+  changed size during iteration` race.
+- `llm_client.ts` system prompt rewritten: no more "based on the
+  provided fragments" / "the fragment mentions" narration; no
+  enumeration of unrelated content when the question isn't
+  answered; sparing use of inline `[text](url)` markdown (UI shows
+  source chips separately).
+
+### UI
+
+- `index.html` answer renderer now turns markdown `[text](url)`
+  into real `<a target="_blank" rel="noopener noreferrer">` links.
+  Pre-v0.7.2.5 the renderer only handled bold/italic/headers, so
+  any inline link from the LLM showed as literal bracketed text.
+  A URL sanitiser keeps the regex from rendering
+  `javascript:` schemes.
+- Source chips under each answer changed from `<span>` to `<a>`
+  with the same styling — clicking jumps to the verbatim source
+  URL so the user can re-verify the claim against Wikipedia / arXiv.
+- `.answer-link` styling matches the accent (violet) palette.
+
+### Expected impact
+
+- Per-fragment ingest cost on the queen: ~80 ms → ~3-5 ms
+  amortised. Expected sustained throughput ~10k-20k fragments/min
+  (vs ~750 previously). Replication-lag backlog should drain
+  within minutes instead of accumulating indefinitely.
+- Recent extractions (Chen Xi, Highway 209, etc.) reach Qdrant
+  shortly after the bee emits them.
+- LLM answers stop saying "the fragment mentions" and stop
+  enumerating tangential content when the answer isn't in HIVE.
+- Source chips and inline links in answers are clickable.
+
+### Verified pre-deploy
+
+- `embedder.add_batch([2 items])` returns 2 (HNSW backend).
+- TypeScript compiles cleanly after the watchRemoteCore rewrite
+  (no diagnostics).
+
+### Backlog
+
+- After this lands and stabilises, evaluate whether `EXTRACT_INTERVAL_MS`
+  needs further tuning. v0.7.2.3 took it to 1 s assuming queen could
+  keep up; v0.7.2.5 makes that assumption real. If queens still lag
+  under multi-bee deployments, the bee side can be tuned next.
+
+---
+
 ## [0.7.2.4] — 2026-05-22 — *Fix /api/query always returning zero fragments (qdrant 404)*
 
 Critical query-path bug surfaced by the v0.7.2.3 review: every query

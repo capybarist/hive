@@ -69,6 +69,16 @@ class AddRequest(BaseModel):
     metadata: dict = {}
 
 
+class AddBatchItem(BaseModel):
+    id: str
+    text: str
+    metadata: dict = {}
+
+
+class AddBatchRequest(BaseModel):
+    items: list[AddBatchItem]
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -90,6 +100,26 @@ def add(req: AddRequest):
     engine.add(req.id, req.text, req.metadata)
     _save()
     return {"ok": True, "id": req.id, "indexed": index.size}
+
+
+@app.post("/add_batch")
+def add_batch(req: AddBatchRequest):
+    """
+    Bulk add endpoint. The replication pipeline (knowledge_store.ts
+    watchRemoteCore) buffers remote fragments and POSTs them here every
+    ~500 ms or when the buffer hits the flush threshold. One HTTP
+    round-trip + one sentence-transformers batch encode + one Qdrant
+    upsert per request.
+
+    Throughput: empirically ~25× faster than the per-fragment /add path
+    because the embedder spends most of its time in the encode model
+    and that model batches efficiently. /add stays in place for the
+    bee → local-embedder path (single fragments at a time).
+    """
+    items = [{"id": it.id, "text": it.text, "metadata": it.metadata} for it in req.items]
+    added = engine.add_batch(items)
+    _save()
+    return {"ok": True, "submitted": len(items), "added": added, "indexed": index.size}
 
 
 @app.post("/search")

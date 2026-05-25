@@ -301,9 +301,27 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
-  // Extracted so watchRemoteCore can wrap the for-await loop in a restartable
-  // closure. Counters are passed via getter/incrementer pairs so the outer
-  // scope keeps a stable running total across restarts.
+  // v0.7.2.5 — buffered batch flush instead of per-fragment POST.
+  //
+  // The old serial loop was ~80 ms per fragment (HTTP + encode + qdrant
+  // upsert) — about 750 frags/min. The bee since v0.7.2.3 produces faster
+  // than that during catch-up, so the queen fell permanently behind:
+  // recently-indexed articles (SEMA, Chen Xi, Highway 209) were in the
+  // bee's Hypercore and even in the queen's local Hypercore replica, but
+  // never reached Qdrant — searches for them returned vector-similar
+  // neighbours and the LLM honestly reported "I don't have that".
+  //
+  // The new design:
+  //   1. Stream items into an in-memory buffer (FLUSH_SIZE = 50).
+  //   2. Periodically flush — either when the buffer fills or after
+  //      FLUSH_INTERVAL_MS, whichever comes first.
+  //   3. POST the whole batch to /add_batch. The embedder does a single
+  //      batch encode + single Qdrant upsert. ~25× throughput.
+  //
+  // The signature-verification step is unchanged; it happens per fragment
+  // before the item enters the buffer, so an invalid fragment never makes
+  // it into a batch. Items rejected for missing/bad signatures don't
+  // count toward the flush size.
   private async _consumeRemoteStream(
     remoteBee: any,
     embedderUrl: string,
@@ -315,64 +333,117 @@ export class KnowledgeStore implements IKnowledgeGraph {
       droppedUnknownPeerRef: () => number; incUnknownPeer: () => void;
     },
   ): Promise<void> {
-    for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
-      if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
-        const frag = value as Fragment;
-        if (seen.has(frag.id)) continue;
+    type BatchItem = { id: string; text: string; metadata: ReturnType<typeof buildEmbedderPayload> };
+    const FLUSH_SIZE = 50;
+    const FLUSH_INTERVAL_MS = 500;
 
-        // ── Signature verification ──────────────────────────────────────────
-        // Three-step check on every replicated fragment:
-        //   1. hash + signature present (else: drop "unsigned")
-        //   2. hash recomputes from the payload (else: drop "tampered")
-        //   3. signature verifies against the producer's known ed25519 pubkey
-        //      (else: drop "unknown peer" — happens before /api/status round
-        //      trip completes, or when somebody is impersonating a node_id)
-        // When peerRegistry is not provided we keep the v0.6.1.x behaviour:
-        // hash recompute only. This preserves CLI/test usage.
-        if (!frag.hash || !frag.signature) {
-          counters.incUnsigned();
-          const n = counters.droppedUnsignedRef();
-          if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping unsigned remote fragment ${frag.id} (count=${n})`);
-          continue;
+    let buffer: BatchItem[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let flushing = false;
+
+    const doFlush = async () => {
+      if (buffer.length === 0 || flushing) return;
+      flushing = true;
+      const batch = buffer;
+      buffer = [];
+      try {
+        const res = await fetch(`${embedderUrl}/add_batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: batch }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (res.ok) {
+          for (const it of batch) seen.add(it.id);
+        } else {
+          // Embedder rejected the batch — put items back at the head so the
+          // next flush retries them. Don't mark seen.
+          buffer = [...batch, ...buffer];
         }
-        const { hash, signature, ...rest } = frag;
-        const recomputed = hashPayload(rest);
-        if (recomputed !== hash) {
-          counters.incBadSig();
-          const n = counters.droppedBadSigRef();
-          if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping tampered remote fragment ${frag.id} (count=${n})`);
-          continue;
-        }
-        if (peerRegistry) {
-          const pubkey = peerRegistry.pubkeyFor(frag.node_id);
-          if (!pubkey) {
-            counters.incUnknownPeer();
-            const n = counters.droppedUnknownPeerRef();
-            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — no pubkey known for ${frag.node_id} (count=${n})`);
+      } catch {
+        // Embedder offline or timed out. Reinstate items so we retry.
+        buffer = [...batch, ...buffer];
+      } finally {
+        flushing = false;
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(async () => {
+        flushTimer = null;
+        await doFlush();
+        // If the stream produced more items while we were flushing, the
+        // next push() into buffer will schedule another timer naturally.
+      }, FLUSH_INTERVAL_MS);
+    };
+
+    try {
+      for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
+        if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
+          const frag = value as Fragment;
+          if (seen.has(frag.id)) continue;
+
+          // ── Signature verification ──────────────────────────────────────────
+          // Three-step check on every replicated fragment:
+          //   1. hash + signature present (else: drop "unsigned")
+          //   2. hash recomputes from the payload (else: drop "tampered")
+          //   3. signature verifies against the producer's known ed25519 pubkey
+          //      (else: drop "unknown peer" — happens before /api/status round
+          //      trip completes, or when somebody is impersonating a node_id)
+          // When peerRegistry is not provided we keep the v0.6.1.x behaviour:
+          // hash recompute only. This preserves CLI/test usage.
+          if (!frag.hash || !frag.signature) {
+            counters.incUnsigned();
+            const n = counters.droppedUnsignedRef();
+            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping unsigned remote fragment ${frag.id} (count=${n})`);
             continue;
           }
-          if (!verifySignature({ id: frag.id, hash }, signature, pubkey)) {
+          const { hash, signature, ...rest } = frag;
+          const recomputed = hashPayload(rest);
+          if (recomputed !== hash) {
             counters.incBadSig();
             const n = counters.droppedBadSigRef();
-            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — ed25519 signature does not verify against ${frag.node_id}'s key (count=${n})`);
+            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping tampered remote fragment ${frag.id} (count=${n})`);
             continue;
           }
-        }
+          if (peerRegistry) {
+            const pubkey = peerRegistry.pubkeyFor(frag.node_id);
+            if (!pubkey) {
+              counters.incUnknownPeer();
+              const n = counters.droppedUnknownPeerRef();
+              if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — no pubkey known for ${frag.node_id} (count=${n})`);
+              continue;
+            }
+            if (!verifySignature({ id: frag.id, hash }, signature, pubkey)) {
+              counters.incBadSig();
+              const n = counters.droppedBadSigRef();
+              if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — ed25519 signature does not verify against ${frag.node_id}'s key (count=${n})`);
+              continue;
+            }
+          }
 
-        try {
-          await fetch(`${embedderUrl}/add`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: frag.id,
-              text: frag.text,
-              metadata: buildEmbedderPayload(frag),
-            }),
-            signal: AbortSignal.timeout(10_000),
+          buffer.push({
+            id: frag.id,
+            text: frag.text,
+            metadata: buildEmbedderPayload(frag),
           });
-          seen.add(frag.id);
-        } catch { /* embedder offline — not marked seen, will retry on reconnect */ }
+
+          if (buffer.length >= FLUSH_SIZE) {
+            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+            await doFlush();
+          } else {
+            scheduleFlush();
+          }
+        }
       }
+    } finally {
+      // Stream ended (or threw). Flush whatever is left so we don't lose a
+      // partial batch on disconnect. The outer watchRemoteCore catches the
+      // throw and restarts; the unflushed items will be re-emitted by the
+      // restarted live stream because we never marked them `seen`.
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      await doFlush();
     }
   }
 

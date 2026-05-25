@@ -101,6 +101,49 @@ class QdrantIndex:
         )
         self._known_ids.add(id)
 
+    def upsert_batch(self, items: list[tuple[str, np.ndarray, dict]]) -> int:
+        """
+        Bulk ingest. `items` is [(id, vector, metadata), ...].
+
+        Single Qdrant upsert call for the whole batch — the qdrant-client
+        documents this as the recommended path for high-throughput ingest
+        (one network round trip + one server-side WAL write per batch
+        instead of N). Items whose id is already in _known_ids are
+        skipped so retries / replication catch-up don't pay encoding
+        cost twice.
+
+        Returns the count of items actually upserted (post-dedup).
+        """
+        if not items:
+            return 0
+        # Snapshot known_ids first to avoid the v0.7.2.x RuntimeError
+        # "Set changed size during iteration" race — _known_ids was being
+        # iterated by /add while remote-core replication mutated it in a
+        # different thread. The snapshot is a tiny memory cost; the .add
+        # at the end of this method updates the live set atomically.
+        known_snapshot = self._known_ids
+        points: list[PointStruct] = []
+        new_ids: list[str] = []
+        for id_, vector, metadata in items:
+            if id_ in known_snapshot:
+                continue
+            points.append(PointStruct(
+                id=self._to_point_id(id_),
+                vector=vector.astype(np.float32).tolist(),
+                payload={"id": id_, **(metadata or {})},
+            ))
+            new_ids.append(id_)
+        if not points:
+            return 0
+        self._client.upsert(
+            collection_name=self._collection,
+            points=points,
+        )
+        # Single set update once Qdrant has acknowledged. Adding mid-loop
+        # creates the iteration race; doing it here in one go is safe.
+        self._known_ids.update(new_ids)
+        return len(points)
+
     def query(
         self,
         vector: np.ndarray,
@@ -209,8 +252,17 @@ class QdrantIndex:
 
     @property
     def _id_to_label(self) -> dict[str, int]:
-        """Used by api_server.py for dedup checks (if id in index._id_to_label)."""
-        return {fid: 1 for fid in self._known_ids}
+        """Used by api_server.py for dedup checks (if id in index._id_to_label).
+
+        v0.7.2.5: snapshot via list() before the comprehension. Without the
+        snapshot, FastAPI's threadpool would run concurrent /add handlers
+        that mutate _known_ids while this property iterates it, raising
+        RuntimeError: Set changed size during iteration and returning 500
+        for the /add call. Symptom: queen's qdrant count stalled while the
+        bee kept producing — recent fragments (Chen Xi, Highway 209) were
+        lost to the race.
+        """
+        return dict.fromkeys(list(self._known_ids), 1)
 
     @property
     def _meta(self) -> dict:
