@@ -69,6 +69,16 @@ class AddRequest(BaseModel):
     metadata: dict = {}
 
 
+class AddBatchItem(BaseModel):
+    id: str
+    text: str
+    metadata: dict = {}
+
+
+class AddBatchRequest(BaseModel):
+    items: list[AddBatchItem]
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -94,6 +104,19 @@ def add(req: AddRequest):
     engine.add(req.id, req.text, req.metadata)
     _save()
     return {"ok": True, "id": req.id, "indexed": index.size}
+
+
+@app.post("/add_batch")
+def add_batch(req: AddBatchRequest):
+    """v0.7.5.1 — bulk add. The queen's watchRemoteCore buffers remote
+    fragments and POSTs them here every ~500 ms or when the buffer hits
+    the flush threshold. One HTTP round-trip + one sentence-transformers
+    batch encode + one Qdrant upsert per request. ~25× faster than the
+    per-fragment /add path."""
+    items = [{"id": it.id, "text": it.text, "metadata": it.metadata} for it in req.items]
+    added = engine.add_batch(items)
+    _save()
+    return {"ok": True, "submitted": len(items), "added": added, "indexed": index.size}
 
 
 @app.post("/search")

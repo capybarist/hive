@@ -5,6 +5,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.5.1] — 2026-05-22 — *Batched queen ingest; cleaner LLM answers; clickable sources*
+
+Root-cause fix for "queen returns no fragments / LLM falls back to
+general knowledge" complaints during the v0.7.2.4+ live review.
+Fragments the bee had clearly extracted (SEMA, Chen Xi politician,
+China National Highway 209) never reached Qdrant. Diagnosis: the
+queen's ingest pipeline was the bottleneck, not Hypercore replication.
+
+### Replication-lag root cause
+
+`packages/core/src/knowledge_store.ts::_consumeRemoteStream` did
+`await fetch(/add)` per fragment — HTTP round trip + sentence-
+transformers encode + Qdrant upsert = ~80 ms per fragment, cap ~750
+frags/min. Since v0.7.2.3 the bee runs continuously and pushes
+faster, so the queen fell permanently behind. Recent extractions sat
+in the queen's local Hypercore replica but never made it into the
+vector index.
+
+Layered on top: the `_id_to_label` compatibility property on
+`QdrantIndex` iterated `_known_ids` without a snapshot, racing the
+concurrent `/add` path under uvicorn's threadpool and returning 500
+with `RuntimeError: Set changed size during iteration`. Some `/add`
+calls disappeared silently.
+
+### Added
+
+- `embedder.embed_batch(texts)` — single `model.encode(texts,
+  batch_size=64)` call. ~25× faster per-item than N separate
+  `embed()` calls (one model forward pass, one Python/C++
+  round-trip).
+- `embedder.add_batch(items)` — bulk add. Dedups by id, calls
+  `embed_batch`, then `index.upsert_batch` if available (Qdrant) or
+  per-item fallback (HNSW).
+- `QdrantIndex.upsert_batch(items)` — single `client.upsert` for the
+  whole batch (one network round trip + one server-side WAL write).
+  Snapshot-then-update on `_known_ids` so the dedup check doesn't
+  race the live writer.
+- `POST /add_batch` on the embedder. Body: `{ items: [...] }`. One
+  encode + one Qdrant upsert + one HTTP round-trip per call.
+
+### Changed
+
+- `_consumeRemoteStream` buffers up to 50 fragments or 500 ms, then
+  flushes to `/add_batch`. Signature verification stays per-fragment
+  before items enter the buffer (invalid fragments never make it
+  into a batch). Items the embedder rejects are reinstated at the
+  buffer head; only after a 2xx response do we mark `seen`. The
+  stream's `finally` flushes the partial buffer on disconnect so
+  nothing is lost at the restart boundary.
+- `QdrantIndex._id_to_label` snapshots `_known_ids` with
+  `dict.fromkeys(list(self._known_ids), 1)`, fixing the
+  `RuntimeError: Set changed size during iteration` race.
+- `llm_client.ts` system prompt rewritten: no "based on the provided
+  fragments" / "the fragment mentions" narration; no enumeration of
+  unrelated content when the question isn't answered; sparing use
+  of inline `[text](url)` markdown (UI renders source chips
+  separately).
+
+### UI
+
+- `index.html` answer renderer now turns markdown `[text](url)`
+  into real `<a target="_blank" rel="noopener noreferrer">` links
+  with a URL sanitiser blocking `javascript:` schemes. Pre-v0.7.5.1
+  the renderer only handled bold/italic/headers, so any inline link
+  the LLM emitted showed as literal `[brackets](text)`.
+- Source chips under each answer are now `<a>` instead of `<span>`,
+  clicking jumps to the verbatim source URL for re-verification.
+- `.answer-link` styling matches the accent (violet) palette.
+
+### Expected impact
+
+- Per-fragment queen-ingest cost ~80 ms → ~3-5 ms amortised.
+- Sustained throughput ~10k-20k frags/min (vs ~750).
+- Replication-lag backlog drains within minutes instead of
+  accumulating indefinitely; recent extractions reach Qdrant
+  shortly after the bee emits them.
+- LLM answers stop saying "the fragment mentions ..." and stop
+  enumerating tangential content when the answer isn't in HIVE.
+- Inline links and source chips in the chat UI are clickable.
+
+### Verified pre-deploy
+
+- Python: `embedder.add_batch` with HNSW backend ingests 2 items
+  correctly.
+- TypeScript: `_consumeRemoteStream` rewrite compiles cleanly
+  (`knowledge_store.ts` imports without diagnostics).
+- HTML tag balance preserved (115 `<div>` open/close pairs).
+- New selectors present after merge: `answer-link`,
+  `a.conv-source-chip`.
+
+### Note on merge
+
+This patch was developed against v0.7.2.4 in parallel with the
+v0.7.2.5–v0.7.5 line that landed upstream (responsive UI, manifest,
+Common Crawl adapter). The batching changes are independent and
+were re-applied cleanly on top of v0.7.5; UI / LLM-prompt hunks
+applied via a 3-way merge against the responsive layout from
+v0.7.2.7.
+
+---
+
 ## [0.7.2.4] — 2026-05-22 — *Fix /api/query always returning zero fragments (qdrant 404)*
 
 Critical query-path bug surfaced by the v0.7.2.3 review: every query

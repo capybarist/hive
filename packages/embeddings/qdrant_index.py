@@ -112,6 +112,34 @@ class QdrantIndex:
         )
         self._known_ids.add(id)
 
+    def upsert_batch(self, items: list[tuple[str, np.ndarray, dict]]) -> int:
+        """
+        v0.7.5.1: bulk ingest. Items is [(id, vector, metadata), ...].
+        Single Qdrant upsert call for the whole batch (one network round
+        trip, one server-side WAL write per batch instead of N). Items
+        whose id is already in _known_ids are skipped.
+        Returns count actually upserted.
+        """
+        if not items:
+            return 0
+        known_snapshot = self._known_ids
+        points: list[PointStruct] = []
+        new_ids: list[str] = []
+        for id_, vector, metadata in items:
+            if id_ in known_snapshot:
+                continue
+            points.append(PointStruct(
+                id=self._to_point_id(id_),
+                vector=vector.astype(np.float32).tolist(),
+                payload={"id": id_, **(metadata or {})},
+            ))
+            new_ids.append(id_)
+        if not points:
+            return 0
+        self._client.upsert(collection_name=self._collection, points=points)
+        self._known_ids.update(new_ids)
+        return len(points)
+
     def query(
         self,
         vector: np.ndarray,
@@ -218,8 +246,12 @@ class QdrantIndex:
 
     @property
     def _id_to_label(self) -> dict[str, int]:
-        """Used by api_server.py for dedup checks (if id in index._id_to_label)."""
-        return {fid: 1 for fid in self._known_ids}
+        """Used by api_server.py for dedup checks (if id in index._id_to_label).
+
+        v0.7.5.1: snapshot via list() to fix RuntimeError "Set changed size
+        during iteration" under concurrent /add calls (uvicorn threadpool).
+        """
+        return dict.fromkeys(list(self._known_ids), 1)
 
     @property
     def _meta(self) -> dict:
