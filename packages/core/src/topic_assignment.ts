@@ -25,7 +25,12 @@ interface TopicTree {
   domains: Domain[];
 }
 
+let _deprecationWarned = false;
 function loadTree(): TopicNode[] {
+  if (!_deprecationWarned) {
+    _deprecationWarned = true;
+    console.warn('[v0.7.3][deprecated] topic_tree.json will be removed in v0.7.8. BeeManifest declared_sources is the replacement. See CLAUDE.md § v0.7.3.');
+  }
   // Try a few candidate paths for topic_tree.json
   const __dirname = fileURLToPath(new URL('.', import.meta.url));
   const candidates = [

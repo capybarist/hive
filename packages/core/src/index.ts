@@ -9,3 +9,5 @@ export { assignTopics, buildObjectiveFromTopics, loadTree } from './topic_assign
 export type { TopicNode } from './topic_assignment.js';
 export { createLLMProvider, isLLMConfigured, validateLLMKey } from './llm_provider.js';
 export type { LLMProvider, LLMMessage, MessagePart, ToolDef, ToolCall, GenerateOptions, GenerateResult } from './llm_provider.js';
+export { buildDeclaredSources } from './bee_manifest.js';
+export type { BeeManifest, DeclaredSource } from './bee_manifest.js';

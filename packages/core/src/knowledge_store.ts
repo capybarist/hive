@@ -5,6 +5,7 @@ import type { Fragment, FragmentId, FragmentInput, IKnowledgeGraph, QueryFilter 
 import { buildEmbedderPayload } from './interfaces.js';
 import { hashPayload, signPayload, verifySignature, type NodeIdentity } from './node_identity.js';
 import type { PeerRegistry } from './peer_registry.js';
+import type { BeeManifest } from './bee_manifest.js';
 
 const K = {
   frag: (id: string)                 => `frag:${id}`,
@@ -35,6 +36,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
   private _ready = false;
   // Serialize all Hyperbee writes to prevent concurrent flush conflicts
   private _writeQueue: Promise<void> = Promise.resolve();
+  // Manifests received from remote peers (nodeId → manifest). Populated during
+  // watchRemoteCore; read by /api/directory on the queen.
+  private remoteManifests: Map<string, BeeManifest> = new Map();
 
   private _readyPromise: Promise<void> | null = null;
 
@@ -209,6 +213,29 @@ export class KnowledgeStore implements IKnowledgeGraph {
       verifySignature({ id: fragment.id, hash }, signature, this.identity.publicKeyHex);
   }
 
+  // ── BeeManifest (v0.7.3) ───────────────────────────────────────────────────
+
+  /** Publish this BEE's manifest to its own Hyperbee so peers can read it. */
+  async publishManifest(manifest: BeeManifest): Promise<void> {
+    await this.ready();
+    return this.enqueue(async () => {
+      await this.ensureOpen();
+      await this.withTimeout(this.bee.put('bee:manifest', manifest), 5_000, 'publishManifest');
+    });
+  }
+
+  /** Read back the manifest this BEE previously published (null if not yet published). */
+  async getLocalManifest(): Promise<BeeManifest | null> {
+    await this.ready();
+    const node = await this.bee.get('bee:manifest');
+    return node ? (node.value as BeeManifest) : null;
+  }
+
+  /** All manifests received from remote peers via watchRemoteCore. */
+  getRemoteManifests(): ReadonlyMap<string, BeeManifest> {
+    return this.remoteManifests;
+  }
+
   /**
    * Stream all fragments from Hyperbee history (past + live) and POST each one
    * to the HNSW embedder. This replaces HTTP-based sync: Hypercore replication
@@ -275,10 +302,12 @@ export class KnowledgeStore implements IKnowledgeGraph {
   /**
    * Watch a remote peer's fragments core (opened read-only by key) and POST
    * each fragment to HNSW. Called after key exchange with a peer.
+   * `nodeId` is the HIVE app-level identity of the peer — used to store its
+   * BeeManifest (v0.7.3) and as a label for conflict logs.
    * The optional `peerRegistry` enables full ed25519 verification — without
    * it we fall back to the v0.6.1.x hash-recompute check.
    */
-  async watchRemoteCore(remoteCoreKey: Buffer, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
+  async watchRemoteCore(remoteCoreKey: Buffer, nodeId: string, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
     await this.ready();
     const seen = new Set<string>();
     let droppedUnsigned = 0;
@@ -292,11 +321,22 @@ export class KnowledgeStore implements IKnowledgeGraph {
       // length naturally.
       const remoteCore = (this.store as any).get({ key: remoteCoreKey });
       await remoteCore.ready();
-      attachConflictHandler(remoteCore, `remote-${remoteCoreKey.toString('hex').slice(0, 8)}`);
+      attachConflictHandler(remoteCore, `remote-${nodeId.slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
       console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();
+      // Read peer's BeeManifest (v0.7.3) — once per stream open is enough since
+      // it's written at startup and practically never changes.
+      try {
+        const manifestNode = await remoteBee.get('bee:manifest');
+        if (manifestNode?.value) {
+          const m = manifestNode.value as BeeManifest;
+          this.remoteManifests.set(nodeId, m);
+          const srcs = m.declared_sources?.map((s: any) => s.id).join(', ') ?? '—';
+          console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (policy: ${m.declared_sources?.[0]?.policy ?? '?'})`);
+        }
+      } catch { /* manifest absent or unreadable — not fatal */ }
       await this._consumeRemoteStream(remoteBee, embedderUrl, seen, peerRegistry, {
         droppedUnsignedRef: () => droppedUnsigned, incUnsigned: () => droppedUnsigned++,
         droppedBadSigRef: () => droppedBadSig,    incBadSig:    () => droppedBadSig++,
@@ -310,7 +350,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
         await runStreamOnce();
         backoffMs = 1_000;
       } catch (err: any) {
-        console.warn(`[repl] watchRemoteCore stream died for ${remoteCoreKey.toString('hex').slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+        console.warn(`[repl] watchRemoteCore stream died for ${nodeId.slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
         await new Promise(r => setTimeout(r, backoffMs));
         backoffMs = Math.min(backoffMs * 2, 30_000);
       }

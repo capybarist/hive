@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { queryByText, getEmbedderStatus } from './query_engine.js';
 import { synthesize } from './llm_client.js';
-import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry, isLLMConfigured, validateLLMKey } from '@hive/core';
-import type { PeerMeta } from '@hive/core';
+import { KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry, isLLMConfigured, validateLLMKey, buildDeclaredSources } from '@hive/core';
+import type { PeerMeta, BeeManifest } from '@hive/core';
 import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -137,6 +137,25 @@ const embedderUrl = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 const claimRegistry = new ClaimRegistry(DATA_DIR, knowledgeStore.corestore);
 await claimRegistry.ready();
 
+// ── BeeManifest (v0.7.3) — publish this node's source declaration ───────────
+// Written to the local Hyperbee so any queen that replicates our core can read
+// it and populate /api/directory. Only bees/hive have a local store to write to.
+if (HAS_LOCAL_STORE) {
+  const beeManifest: BeeManifest = {
+    bee_id: identity.nodeId,
+    declared_sources: buildDeclaredSources(),
+    declared_languages: (process.env.HIVE_LANGUAGES ?? 'en').split(',').map(s => s.trim()).filter(Boolean),
+    replication: (['none', 'neighbors', 'all'].includes(process.env.HIVE_BEE_REPLICATE ?? '')
+      ? process.env.HIVE_BEE_REPLICATE as 'none' | 'neighbors' | 'all'
+      : 'all'),
+    version: HIVE_VERSION,
+    published_at: new Date().toISOString(),
+  };
+  await knowledgeStore.publishManifest(beeManifest);
+  const srcList = beeManifest.declared_sources.map(s => s.id).join(', ');
+  console.log(`   Manifest  → sources: ${srcList} | policy: ${beeManifest.declared_sources[0]?.policy ?? 'drift-ok'} | replication: ${beeManifest.replication}`);
+}
+
 // PeerMeta — what we advertise to every Hyperswarm peer we connect with.
 // Sent once per connection over the `hive/meta/v1` Protomux channel.
 // There is NO HTTP fallback for this exchange since v0.6.4.
@@ -173,7 +192,7 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
     peerCore.ready().then(() => {
       peerCore.download({ start: 0, end: -1 });
       console.log(`[p2p] Replication started for ${meta.nodeId.slice(0, 16)} (peer ${peerId})`);
-      knowledgeStore.watchRemoteCore(remoteCoreKey, embedderUrl, peerRegistry).catch(err =>
+      knowledgeStore.watchRemoteCore(remoteCoreKey, meta.nodeId, embedderUrl, peerRegistry).catch(err =>
         console.warn(`[repl] watchRemoteCore crashed: ${err?.message ?? err}`),
       );
     }).catch((err: any) => console.warn(`[p2p] peerCore.ready failed for ${peerId}: ${err?.message ?? err}`));
@@ -482,6 +501,27 @@ app.get('/api/crawl', async () => {
     next_in_queue: nextInQueue,
     recent_visited: recentVisited,
   };
+});
+
+// ── GET /api/directory — all known BeeManifests (v0.7.3) ─────────────────────
+// Queens return their own manifest + all remote manifests received via
+// watchRemoteCore. Bees return their own manifest only (they don't replicate
+// peer cores, so remoteManifests stays empty).
+app.get('/api/directory', async () => {
+  const entries: Array<BeeManifest & { node_id: string; is_self: boolean }> = [];
+
+  if (HAS_LOCAL_STORE) {
+    try {
+      const local = await knowledgeStore.getLocalManifest();
+      if (local) entries.push({ ...local, node_id: identity.nodeId, is_self: true });
+    } catch { /* manifest not yet written */ }
+  }
+
+  for (const [nodeId, manifest] of knowledgeStore.getRemoteManifests()) {
+    entries.push({ ...manifest, node_id: nodeId, is_self: false });
+  }
+
+  return { bees: entries, updated_at: new Date().toISOString() };
 });
 
 // ── GET /api/stats — aggregator summary (fragment/BEE/topic counts) ──────────
