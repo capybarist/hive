@@ -160,6 +160,37 @@ export class CommonCrawlSource implements ForagerSource {
     }
   }
 
+  /**
+   * v0.7.6 — partitions for Common Crawl.
+   *
+   * If scope.domains is set (the usual case for a curated CC bee), every
+   * domain becomes its own partition. 5 bees on a 5-domain scope can pick
+   * one domain each, and each partition is fully inside scope.
+   *
+   * Without explicit domains, partitions are TLD groups — a rough split
+   * for generalist deployments. This is a fallback; running CC without
+   * an explicit domain list is discouraged because the result set is huge.
+   */
+  partitions(scope?: Record<string, unknown>): string[] {
+    const domains = (scope?.domains ?? this.domains) as string[] | undefined;
+    if (Array.isArray(domains) && domains.length > 0) {
+      return domains.map(d => d.replace(/^www\./, ''));
+    }
+    // No scope.domains → no partitionable axis. Single bucket.
+    return ['*'];
+  }
+
+  isInPartition(url: string, _scope: Record<string, unknown> | undefined, partition: string): boolean {
+    if (partition === '*') return true;
+    try {
+      const hostname = new URL(url).hostname.replace(/^www\./, '');
+      const p = partition.replace(/^www\./, '');
+      return hostname === p || hostname.endsWith('.' + p);
+    } catch {
+      return false;
+    }
+  }
+
   async seed(opts: SeedOptions): Promise<string[]> {
     // If domains declared in scope, query those; else treat opts.query as domain hint
     const targets = this.domains.length > 0 ? this.domains : [opts.query];

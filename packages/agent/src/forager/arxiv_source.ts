@@ -75,6 +75,76 @@ export class ArxivSource implements ForagerSource {
     }
   }
 
+  /**
+   * v0.7.6 — partitions over the arXiv taxonomy.
+   *
+   * If scope.categories is set (e.g. ["cs.*"]), each category becomes its
+   * own partition. So three bees on scope=cs.* can pick cs.LG / cs.AI /
+   * cs.CL respectively without overlap, and each one's outbound URLs are
+   * all within scope=cs.*.
+   *
+   * Without a scope, partitions are the seven canonical arXiv top-level
+   * categories — generalist bees can split by domain.
+   */
+  partitions(scope?: Record<string, unknown>): string[] {
+    const cats = scope?.categories;
+    if (Array.isArray(cats) && cats.length > 0) {
+      // Expand wildcards (e.g. "cs.*" → returned as-is; the actual leaf
+      // breakdown happens at seed time and isn't enumerable cheaply here).
+      // Operator declares concrete sub-categories if they want finer splits.
+      const expanded: string[] = [];
+      for (const c of cats) {
+        if (typeof c !== 'string') continue;
+        if (c.endsWith('.*')) {
+          // Common arXiv leaves for the major roots. This is intentionally
+          // a curated list rather than a live API call — arXiv doesn't
+          // expose a "list subcategories" endpoint, and the leaves are
+          // stable enough that hardcoding is fine.
+          const root = c.slice(0, -2);
+          const map: Record<string, string[]> = {
+            cs:      ['cs.AI', 'cs.CL', 'cs.CR', 'cs.CV', 'cs.DC', 'cs.DS', 'cs.LG', 'cs.NE', 'cs.PL', 'cs.RO', 'cs.SE'],
+            math:    ['math.AG', 'math.AT', 'math.CA', 'math.CO', 'math.DG', 'math.NT', 'math.PR', 'math.ST'],
+            physics: ['physics.atom-ph', 'physics.bio-ph', 'physics.chem-ph', 'physics.optics', 'physics.plasm-ph'],
+            'q-bio': ['q-bio.BM', 'q-bio.CB', 'q-bio.GN', 'q-bio.NC', 'q-bio.QM'],
+            stat:    ['stat.AP', 'stat.ME', 'stat.ML', 'stat.TH'],
+            econ:    ['econ.EM', 'econ.GN', 'econ.TH'],
+          };
+          if (map[root]) expanded.push(...map[root]!);
+          else expanded.push(c); // unknown root → keep as-is, no leaf split
+        } else {
+          expanded.push(c);
+        }
+      }
+      return expanded.length > 0 ? expanded : ['*'];
+    }
+    // Generalist: top-level groups as partitions.
+    return ['cs', 'math', 'physics', 'q-bio', 'q-fin', 'stat', 'econ'];
+  }
+
+  /**
+   * v0.7.6 — does this paper URL fall in the partition?
+   *
+   * arXiv categories are encoded in the entry metadata, not the URL. We do
+   * a best-effort using the legacy URL format (e.g. /abs/cs.LG/0123456)
+   * which carries the category in the path. Modern URLs (/abs/2501.12345)
+   * don't expose the category — those return true and the seed-time filter
+   * does the actual narrowing.
+   */
+  isInPartition(url: string, _scope: Record<string, unknown> | undefined, partition: string): boolean {
+    if (partition === '*') return true;
+    const arxivId = this.arxivIdFromUrl(url);
+    if (!arxivId) return false;
+    // Legacy IDs: "cs.LG/0123456" — category in the prefix.
+    const legacyMatch = arxivId.match(/^([a-z-]+(\.[A-Z][a-zA-Z-]+)?)\//);
+    if (legacyMatch) {
+      const cat = legacyMatch[1]!;
+      return cat === partition || cat.startsWith(partition + '.');
+    }
+    // Modern IDs (post-2007) don't carry category in the URL. The seed
+    // filter handles narrowing; here we conservatively accept.
+    return true;
+  }
+
   async seed(opts: SeedOptions): Promise<string[]> {
     const papers = await fetchPapers(opts.query, opts.limit ?? 5);
     return papers

@@ -154,6 +154,26 @@ if (HAS_LOCAL_STORE) {
   await knowledgeStore.publishManifest(beeManifest);
   const srcList = beeManifest.declared_sources.map(s => s.id).join(', ');
   console.log(`   Manifest  → sources: ${srcList} | policy: ${beeManifest.declared_sources[0]?.policy ?? 'drift-ok'} | replication: ${beeManifest.replication}`);
+
+  // v0.7.6 — claim partitions in the ClaimRegistry so other bees see what we
+  // cover and can pick non-overlapping partitions. Encoded as the existing
+  // topicId field with shape "<source_id>:<partition_key>" so the legacy
+  // topic-claim path stays untouched (claims with no ":" are still topics).
+  //
+  // Why opt-in: bees without a HIVE_PARTITION declared just skip this loop
+  // and behave exactly as in v0.7.5 — coordination cost only paid when
+  // operator explicitly splits work across peers.
+  for (const decl of beeManifest.declared_sources) {
+    if (decl.partition) {
+      const claimId = `${decl.id}:${decl.partition}`;
+      try {
+        await claimRegistry.claim(claimId, identity.nodeId);
+        console.log(`   Partition claimed: ${claimId}`);
+      } catch (e: any) {
+        console.warn(`   Partition claim failed for ${claimId}: ${e?.message ?? e}`);
+      }
+    }
+  }
 }
 
 // PeerMeta — what we advertise to every Hyperswarm peer we connect with.

@@ -202,12 +202,19 @@ export async function runAutonomousExtraction(
 
   // ── Wikipedia (BFS crawler) ──────────────────────────────────────────────
   if (wikiDecl) {
-    // Seed query: prefer scope.category_tree from manifest, then objective topic
+    // v0.7.6 — seed query priority:
+    //   1. wikiDecl.partition (the narrowest claim) — e.g. "Category:Pharmacology"
+    //   2. wikiDecl.scope.category_tree                — e.g. "Category:Medicine"
+    //   3. quoted topic from the objective string
+    //   4. first 60 chars of the objective as fallback
+    const partLabel = wikiDecl.partition ?? null;
+    const partAsTopic = partLabel ? partLabel.replace(/^Category:/i, '') : null;
     const scopeCat = typeof wikiDecl.scope?.category_tree === 'string'
       ? (wikiDecl.scope.category_tree as string).replace(/^Category:/i, '')
       : null;
     const quoted = objective.match(/"([^"]+)"/);
-    const seedQuery = scopeCat ?? (quoted ? quoted[1] : objective.slice(0, 60));
+    const seedQuery = partAsTopic ?? scopeCat ?? (quoted ? quoted[1] : objective.slice(0, 60));
+    if (partLabel) console.log(`   [wiki] Partition claimed: ${partLabel}`);
 
     if (batchTitles.length === 0) {
       console.log(`   [wiki] Queue empty — seeding via wikipediaSource.seed("${seedQuery}")`);
@@ -242,7 +249,21 @@ export async function runAutonomousExtraction(
         const url = wikipediaSource.urlFromTitle(title);
         const result = await wikipediaSource.fetch(url);
         for (const frag of result.fragments) await onFragment(frag);
-        const outboundTitles = result.outboundLinks
+        // v0.7.6 — under policy=exclusive + partition, drop outbound links
+        // that fall outside the claimed partition. WikipediaSource's
+        // isInPartition is a coarse pre-filter (alphabetical check; category
+        // membership defers to the seed-time API query elsewhere) — good
+        // enough to keep the queue focused without an API call per link.
+        let outboundUrls = result.outboundLinks;
+        if (wikiDecl.policy === 'exclusive' && wikiDecl.partition) {
+          const before = outboundUrls.length;
+          outboundUrls = outboundUrls.filter(u =>
+            wikipediaSource.isInPartition!(u, wikiDecl.scope, wikiDecl.partition!));
+          if (before - outboundUrls.length > 0) {
+            console.log(`  [wiki] dropped ${before - outboundUrls.length}/${before} out-of-partition links`);
+          }
+        }
+        const outboundTitles = outboundUrls
           .map((u) => wikipediaSource.titleFromUrl(u))
           .filter((t): t is string => t !== null);
         if (outboundTitles.length > 0) onCrawlEnqueue(outboundTitles);
@@ -260,10 +281,16 @@ export async function runAutonomousExtraction(
   const manifestDrivenArxiv = !!arxivDecl;
   const heuristicArxiv = !manifest && /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective);
   if ((manifestDrivenArxiv || heuristicArxiv) && !budget.exhausted().yes) {
-    // Scope categories from manifest take priority over objective-derived query
-    const arxivQuery = (Array.isArray(arxivDecl?.scope?.categories) && (arxivDecl!.scope!.categories as string[]).length > 0)
-      ? (arxivDecl!.scope!.categories as string[]).join(' ')
-      : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+    // v0.7.6 — query priority:
+    //   1. arxivDecl.partition (e.g. "cs.LG") — most specific
+    //   2. arxivDecl.scope.categories joined as a query string
+    //   3. quoted topic from the objective
+    const arxivQuery = arxivDecl?.partition
+      ? arxivDecl.partition
+      : (Array.isArray(arxivDecl?.scope?.categories) && (arxivDecl!.scope!.categories as string[]).length > 0)
+        ? (arxivDecl!.scope!.categories as string[]).join(' ')
+        : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+    if (arxivDecl?.partition) console.log(`  [arxiv] Partition claimed: ${arxivDecl.partition}`);
     console.log(`\n  [arxiv] seed+fetch("${arxivQuery}")`);
     try {
       const urls = await arxivSource.seed({ query: arxivQuery, limit: 5 });

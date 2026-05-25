@@ -94,6 +94,29 @@ export class RssSource implements ForagerSource {
   }
 
   /**
+   * v0.7.6 — partitions for RSS.
+   *
+   * Each declared feed is its own partition. If scope.feeds is set, each
+   * feed URL becomes a partition string; bees coordinating on a multi-feed
+   * deployment can claim one feed each. Without a scope, returns ["*"]
+   * (no partitioning possible — the feed list is unknown).
+   */
+  partitions(scope?: Record<string, unknown>): string[] {
+    const feeds = scope?.feeds;
+    if (Array.isArray(feeds) && feeds.length > 0) {
+      return feeds.filter((f): f is string => typeof f === 'string');
+    }
+    return ['*'];
+  }
+
+  isInPartition(url: string, _scope: Record<string, unknown> | undefined, partition: string): boolean {
+    if (partition === '*') return true;
+    // A feed-URL partition matches if the fetched URL equals the partition
+    // (RSS fragments carry the feed URL as their source via the bridge).
+    return this.normalize(url) === this.normalize(partition);
+  }
+
+  /**
    * For RSS, `opts.query` is the feed URL itself. seed returns [feedUrl]
    * (one element) so the caller can iterate uniformly with the other
    * adapters' seed → URL → fetch pattern.

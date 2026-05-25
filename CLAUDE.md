@@ -44,7 +44,57 @@ the obligation to update the docs.
 
 ---
 
-## Current state: v0.7.5 — manifest drives extraction
+## Current state: v0.7.6 — opt-in scope partitions for multi-bee coordination
+
+### v0.7.6 — Scope partitions
+Adds an opt-in `partition` field per declared source so multiple bees on
+the same scope can split work without overlapping. The unit of
+coordination is `(source_id, partition_key)` where the partition lives
+**inside** the scope — never cuts across it, so `policy=exclusive`
+stays coherent.
+
+Concretely:
+
+- `ForagerSource.partitions(scope)` enumerates valid partitions for a
+  given scope. Per-adapter:
+  - **WikipediaSource**: if `scope.category_tree` is set, returns the
+    immediate subcategories (live MediaWiki API query); otherwise
+    falls back to alphabetical buckets `["A-G", "H-N", "O-Z"]` for
+    generalist bees.
+  - **ArxivSource**: if `scope.categories` includes wildcards like
+    `cs.*`, expands to the curated list of cs.* leaf categories;
+    otherwise returns the seven top-level arXiv groups.
+  - **RssSource**: each feed URL in `scope.feeds` is its own partition.
+  - **CommonCrawlSource**: each domain in `scope.domains` is a
+    partition; without explicit domains, returns `["*"]` (not
+    partitionable).
+- `ForagerSource.isInPartition(url, scope, partition)` — coarse
+  pre-filter the forager uses to drop outbound links outside the
+  claimed partition under `policy=exclusive`. Wikipedia checks
+  alphabetical first letter; arXiv parses the legacy ID prefix; CC
+  matches the hostname; RSS compares the URL to the feed URL.
+- `DeclaredSource.partition?: string` in the BeeManifest. Encoded in
+  the published manifest so peers and queens see what each bee covers.
+- `HIVE_PARTITION` env var — JSON map `{ source_id: partition_key }` or
+  a plain string (single-source bees). Optional. Bees without it
+  behave exactly as in v0.7.5.
+- `autonomous_extractor.ts` uses the declared partition as the seed
+  query priority — for Wikipedia, the partition (`Category:Pharmacology`)
+  overrides the broader scope (`Category:Medicine`) for `seed()`. Under
+  `policy=exclusive`, outbound links outside the partition are dropped
+  before enqueueing.
+- `ClaimRegistry` claims encoded as `<source_id>:<partition_key>` in
+  the existing `topicId` field — same Hypercore, same TTL/release, just
+  a richer string convention. Legacy topic claims (no `:`) coexist
+  with partition claims.
+
+What did NOT change:
+- Bees without a partition declared run identically to v0.7.5
+  (full scope, no coordination overhead).
+- The ClaimRegistry schema on the wire — `topicId` is still a string;
+  it just carries more structured content for partition-claiming bees.
+- Topic-tree code paths (still used as fallback when no manifest is
+  published yet). Their cleanup is v0.7.8.
 
 ### v0.7.5 — Manifest→extractor wiring
 `autonomous_extractor.ts` now reads `store.getLocalManifest()` at the start
@@ -650,7 +700,7 @@ seeded, growth is geometric.
                     4. ✅ **v0.7.3 — BeeManifest published at startup.** `bee:manifest` key in Hyperbee. `GET /api/directory`. `topic_tree.json` deprecation warning. New env vars: `HIVE_SOURCES`, `HIVE_POLICY`, `HIVE_SCOPE`, `HIVE_BEE_REPLICATE`, `HIVE_LANGUAGES`.
                     5. ✅ **v0.7.4 — Common Crawl CDX + WARC adapter.** `common_crawl_source.ts` — CDX API + range-fetch WARC → HTML strip → chunk. Scope: `{domains, snapshot}`. Reproducibility guaranteed.
                     6. ✅ **v0.7.5 — Manifest→extractor wiring.** `autonomous_extractor.ts` reads `store.getLocalManifest()`. `declared_sources` drives which adapters run, with scope-aware seeding. Fallback: wikipedia-only (v0.6 behaviour). Heuristic RSS/arXiv only fires when no manifest is published.
-                    7. **v0.7.6 — Claims migration: topicId → (source, partition).** `ClaimRegistry` allocates `(source_id, partition_key)` pairs instead of topic-tree leaves. Wikipedia: alphabetical A-Z buckets. arXiv: categories. CC: domain groups. Same Hypercore, same TTL/release semantics — only the claim unit changes.
+                    7. ✅ **v0.7.6 — Scope partitions (opt-in).** `ForagerSource.partitions(scope)` enumerates valid sub-units of a scope; `DeclaredSource.partition` declares which one a bee claims; `ClaimRegistry` registers `<source_id>:<partition_key>` claims via the existing `topicId` field. Partitions live INSIDE the scope (never cut across it) so `policy=exclusive` stays coherent: a Medicine bee picks `Category:Pharmacology` not `A-G`. Generalist bees can still use alphabetical / TLD buckets when no scope is declared. `HIVE_PARTITION` env var. Bees without it run identically to v0.7.5.
                     8. **v0.7.7 — Dead-end recovery ladder.** Forager-level. `new_links_per_cycle → 0` triggers: expand scope → rotate source → relax policy → announce-exhausted. Configurable per bee via manifest `on_exhausted` field.
                     9. **v0.7.8 — Topic-tree code paths removed.** `loadTree()` deprecation warning removed; `topic_tree.json` becomes `examples/seed-topics.json`. Full cleanup of `topic_assignment.ts`.
                     10. **v0.7.9 — Score-by-corroboration.** `cos_sim × log(1 + corroboration_count)` where `corroboration_count` = distinct sources that independently produced fragments with the same content hash. Requires source diversity (v0.7.4+) to be meaningful.

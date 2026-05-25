@@ -5,6 +5,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6] — 2026-05-25 — *Scope partitions (opt-in multi-bee coordination)*
+
+Adds the missing coordination primitive for the source-driven model:
+when multiple bees declare the same scope, they can split work across
+**partitions** without overlapping. Coordination is opt-in — bees
+without `HIVE_PARTITION` behave exactly as in v0.7.5.
+
+### Why this matters
+
+Until v0.7.6 the coordination unit was still the topic-tree leaf
+(legacy, going away in v0.7.8). The source-driven model needed its
+own way for bees with the same scope to know who covers what — and
+crucially, the partitioning had to stay inside the scope, never cut
+across it. Cutting across (e.g. "alphabetical A-Z buckets over
+Wikipedia for a Medicine bee") makes `policy=exclusive` incoherent:
+A-G includes both Aspirin (in-scope) and Aardvark (out-of-scope), so
+the bee rejects 99% of its assigned bucket.
+
+The fix is "partitions live inside the scope": the adapter knows the
+scope shape and emits buckets that respect it.
+
+### Added
+
+- `ForagerSource.partitions(scope?: Record<string, unknown>): string[] | Promise<string[]>`
+  in `packages/agent/src/forager/source.ts`. Enumerates valid
+  partition keys for a given scope.
+- `ForagerSource.isInPartition?(url, scope, partition)` — coarse
+  pre-filter used by the forager loop to drop outbound links outside
+  the claimed partition under `policy=exclusive`.
+- Per-adapter implementations:
+  - `WikipediaSource.partitions`: if `scope.category_tree`, live
+    MediaWiki API query for immediate subcategories. Otherwise
+    `["A-G", "H-N", "O-Z"]` for generalist bees.
+  - `ArxivSource.partitions`: expands `cs.*` wildcards to the curated
+    list of leaf categories; without scope, returns the seven
+    top-level arXiv groups.
+  - `RssSource.partitions`: each declared feed URL is its own
+    partition; `["*"]` otherwise.
+  - `CommonCrawlSource.partitions`: each declared domain is a
+    partition; `["*"]` without an explicit domain list.
+- `DeclaredSource.partition?: string` in the BeeManifest. Published
+  to Hypercore so peers and queens see which partition each bee covers.
+- `HIVE_PARTITION` env var — JSON map `{ source_id: partition_key }`
+  for multi-source bees, or a plain string for single-source bees.
+- `api_server.ts` registers partition claims in the existing
+  `ClaimRegistry` with `topicId = "<source_id>:<partition_key>"`. Same
+  Hypercore, same TTL/release semantics — only the topicId convention
+  changes. Legacy topic claims (no `:`) coexist with partition claims.
+
+### Changed
+
+- `autonomous_extractor.ts` seed query priority for Wikipedia:
+  `partition` > `scope.category_tree` > objective topic > objective
+  prefix. Same for arXiv: `partition` (e.g. "cs.LG") > scope.categories.
+- Under `policy=exclusive` + declared partition, outbound links failing
+  `isInPartition` are dropped before being enqueued. The drop count is
+  logged.
+
+### What did NOT change
+
+- Bees without `HIVE_PARTITION` declared: zero behaviour change vs
+  v0.7.5. Coordination cost is opt-in.
+- `ClaimRegistry` schema on the wire. `topicId` is still a string; it
+  just carries `<source_id>:<partition_key>` for partition-claiming bees.
+- Topic-tree code paths. Still used as fallback when no manifest is
+  published yet. Cleanup deferred to v0.7.8.
+- `/api/directory` shape. Partition data is in the manifest payload it
+  already exposes; no schema change needed.
+
+### Concrete example
+
+Three bees on Medicine, splitting subcategories:
+
+```bash
+# Bee A
+HIVE_SOURCES=wikipedia-en
+HIVE_SCOPE='{"category_tree":"Category:Medicine"}'
+HIVE_POLICY=exclusive
+HIVE_PARTITION='Category:Pharmacology'
+
+# Bee B
+HIVE_SOURCES=wikipedia-en
+HIVE_SCOPE='{"category_tree":"Category:Medicine"}'
+HIVE_POLICY=exclusive
+HIVE_PARTITION='Category:Surgery'
+
+# Bee C
+HIVE_SOURCES=wikipedia-en
+HIVE_SCOPE='{"category_tree":"Category:Medicine"}'
+HIVE_POLICY=exclusive
+HIVE_PARTITION='Category:Cardiology'
+```
+
+Each bee covers a different sub-area of medicine, never visits the
+others' articles, and the three claim records `wikipedia-en:Category:
+Pharmacology` / `:Surgery` / `:Cardiology` replicate via Hypercore
+so any queen sees the coverage map.
+
+### Private adapter use case
+
+A law firm's private deployment can extend HIVE without touching the
+public repo: implement a `ForagerSource` for the firm's internal
+docs API (with `partitions(scope)` returning practice areas like
+`["Corporate", "IP", "Tax", …]`), wire it into a fork or a plug-in,
+and run private bees with `HIVE_PARTITION='IP'` etc. on a private
+Hyperswarm topic. The HIVE core stays untouched; the firm's queen
+indexes only what its bees produce.
+
+### Verified pre-deploy
+
+- All four adapters return the expected partition lists for both
+  scoped and unscoped inputs (see test output in commit body).
+- `isInPartition` for Wikipedia alphabetical buckets correctly
+  classifies "Aspirin" in A-G, "Zebra" outside A-G, "Helium" in H-N.
+- TypeScript compiles cleanly across all changed files.
+
+---
+
 ## [0.7.5.3] — 2026-05-25 — *Stop blocking /api/query on /health under load; smaller flush batches*
 
 After v0.7.5.2 the embedder happily processed /add_batch (every recent

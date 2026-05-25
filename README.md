@@ -217,11 +217,17 @@ HIVE_PEER=http://peer.example.com
 BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
 
 # Source declaration (v0.7.3 BeeManifest)
-HIVE_SOURCES=wikipedia-en           # comma-separated: wikipedia-en, arxiv, rss, web
+HIVE_SOURCES=wikipedia-en           # comma-separated: wikipedia-en, arxiv, rss, web, common-crawl
 HIVE_POLICY=drift-ok                # drift-ok (follow all links) | exclusive (stay in scope)
 HIVE_SCOPE='{"category_tree":"Category:Medicine"}'  # JSON scope — optional
 HIVE_BEE_REPLICATE=all              # all | neighbors | none (peer-to-peer replication)
 HIVE_LANGUAGES=en                   # comma-separated BCP-47 language codes
+
+# Scope partitioning (v0.7.6 — opt-in coordination for multi-bee deployments)
+HIVE_PARTITION='Category:Pharmacology'  # plain string when there's only one source
+# OR per-source: HIVE_PARTITION='{"wikipedia-en":"Category:Pharmacology","arxiv":"cs.LG"}'
+# Partition lives INSIDE the declared scope — three Medicine bees can pick
+# Pharmacology / Surgery / Oncology and never overlap, while staying exclusive.
 
 # Extraction tuning
 HIVE_EXTRACT_MAX_FRAGMENTS=9        # fragments per cycle, split across claimed topics

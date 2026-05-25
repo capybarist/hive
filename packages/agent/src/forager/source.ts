@@ -108,4 +108,44 @@ export interface ForagerSource {
    * forager to dispatch a discovered link to the right adapter.
    */
   owns(url: string): boolean;
+
+  /**
+   * v0.7.6 — enumerate the partitions available for a given scope.
+   *
+   * Partitions are sub-units of a scope that bees can claim independently
+   * so multiple bees on the same scope can split work without overlapping.
+   *
+   * The partitions must live INSIDE the scope, never cut across it.
+   * Otherwise drift control (policy=exclusive) becomes incoherent: a bee
+   * claiming an alphabetical bucket "A-G" over the entire Wikipedia
+   * would receive Aspirin (in-scope for a Medicine bee) AND Aardvark
+   * (out-of-scope), so it would reject 99% of its assigned work.
+   *
+   * Per-adapter conventions:
+   *   - WikipediaSource: if scope.category_tree set, returns subcategories
+   *     of that tree; otherwise returns ["A-G", "H-N", "O-Z"] (alphabetical).
+   *   - ArxivSource:     if scope.categories set, returns sub-categories
+   *     (cs.LG → cs.LG.* etc.); otherwise returns top-level groups.
+   *   - CommonCrawlSource: if scope.domains set, returns each domain as a
+   *     partition; otherwise groups by TLD.
+   *   - RssSource:       each declared feed is its own partition.
+   *
+   * Returning a single-element list ["*"] means the source is not
+   * partitionable at this scope; the operator can still claim the whole
+   * scope but won't be able to split it across multiple bees.
+   */
+  partitions(scope?: Record<string, unknown>): string[] | Promise<string[]>;
+
+  /**
+   * v0.7.6 — does this URL fall inside the given partition?
+   *
+   * Called by the forager after fetch() returns outboundLinks. Links
+   * outside the partition are dropped (under policy=exclusive) or
+   * forwarded to whichever bee claims that partition (future v0.7.x).
+   *
+   * Default behaviour for adapters that don't implement this: every URL
+   * is "in partition" (no partition-level filtering). Concrete adapters
+   * override for the partition shapes they emit.
+   */
+  isInPartition?(url: string, scope: Record<string, unknown> | undefined, partition: string): boolean | Promise<boolean>;
 }
