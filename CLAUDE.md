@@ -46,8 +46,13 @@ the obligation to update the docs.
 
 ## ⚠️ DEMO FREEZE — 2026-05-26
 
-Product presentation today. **Production is at v0.7.6.1 and stable**.
-No code changes until after the demo. Any backlog work resumes after.
+Product presentation today. **Production is at v0.7.6.2 (system-prompt
+patch for depth) and stable**. No further code changes until after the
+demo. Any backlog work resumes after.
+
+The v0.7.6.2 patch is a single-string edit in `llm_client.ts` to fix
+the "four-line answers when fragments support twenty" regression
+caused by the v0.7.2.5 prompt rewrite — see CHANGELOG.
 
 ### What works for the demo
 - Bee on Hetzner extracts continuously from Wikipedia.

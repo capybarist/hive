@@ -5,6 +5,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.2] — 2026-05-26 — *System prompt: ship for depth, not brevity (demo blocker)*
+
+Pre-demo regression noticed by the operator: queries with five solid
+fragments (e.g. "cell biology") were getting four-line answers. Cause
+was the v0.7.2.5 system prompt rewrite — "Answer in natural prose. Be
+direct." over-corrected from the earlier "the fragment mentions X"
+verbosity and trained the model toward brevity.
+
+This patch keeps every v0.7.2.5 win (no meta-narration, no inline-link
+spam, terse when no data) and explicitly invites depth + context when
+the fragments support it. The model now reads:
+
+> Write detailed, thorough answers. Explain concepts in depth, add
+> context, give examples, and expand on implications. Don't write
+> four lines when the fragments support twenty — the user came here
+> for grounded depth, not a one-paragraph summary they could get
+> from any chatbot.
+
+### Changed
+
+- `packages/api/src/llm_client.ts::SYSTEM_PROMPT` rewritten. The
+  "Voice" section now leads with depth; the "When fragments answer
+  the question" section adds "synthesise across multiple fragments
+  instead of dumping them one by one".
+
+### Not changed
+
+- No code logic changes. Pure string edit in one file.
+- Same retrieval, same UI, same embedder, same maxTokens cap (1024
+  tokens — if that turns into a ceiling we'll bump it; today's
+  problem was the model under-using its budget, not hitting it).
+
+### Risk note (demo freeze break)
+
+The v0.7.6.x demo freeze was broken for this single-file, no-logic
+change because the user-visible regression (one-paragraph answers)
+was a demo blocker. Revert is `git revert HEAD && push` if the new
+prompt over-corrects in the other direction.
+
+---
+
 ## [0.7.6.1] — 2026-05-25 — *Fix queen Node OOM crash (heap bump + bounded seen Set)*
 
 User reported the queen returning random unrelated fragments for "Line 6

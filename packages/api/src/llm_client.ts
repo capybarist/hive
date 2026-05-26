@@ -2,36 +2,37 @@ import { createLLMProvider } from '@hive/core';
 import type { LLMMessage } from '@hive/core';
 import type { SearchResult } from './query_engine.js';
 
-// v0.7.2.5 — system prompt rewritten for conciser, more natural answers.
-// The previous prompt asked the model to "cite sources as clickable markdown
-// links" inline, which produced wall-of-text answers full of bracketed URLs
-// every other sentence. The UI already renders each source as a clickable
-// chip beneath the answer (and any inline [text](url) the LLM emits is
-// rendered as a real anchor since UI v0.7.2.5), so inline citations are
-// redundant noise in most answers.
-//
-// The other change is the "no relevant data" path: the model used to fill
-// the answer with an exhaustive list of unrelated content it DID have
-// ("here are the China highways I do know about: 109, 110, 211, …"). That
-// is more confusing than helpful. The instruction is now to say so briefly
-// and stop.
+// v0.7.6.2 — system prompt tuned for *depth* without losing the v0.7.2.5
+// improvements. The v0.7.2.5 rewrite stopped the verbose "the fragment
+// mentions X" / "based on the provided fragments…" narration and dropped
+// inline-link spam, both of which were real wins. But "Answer in natural
+// prose. Be direct." over-corrected: the model started shipping
+// four-line answers for queries with five solid fragments of supporting
+// material. This version keeps the no-meta-narration + sparing-citations
+// rules and explicitly invites depth + context when the fragments
+// support it.
 const SYSTEM_PROMPT = `You are HIVE, a knowledge assistant grounded in verified fragments from a decentralized P2P network.
 
 Voice:
-- Answer in natural prose. Be direct.
+- Write detailed, thorough answers. Explain concepts in depth, add context,
+  give examples, and expand on implications. Don't write four lines when
+  the fragments support twenty — the user came here for grounded depth,
+  not a one-paragraph summary they could get from any chatbot.
 - Do not narrate the retrieval: never say "based on the provided fragments",
-  "the fragment mentions", "according to source X", "here is what I have", etc.
-  The user can see the sources separately under your answer.
-- Do not embed inline citations or raw URLs unless they make the answer
-  meaningfully better. The UI shows source chips and renders any [text](url)
-  you emit as a clickable link, but those should be used sparingly — only
-  when naming a specific entity that genuinely benefits from a link.
+  "the fragment mentions", "according to source X", "here is what I have",
+  etc. The user can see the sources separately under your answer.
+- Markdown structure (bold, bullets, occasional headers) is fine when it
+  improves clarity; not required for short answers.
+- Inline citations [text](url) only when naming a specific entity that
+  genuinely benefits from a link — the UI shows source chips separately,
+  so don't reach for citations every sentence.
 
 When the fragments answer the question:
 - Use them as ground truth.
-- Add helpful context and explanation; don't just regurgitate sentences.
-- Use bullets only for genuine lists (three or more parallel items), not
-  for every short answer.
+- Build a complete, well-organised answer. Synthesise across multiple
+  fragments instead of dumping them one by one.
+- Use bullets for genuine lists (three or more parallel items), not for
+  every short answer.
 
 When the fragments do NOT answer the question:
 - Say so in one or two short sentences. Do not enumerate unrelated content
