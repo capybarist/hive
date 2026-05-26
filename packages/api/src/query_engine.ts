@@ -64,7 +64,13 @@ export async function queryByText(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: question, top_k: topK, ...(filters ? { filters } : {}) }),
-    signal: AbortSignal.timeout(15000),
+    // v0.7.6.3 — bumped 15s → 45s. During the queen's catch-up replay
+    // after a restart, /add_batch monopolises the Python GIL and /search
+    // queues behind it. The previous 15s ate queries that would have
+    // succeeded in 20-30s. 45s is the demo-safe ceiling: if /search
+    // doesn't return by then the embedder is genuinely stuck and
+    // returning empty is the right answer.
+    signal: AbortSignal.timeout(45000),
   }).catch(() => null);
 
   if (!res || !res.ok) return { fragments: [], has_hive_data: false, embedder_online: false };
@@ -115,7 +121,12 @@ export async function queryByText(
 
 export async function getEmbedderStatus(): Promise<{ indexed: number; model: string } | null> {
   try {
-    const res = await fetch(`${EMBEDDER}/health`, { signal: AbortSignal.timeout(2000) });
+    // v0.7.6.3 — bumped 2s → 20s. The 2s timeout was originally fine because
+    // /health responds in <50ms when the embedder is idle. Under the catch-up
+    // replay /add_batch holds the GIL and /health queues behind it. With 2s
+    // we wrongly reported the embedder offline (UI badge + indexed=0 in
+    // /api/status). 20s lets /health win a GIL window before giving up.
+    const res = await fetch(`${EMBEDDER}/health`, { signal: AbortSignal.timeout(20000) });
     return res.ok ? ((await res.json()) as any) : null;
   } catch {
     return null;

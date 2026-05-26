@@ -5,6 +5,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.3] — 2026-05-26 — *Bump embedder timeouts so /search and /health survive GIL contention (demo blocker)*
+
+Pre-demo emergency: `/api/status` started reporting `embedder_online: false`
+and `indexed: 0`, the UI Knowledge Network panel rendered empty, and the
+"Embedder offline" badge appeared in the topbar — even though qdrant was
+healthy (491 110 points, 1.4 GB on disk, green) and the embedder log was
+streaming `POST /add_batch 200 OK` continuously.
+
+Root cause: after the v0.7.6.2 queen redeploy, `watchRemoteCore` re-streams
+the bee's Hypercore from offset 0. Every dedupable entry hits `/add_batch`,
+which monopolises the Python GIL on the embedder. `/health`, `/stats` and
+`/search` queue behind it. Our client-side timeouts (2 s for /health, 15 s
+for /search) were ate the responses, so the queen reported the embedder
+offline and short-circuited `/api/query` before /search ever returned.
+
+The data is intact; the embedder is working; we just gave up waiting too
+soon under load. Fix is two numeric bumps in `query_engine.ts`:
+
+### Changed
+
+- `getEmbedderStatus()` /health timeout: 2 s → **20 s**. Stops the
+  "embedder offline" false-negative on /api/status during catch-up.
+- `queryByText()` /search timeout: 15 s → **45 s**. /search wins a GIL
+  window within 45 s under realistic /add_batch load; under 15 s it was
+  losing the lottery and returning empty fragments.
+
+No logic changes, no schema changes, no UI changes. Pure number edits.
+
+### Why not throttle replication too
+
+That would slow the catch-up further and add code surface in the hot
+path. Bumping timeouts alone gets queries answering correctly NOW —
+slow but correct. Throttling can come in v0.7.6.4 after the demo if we
+decide replay vs query trade-off is worth a new knob.
+
+### Trade-off
+
+During catch-up replay (~tens of minutes), queries take 5–15 s instead
+of <1 s. After replay completes, queries are snappy again. UX is "slow
+but correct" rather than "fast but lying".
+
+---
+
 ## [0.7.6.2] — 2026-05-26 — *System prompt: ship for depth, not brevity (demo blocker)*
 
 Pre-demo regression noticed by the operator: queries with five solid
