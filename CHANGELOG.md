@@ -5,6 +5,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.4] — 2026-05-26 — *Cursor persistence + watcher dedup: stop the recurring embedder OOM loop*
+
+Post-demo root-cause fix for the recurring queen instability: the
+embedder was being **OOM-killed at the kernel level every 30–60 min**
+(`dmesg` confirmed three kills today at 10:34, 10:52, 11:44, each at
+~2.8 GB RSS on a 3.7 GB box). After each kill the queen reported
+`embedder_online: false`, `indexed: 0`, and queries returned empty —
+fixed temporarily by `docker compose restart queen`, but the loop
+restarted as soon as catch-up replay began.
+
+### Root causes
+
+Two interacting bugs in `knowledge_store.ts` `watchRemoteCore`:
+
+1. **No deduplication by `nodeId`.** Hyperswarm peers churn-reconnect
+   every few seconds (NAT holepunch instability). Every reconnect
+   emits a fresh `peer-meta` event → `api_server.ts` calls
+   `watchRemoteCore` again → each call enters its own `while(true)`
+   loop and opens a fresh `Hyperbee.createHistoryStream` from offset
+   0. After a few hours of peer churn, the queen had **dozens of
+   concurrent streams** each fanning into `/add_batch`, racing for
+   the GIL until the embedder's working set crossed the OOM line.
+
+2. **No cursor persistence.** Even with one stream per peer, every
+   queen restart re-streamed the remote bee's 600 k+ Hypercore from
+   offset 0. Combined with bug #1, after a restart the queen had to
+   re-process several million entries before catching up to live.
+
+3. **Latent `seen` Set never populated** — separate bug found while
+   fixing the above: `trackSeen` was referenced from
+   `_consumeRemoteStream` but defined in `watchRemoteCore`'s scope,
+   raising a silent `ReferenceError` swallowed by the `doFlush` catch
+   block. The Set therefore stayed empty across the entire run, so
+   the in-process dedup short-circuit `if (seen.has(frag.id)) continue`
+   was a no-op — every Hyperbee entry was re-POSTed on every cycle.
+   Qdrant's `_known_ids` covered the duplicates server-side but at
+   the cost of every batch round-tripping the embedder.
+
+### Fix
+
+`KnowledgeStore`:
+
+- **`activeWatchers: Set<string>`** keyed by `nodeId`. The first
+  `watchRemoteCore(nodeId)` call enters the loop; concurrent calls
+  with the same `nodeId` log `[repl] already active … skipping
+  duplicate` and return. `try/finally` clears the entry on the (in
+  practice unreachable) loop exit so the next reconnect can restart.
+- **Cursor persistence** at `${DATA_DIR}/repl_cursors/<nodeId>.json`.
+  Each entry is `{ "lastSeq": <n> }`, written atomically via
+  `writeFile` + `rename`. `loadCursor` populates `cursorByNode` on
+  first watcher open; `saveCursor` updates after every successful
+  `/add_batch` 2xx, taking `batch[batch.length - 1].seq` (the
+  history stream emits in ascending order, so the last item is the
+  max). Regressions are rejected internally.
+- **`createHistoryStream({ gt: lastSeq, live: true })`** — the
+  stream skips everything already processed. Restart cost drops
+  from ~600 k entries to ~0; only new fragments since last
+  shutdown are streamed.
+- **`trackSeen` is now passed in as a parameter** to
+  `_consumeRemoteStream`, replacing the broken cross-scope
+  reference. The in-process Set now actually deduplicates, and the
+  bounded 10 k cap (v0.7.6.1) is finally effective.
+
+### Operational effect
+
+After a queen restart with this version deployed (and the cursor
+files seeded by one normal run beforehand):
+
+- The catch-up replay storm is **gone**. Restarts resume from the
+  latest persisted `seq` per peer.
+- `/add_batch` traffic drops to live-extraction rate (~10–20
+  frags/min), not catch-up rate (thousands/min).
+- Embedder working set stays under ~700 MB, well below the OOM
+  threshold.
+- `/search` and `/health` respond promptly — the 20 s / 45 s
+  timeouts from v0.7.6.3 are still in place as belt-and-suspenders
+  but should rarely fire.
+
+### First-run note
+
+On first start after upgrading, the queen still does one full
+replay (cursor files are empty). Subsequent restarts are cheap.
+The replay this one time takes the same ~25–30 min it always did;
+this is unavoidable unless we also seed the cursor file from
+qdrant's `_known_ids` (out of scope for this version).
+
+### Files touched
+
+- `packages/core/src/knowledge_store.ts` — new helpers
+  `cursorFile`, `loadCursor`, `saveCursor`; `watchRemoteCore` gets
+  dedup gate and resume log; `_consumeRemoteStream` gains `nodeId`
+  and `trackSeen` params, batch items carry `seq`, `doFlush`
+  persists cursor on 2xx.
+- `package.json` — version 0.7.6.3 → 0.7.6.4.
+
+### What did NOT change
+
+- API surface (no new endpoints, no schema changes, no env vars).
+- BeeManifest format.
+- Hypercore / Hyperbee on-disk layout.
+- UI, README install steps, capybarahome `/hive` page — operators
+  see the same commands and flags.
+
+---
+
 ## [0.7.6.3] — 2026-05-26 — *Bump embedder timeouts so /search and /health survive GIL contention (demo blocker)*
 
 Pre-demo emergency: `/api/status` started reporting `embedder_online: false`

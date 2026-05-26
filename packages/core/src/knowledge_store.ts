@@ -1,5 +1,6 @@
 import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Fragment, FragmentId, FragmentInput, IKnowledgeGraph, QueryFilter } from './interfaces.js';
 import { buildEmbedderPayload } from './interfaces.js';
@@ -39,11 +40,23 @@ export class KnowledgeStore implements IKnowledgeGraph {
   // Manifests received from remote peers (nodeId → manifest). Populated during
   // watchRemoteCore; read by /api/directory on the queen.
   private remoteManifests: Map<string, BeeManifest> = new Map();
+  // v0.7.6.4 — Cursor persistence + watcher deduplication.
+  // dataDir holds the path used to derive `repl_cursors/`. activeWatchers
+  // prevents accumulating concurrent watchRemoteCore loops when the same
+  // peer churn-reconnects — without this, every reconnect spawned a fresh
+  // for-await loop reading from offset 0 of a 600k-entry Hypercore, which
+  // OOM-killed the Python embedder on a 3.7 GB Hetzner box every ~30 min.
+  private dataDir: string;
+  private cursorDir: string;
+  private activeWatchers: Set<string> = new Set();
+  private cursorByNode: Map<string, number> = new Map();
 
   private _readyPromise: Promise<void> | null = null;
 
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
+    this.dataDir = dataDir;
+    this.cursorDir = join(dataDir, 'repl_cursors');
     this.store = new Corestore(join(dataDir, 'corestore'));
   }
 
@@ -73,6 +86,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       attachConflictHandler(this.core, 'fragments');
       this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await this.bee.ready();
+      await mkdir(this.cursorDir, { recursive: true });
       this._ready = true;
     })();
 
@@ -299,6 +313,54 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
+  // v0.7.6.4 — Cursor persistence. We store the highest Hyperbee block seq
+  // we've successfully POSTed to /add_batch for each remote nodeId. On the
+  // next stream open we pass `gt: lastSeq` to createHistoryStream so the
+  // queen resumes where it left off instead of replaying 600k entries from
+  // offset 0 — which was the dominant trigger of the embedder OOM loop.
+  //
+  // Files live at `${dataDir}/repl_cursors/<sanitised-nodeId>.json` and
+  // contain a single integer `{ "lastSeq": <n> }`. Atomic write via
+  // `rename` from a tmp sibling — we never want a half-written cursor.
+  private cursorFile(nodeId: string): string {
+    // nodeIds come from peer-published meta and are arbitrary strings. Strip
+    // anything that isn't [a-zA-Z0-9_-] so they map safely to filenames.
+    const safe = nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
+    return join(this.cursorDir, `${safe}.json`);
+  }
+
+  private async loadCursor(nodeId: string): Promise<number> {
+    const cached = this.cursorByNode.get(nodeId);
+    if (cached !== undefined) return cached;
+    try {
+      const raw = await readFile(this.cursorFile(nodeId), 'utf-8');
+      const parsed = JSON.parse(raw);
+      const seq = typeof parsed?.lastSeq === 'number' && parsed.lastSeq >= 0 ? parsed.lastSeq : 0;
+      this.cursorByNode.set(nodeId, seq);
+      return seq;
+    } catch {
+      this.cursorByNode.set(nodeId, 0);
+      return 0;
+    }
+  }
+
+  private async saveCursor(nodeId: string, seq: number): Promise<void> {
+    const prev = this.cursorByNode.get(nodeId) ?? 0;
+    if (seq <= prev) return; // never regress
+    this.cursorByNode.set(nodeId, seq);
+    const file = this.cursorFile(nodeId);
+    const tmp = `${file}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify({ lastSeq: seq }), 'utf-8');
+      await rename(tmp, file);
+    } catch (err: any) {
+      // Persistence failure is non-fatal — the in-memory cursor still
+      // works for the lifetime of this process; we'll just replay on the
+      // next restart. Log once per node to avoid log noise.
+      console.warn(`[repl] Failed to persist cursor for ${nodeId.slice(0, 16)}: ${err?.message ?? err}`);
+    }
+  }
+
   /**
    * Watch a remote peer's fragments core (opened read-only by key) and POST
    * each fragment to HNSW. Called after key exchange with a peer.
@@ -306,9 +368,31 @@ export class KnowledgeStore implements IKnowledgeGraph {
    * BeeManifest (v0.7.3) and as a label for conflict logs.
    * The optional `peerRegistry` enables full ed25519 verification — without
    * it we fall back to the v0.6.1.x hash-recompute check.
+   *
+   * v0.7.6.4 — deduplicated by nodeId. If a watcher loop is already running
+   * for this nodeId we return immediately. The peer-meta event fires on
+   * every Hyperswarm reconnect, and pre-v0.7.6.4 every reconnect spawned a
+   * fresh while(true) loop that re-opened a Hyperbee history stream from
+   * offset 0. After a few hours of peer churn the queen had dozens of
+   * concurrent /add_batch fan-outs racing each other and OOM-killing the
+   * Python embedder. The single-watcher invariant fixes the accumulation;
+   * the cursor persistence below fixes the per-open replay cost.
    */
   async watchRemoteCore(remoteCoreKey: Buffer, nodeId: string, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
     await this.ready();
+    // v0.7.6.4 — single watcher per nodeId. See class doc above for why.
+    if (this.activeWatchers.has(nodeId)) {
+      console.log(`[repl] watchRemoteCore already active for ${nodeId.slice(0, 16)} — skipping duplicate`);
+      return;
+    }
+    this.activeWatchers.add(nodeId);
+    // v0.7.6.4 — load + log once. The actual `gt` value passed to
+    // createHistoryStream is read INSIDE runStreamOnce so each restart of
+    // the inner stream picks up the latest in-memory cursor.
+    const initialSeq = await this.loadCursor(nodeId);
+    if (initialSeq > 0) {
+      console.log(`[repl] Resuming ${nodeId.slice(0, 16)} from seq=${initialSeq} (cursor persisted)`);
+    }
     // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
     // fragment Hypercore from offset 0 grew this Set unbounded and burned
     // Node's V8 heap until the api_server OOM-crashed. The qdrant
@@ -358,7 +442,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
           console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (policy: ${m.declared_sources?.[0]?.policy ?? '?'})`);
         }
       } catch { /* manifest absent or unreadable — not fatal */ }
-      await this._consumeRemoteStream(remoteBee, embedderUrl, seen, peerRegistry, {
+      await this._consumeRemoteStream(remoteBee, nodeId, embedderUrl, seen, trackSeen, peerRegistry, {
         droppedUnsignedRef: () => droppedUnsigned, incUnsigned: () => droppedUnsigned++,
         droppedBadSigRef: () => droppedBadSig,    incBadSig:    () => droppedBadSig++,
         droppedUnknownPeerRef: () => droppedUnknownPeer, incUnknownPeer: () => droppedUnknownPeer++,
@@ -366,15 +450,22 @@ export class KnowledgeStore implements IKnowledgeGraph {
     };
 
     let backoffMs = 1_000;
-    while (true) {
-      try {
-        await runStreamOnce();
-        backoffMs = 1_000;
-      } catch (err: any) {
-        console.warn(`[repl] watchRemoteCore stream died for ${nodeId.slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs = Math.min(backoffMs * 2, 30_000);
+    try {
+      while (true) {
+        try {
+          await runStreamOnce();
+          backoffMs = 1_000;
+        } catch (err: any) {
+          console.warn(`[repl] watchRemoteCore stream died for ${nodeId.slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+          await new Promise(r => setTimeout(r, backoffMs));
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+        }
       }
+    } finally {
+      // Unreachable in practice (while(true) above), but if the loop ever
+      // exits we want the next peer-meta event to be able to restart the
+      // watcher rather than be silenced by a stale activeWatchers entry.
+      this.activeWatchers.delete(nodeId);
     }
   }
 
@@ -404,8 +495,10 @@ export class KnowledgeStore implements IKnowledgeGraph {
   // buffer on stream end so we don't lose items at restart boundary.
   private async _consumeRemoteStream(
     remoteBee: any,
+    nodeId: string,
     embedderUrl: string,
     seen: Set<string>,
+    trackSeen: (id: string) => void,
     peerRegistry: PeerRegistry | undefined,
     counters: {
       droppedUnsignedRef: () => number; incUnsigned: () => void;
@@ -413,7 +506,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
       droppedUnknownPeerRef: () => number; incUnknownPeer: () => void;
     },
   ): Promise<void> {
-    type BatchItem = { id: string; text: string; metadata: ReturnType<typeof buildEmbedderPayload> };
+    // v0.7.6.4 — BatchItem carries the Hyperbee block seq it came from so we
+    // can persist the highest successfully-flushed seq as a resume cursor.
+    type BatchItem = { id: string; text: string; metadata: ReturnType<typeof buildEmbedderPayload>; seq: number };
     // v0.7.5.3 — FLUSH_SIZE 50 → 20.
     //
     // 50 was too aggressive on the Hetzner 4 GB box. Each batch of 50
@@ -434,15 +529,24 @@ export class KnowledgeStore implements IKnowledgeGraph {
       flushing = true;
       const batch = buffer;
       buffer = [];
+      // The stream emits entries in ascending seq order, so the last item
+      // in the batch is the highest seq. Capture before we strip seq below.
+      const maxSeq = batch[batch.length - 1].seq;
+      // The embedder rejects unknown payload keys, so send a clean items array.
+      const payload = batch.map(({ id, text, metadata }) => ({ id, text, metadata }));
       try {
         const res = await fetch(`${embedderUrl}/add_batch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: batch }),
+          body: JSON.stringify({ items: payload }),
           signal: AbortSignal.timeout(30_000),
         });
         if (res.ok) {
           for (const it of batch) trackSeen(it.id);
+          // v0.7.6.4 — persist cursor on success. Fire-and-forget so the
+          // next stream iteration doesn't wait on disk I/O; saveCursor is
+          // idempotent and rejects regressions internally.
+          this.saveCursor(nodeId, maxSeq).catch(() => { /* logged inside */ });
         } else {
           // Embedder rejected — reinstate so the next flush retries.
           buffer = [...batch, ...buffer];
@@ -463,8 +567,17 @@ export class KnowledgeStore implements IKnowledgeGraph {
       }, FLUSH_INTERVAL_MS);
     };
 
+    // v0.7.6.4 — resume from the persisted cursor. createHistoryStream
+    // treats `gt: 0` as "start from the beginning" (falsy in Hyperbee's
+    // HistoryIterator), so we can safely always pass it. Reading the
+    // in-memory cursor here means each restart of the inner stream picks
+    // up wherever the previous attempt got to, not just the very first.
+    const resumeFrom = this.cursorByNode.get(nodeId) ?? 0;
+    if (resumeFrom > 0) {
+      console.log(`[repl] Opening history stream for ${nodeId.slice(0, 16)} gt=${resumeFrom}`);
+    }
     try {
-      for await (const { key, value } of remoteBee.createHistoryStream({ live: true })) {
+      for await (const { key, value, seq } of remoteBee.createHistoryStream({ gt: resumeFrom, live: true })) {
         if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
           const frag = value as Fragment;
           if (seen.has(frag.id)) continue;
@@ -522,6 +635,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
             id: frag.id,
             text: frag.text,
             metadata,
+            seq,
           });
 
           if (buffer.length >= FLUSH_SIZE) {

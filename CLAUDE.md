@@ -44,53 +44,29 @@ the obligation to update the docs.
 
 ---
 
-## ⚠️ DEMO FREEZE — 2026-05-26
+## Post-demo state — 2026-05-26 evening
 
-Product presentation today. **Production is at v0.7.6.2 (system-prompt
-patch for depth) and stable**. No further code changes until after the
-demo. Any backlog work resumes after.
+Demo is done. Production is at v0.7.6.4 (cursor persistence +
+watchRemoteCore dedup) after the v0.7.6.3 embedder-timeout patch
+proved insufficient: the queen kept getting OOM-killed every 30–60
+min during catch-up replay. See CHANGELOG for the full root-cause
+analysis.
 
-The v0.7.6.2 patch is a single-string edit in `llm_client.ts` to fix
-the "four-line answers when fragments support twenty" regression
-caused by the v0.7.2.5 prompt rewrite — see CHANGELOG.
-
-### What works for the demo
-- Bee on Hetzner extracts continuously from Wikipedia.
-- Queen indexes via the v0.7.5.1 batched ingest path; embedder responds.
-- `/api/query` returns verified fragments with clickable source chips.
-- UI: bee dashboard, queen aggregated network panel, capybarahome
-  palette, conditional rendering by mode.
-
-### Known limitations to manage during the demo
-
-1. **Catch-up replay after queen restart (~25-30 min).** If the queen
-   is restarted, it re-streams the bee's Hypercore from offset 0;
-   newly-extracted articles (last hour) won't appear in `/api/query`
-   until the cursor reaches the tail. **Don't restart the queen
-   during or before the demo.** Fix is the v0.7.6.2 cursor-persistence
-   patch on the post-demo backlog.
-
-2. **Retrieval precision below ~0.45 score.** For obscure queries
-   (specific Toronto subway lines, brand names that share words with
-   indexed articles), the queen may return loosely-related fragments
-   with the "In HIVE · N sources" badge even when the LLM's answer
-   admits no real match. Fix is the v0.7.7 retrieval gating patch on
-   the post-demo backlog. Workaround for the demo: prefer broad-topic
-   questions (photosynthesis, evolution, mitochondria, SEMA
-   association) where the bee has high-confidence coverage.
-
-3. **Bee↔queen replication lag** under heavy bee output is bounded by
-   the embedder's batch throughput (~10-20 k frags/min post v0.7.5.1).
-   The bee currently produces faster than that during catch-up; recent
-   articles appear after a delay of minutes to tens of minutes.
-   Working as designed for v0.7.6; not blocking the demo.
-
-### Post-demo immediate backlog
-- **v0.7.6.2** — Cursor persistence in `${DATA_DIR}/repl_cursors/`.
-  Queen resumes Hypercore stream where it left off after restart.
-- **v0.7.7** — Dead-end recovery ladder + retrieval gating
-  (`SHOW_THRESHOLD` and `RELEVANT_SCORE` tightened, multi-token
-  keyword check).
+### Open items
+- **v0.7.7** — Retrieval gating (raise `RELEVANT_SCORE` 0.30→0.45 in
+  `query_engine.ts`, multi-token keyword check) + dead-end recovery
+  ladder for queries that fall below the new threshold.
+- **v0.7.8** — Remove topic-tree code paths (`loadTree()`,
+  `topic_tree.json`) — superseded by BeeManifest declared_sources.
+- **v0.7.9** — Score-by-corroboration (`cos_sim × log(1 +
+  corroboration_count)`).
+- **Discovery glitch under investigation**: on the Hetzner box,
+  local bee-1 (same docker network as queen) is NOT a Hyperswarm
+  peer of the queen — the queen replicates from external "ghost"
+  bees discovered via DHT instead. Probably a NAT/holepunch
+  topology issue with two containers behind the same host IP.
+  Doesn't break the demo (the ghosts ARE valid HIVE bees with
+  shared topic) but is unintuitive.
 
 ---
 

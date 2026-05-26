@@ -330,6 +330,10 @@ data/
   topic_tree.json    — committed taxonomy (95 topics, 9 domains)
   identity/          — runtime ed25519 keypair per node (gitignored)
   corestore/         — Hypercore data: fragments + claims cores (gitignored)
+  repl_cursors/      — last-processed Hyperbee seq per remote peer
+                       (queen-side, since v0.7.6.4; resume cursor for
+                       watchRemoteCore — safe to delete, costs a one-time
+                       full replay)
   crawl_queue.jsonl  — persistent BFS queue of titles to fetch
   .runtime.env       — UI-set LLM overrides (since v0.6.4.3)
 ```

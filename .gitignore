@@ -23,6 +23,7 @@ data/bee-*/
 data_b/
 data/vectors/
 data/corestore/
+data/repl_cursors/
 data/cache/
 data/identity/
 data/claim_registry/
