@@ -5,6 +5,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.1] — 2026-05-25 — *Fix queen Node OOM crash (heap bump + bounded seen Set)*
+
+User reported the queen returning random unrelated fragments for "Line 6
+Finch West" — a Toronto subway line the bee had just announced as
+indexed. Diagnosis went through three layers and ended at the real
+cause: the queen had **silently OOM-crashed** at the Node/V8 layer.
+
+### What we found
+
+- Bee log: `[+] Indexed: wiki_line_6_finch_west_*` lines confirmed the
+  bee extracted 45 sections from the article and 411 outbound links.
+- Qdrant scroll by id prefix `line_6_finch_west`: **0 points**.
+- Queen `/api/status` was still 200 OK but `indexed: 491,110` had been
+  frozen for hours.
+- Queen container: `Up 13 hours (unhealthy)`, **26 MB RAM** (vs the
+  ~1.3 GB it should use), **0.01% CPU** — alive enough for HTTP but
+  with the embedder subprocess and replication loop dead.
+- `tail /tmp/hive_queen.log` showed the smoking gun:
+  ```
+  FATAL ERROR: Reached heap limit Allocation failed —
+                                    JavaScript heap out of memory
+  ```
+- Box memory was fine (1.17 GB used / 3.8 GB total). The OOM was at
+  Node's own V8 heap limit (~1.5 GB default), not the container.
+
+### Root cause
+
+`_consumeRemoteStream` keeps a per-stream-session `seen: Set<string>`
+to skip refragments it's already POSTed to /add_batch. When the queen
+restarts and re-streams a 600 k-entry bee Hypercore from offset 0, the
+Set grows linearly to hundreds of thousands of string entries.
+Combined with the live buffer and `remoteManifests` Map, V8 ran out
+of old-generation heap.
+
+The qdrant `_known_ids` on the embedder side is the canonical dedup;
+the in-process `seen` Set is only an optimisation to skip duplicate
+HTTP POSTs within the same session. We don't need to keep all 600 k
+of them.
+
+### Changed
+
+- `queen.sh` now starts node with `NODE_OPTIONS="--max-old-space-size=2560"`
+  (heap cap 1.5 → 2.5 GB). The container has 3.7 GB of RAM available;
+  this is the safe ceiling that leaves room for the Python embedder
+  and OS buffers.
+- `knowledge_store.ts::watchRemoteCore` caps `seen` at 10 000 entries
+  via a `trackSeen(id)` helper. When full, drops the oldest half
+  (Set preserves insertion order so we can peel from the front).
+  Duplicate POSTs after eviction are cheap — the embedder returns
+  `skipped: true` and skips the encode + upsert.
+
+### Will verify post-deploy
+
+- Queen container stays at ~1.3 GB RAM during catch-up replay, not
+  growing unboundedly.
+- After restart, the queen progresses through the bee's Hypercore and
+  `indexed` count rises past 491,110.
+- `Line 6 Finch West` becomes queryable.
+
+### Known limitation (next backlog item)
+
+The queen still has to re-replay the bee's Hypercore from offset 0
+after every restart (~25 minutes for a 600 k-entry core). A cursor
+file in the data dir would let it resume where it left off. Scope for
+a follow-up patch; the OOM fix is the urgent piece.
+
+---
+
 ## [0.7.6] — 2026-05-25 — *Scope partitions (opt-in multi-bee coordination)*
 
 Adds the missing coordination primitive for the source-driven model:

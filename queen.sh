@@ -169,8 +169,16 @@ EOF
 
   # Unset LLM vars so --env-file is the sole source of truth.
   # HIVE_MODE is passed explicitly because it must override any inherited value.
+  #
+  # v0.7.6.1 — --max-old-space-size=2560 raises the V8 heap from the ~1.5 GB
+  # default to 2.5 GB. Default was crashing the queen on Hetzner with
+  # "FATAL ERROR: Reached heap limit Allocation failed". Root cause: the
+  # `seen` Set in watchRemoteCore grows to 600k+ string entries while the
+  # queen replays a bee's Hypercore from offset 0, plus the replication
+  # buffer and remote manifests. The 4 GB box has plenty of headroom; the
+  # limit was Node's own heap, not the container.
   ( cd packages/api && unset LLM_API_KEY LLM_PROVIDER LLM_MODEL && \
-    HIVE_MODE=queen nohup node --env-file="$tmp_env" \
+    HIVE_MODE=queen NODE_OPTIONS="--max-old-space-size=2560" nohup node --env-file="$tmp_env" \
       --import tsx/esm src/api_server.ts \
       > /tmp/hive_queen.log 2>&1 & )
 

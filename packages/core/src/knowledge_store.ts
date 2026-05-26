@@ -309,7 +309,28 @@ export class KnowledgeStore implements IKnowledgeGraph {
    */
   async watchRemoteCore(remoteCoreKey: Buffer, nodeId: string, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
     await this.ready();
+    // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
+    // fragment Hypercore from offset 0 grew this Set unbounded and burned
+    // Node's V8 heap until the api_server OOM-crashed. The qdrant
+    // `_known_ids` on the embedder side is the canonical dedup; this Set
+    // is just an optimisation to avoid re-POSTing within the same session.
+    // Capping at 10k is safe — duplicate POSTs are cheap (embedder returns
+    // skipped=true) and we won't hit the cap in normal operation.
+    const SEEN_CAP = 10_000;
     const seen = new Set<string>();
+    const trackSeen = (id: string) => {
+      if (seen.size >= SEEN_CAP) {
+        // Drop the oldest half — Set preserves insertion order so we can
+        // peel off the front. Simpler than a real LRU and good enough.
+        const drop = Math.floor(SEEN_CAP / 2);
+        let i = 0;
+        for (const k of seen) {
+          if (i++ >= drop) break;
+          seen.delete(k);
+        }
+      }
+      seen.add(id);
+    };
     let droppedUnsigned = 0;
     let droppedBadSig = 0;
     let droppedUnknownPeer = 0;
@@ -421,7 +442,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
           signal: AbortSignal.timeout(30_000),
         });
         if (res.ok) {
-          for (const it of batch) seen.add(it.id);
+          for (const it of batch) trackSeen(it.id);
         } else {
           // Embedder rejected — reinstate so the next flush retries.
           buffer = [...batch, ...buffer];
