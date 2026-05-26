@@ -44,6 +44,51 @@ the obligation to update the docs.
 
 ---
 
+## ⚠️ DEMO FREEZE — 2026-05-26
+
+Product presentation today. **Production is at v0.7.6.1 and stable**.
+No code changes until after the demo. Any backlog work resumes after.
+
+### What works for the demo
+- Bee on Hetzner extracts continuously from Wikipedia.
+- Queen indexes via the v0.7.5.1 batched ingest path; embedder responds.
+- `/api/query` returns verified fragments with clickable source chips.
+- UI: bee dashboard, queen aggregated network panel, capybarahome
+  palette, conditional rendering by mode.
+
+### Known limitations to manage during the demo
+
+1. **Catch-up replay after queen restart (~25-30 min).** If the queen
+   is restarted, it re-streams the bee's Hypercore from offset 0;
+   newly-extracted articles (last hour) won't appear in `/api/query`
+   until the cursor reaches the tail. **Don't restart the queen
+   during or before the demo.** Fix is the v0.7.6.2 cursor-persistence
+   patch on the post-demo backlog.
+
+2. **Retrieval precision below ~0.45 score.** For obscure queries
+   (specific Toronto subway lines, brand names that share words with
+   indexed articles), the queen may return loosely-related fragments
+   with the "In HIVE · N sources" badge even when the LLM's answer
+   admits no real match. Fix is the v0.7.7 retrieval gating patch on
+   the post-demo backlog. Workaround for the demo: prefer broad-topic
+   questions (photosynthesis, evolution, mitochondria, SEMA
+   association) where the bee has high-confidence coverage.
+
+3. **Bee↔queen replication lag** under heavy bee output is bounded by
+   the embedder's batch throughput (~10-20 k frags/min post v0.7.5.1).
+   The bee currently produces faster than that during catch-up; recent
+   articles appear after a delay of minutes to tens of minutes.
+   Working as designed for v0.7.6; not blocking the demo.
+
+### Post-demo immediate backlog
+- **v0.7.6.2** — Cursor persistence in `${DATA_DIR}/repl_cursors/`.
+  Queen resumes Hypercore stream where it left off after restart.
+- **v0.7.7** — Dead-end recovery ladder + retrieval gating
+  (`SHOW_THRESHOLD` and `RELEVANT_SCORE` tightened, multi-token
+  keyword check).
+
+---
+
 ## Current state: v0.7.6 — opt-in scope partitions for multi-bee coordination
 
 ### v0.7.6 — Scope partitions
