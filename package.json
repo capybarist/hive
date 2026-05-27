@@ -1,6 +1,6 @@
 {
   "name": "hive-network",
-  "version": "0.7.6.7",
+  "version": "0.7.7",
   "description": "HIVE — Decentralized verifiable knowledge base for LLMs",
   "license": "BUSL-1.1",
   "repository": {

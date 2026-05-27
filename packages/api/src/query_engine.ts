@@ -3,11 +3,22 @@ const EMBEDDER = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
 // Minimum score to show a fragment in the UI at all
 const SHOW_THRESHOLD = 0.05;
 
-// "In HIVE" if the TOP fragment scores above this threshold OR keyword match.
-// all-MiniLM-L6-v2 scores conversational queries 0.28-0.50 for relevant docs;
-// noise tops out at 0.20-0.25 for a reasonably diverse HNSW.
-const RELEVANT_SCORE = 0.30;
-const MIN_RELEVANT_COUNT = 1;
+// v0.7.7 — Retrieval gating. Two changes from v0.7.6:
+//   1. RELEVANT_SCORE 0.30 → 0.45. The 0.30 was the noise floor of MiniLM
+//      on a diverse HNSW, not a relevance signal. In Qdrant @ ~500k
+//      mixed-language fragments, a Spanish query like "cocido madrileño"
+//      scored 0.46-0.48 on completely unrelated articles (List of
+//      regional anthems, Raquel Torres Cerdán, Verbano-Cusio-Ossola) —
+//      above 0.30 AND above 0.45. So we need score + a second filter.
+//   2. The OR between score and keyword in v0.7.6 was the dominant
+//      false-positive source: ANY meaningful word appearing in ANY
+//      fragment flipped `has_hive_data` to true and lit the "In HIVE ·
+//      N sources" badge. Now the fragment must clear the score AND
+//      mention at least one meaningful query token (word-boundary,
+//      so "madrid" does not match "madridista"). When the query has
+//      no meaningful tokens (rare; all words stop-listed), we fall
+//      back to score-only.
+const RELEVANT_SCORE = 0.45;
 
 // Stop words filtered out before keyword matching (Spanish + English)
 const STOP_WORDS = new Set([
@@ -16,6 +27,17 @@ const STOP_WORDS = new Set([
   'what', 'know', 'about', 'tell', 'does', 'have', 'with', 'from', 'this',
   'that', 'which', 'when', 'where', 'find', 'show', 'give', 'more',
 ]);
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function keywordHit(haystack: string, words: string[]): boolean {
+  if (words.length === 0) return true;
+  return words.some(w =>
+    new RegExp(`\\b${escapeRegex(w)}`, 'i').test(haystack)
+  );
+}
 
 export interface SearchResult {
   id: string;
@@ -96,25 +118,27 @@ export async function queryByText(
   const meaningful = question.toLowerCase().split(/\s+/)
     .filter(w => w.length > 3 && !STOP_WORDS.has(w));
 
-  const markedFragments = fragments.map(f => ({
-    ...f,
-    relevant: f.score >= RELEVANT_SCORE ||
-      (meaningful.length > 0 && meaningful.some(w => {
-        // Check title first (fast), then fall back to full text.
-        // text always contains the title by indexing convention ("Title. Abstract..."),
-        // so this catches fragments where title was not stored separately.
-        const haystack = ((f.title ?? '') + ' ' + f.text).toLowerCase();
-        return haystack.includes(w);
-      })),
-  }));
+  const markedFragments = fragments.map(f => {
+    // text always contains the title by indexing convention
+    // ("Title. Abstract..."), but we concat both just in case the bee
+    // stored them separately.
+    const haystack = ((f.title ?? '') + ' ' + f.text).toLowerCase();
+    return {
+      ...f,
+      relevant: f.score >= RELEVANT_SCORE && keywordHit(haystack, meaningful),
+    };
+  });
 
-  // "In HIVE" if any fragment is marked relevant
   const has_hive_data = markedFragments.some(f => f.relevant);
 
-  // Only return fragments that are relevant — suppress noise from the response
+  // v0.7.7 — When nothing real matched, return zero fragments so the UI
+  // doesn't render misleading source chips below an "answering from
+  // general knowledge" response. The LLM client already builds a clean
+  // "no verified data" prompt when has_hive_data is false; we just need
+  // the API response to match.
   const filteredFragments = has_hive_data
     ? markedFragments.filter(f => f.relevant)
-    : markedFragments.slice(0, 3); // show a few for context even in hybrid mode
+    : [];
 
   return { fragments: filteredFragments, has_hive_data, embedder_online: true };
 }

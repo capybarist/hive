@@ -5,6 +5,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7] — 2026-05-26 — *Retrieval gating: stop showing "In HIVE" for bogus matches*
+
+User reported the canonical false-positive case: a query for
+**"cocido madrileño"** returned the badge **"✓ In HIVE · 5 sources"**
+with five completely unrelated fragments (List of regional anthems,
+Raquel Torres Cerdán cookbook, Treaty of Defensive Alliance
+Bolivia–Peru, Province of Verbano-Cusio-Ossola, Veneto tourism). The
+LLM correctly recognised nothing in the fragments answered the
+question and fell back to its general knowledge, but the UI still
+showed those five source chips below the answer, implying citations
+that did not exist.
+
+### Root cause
+
+`query_engine.ts` had two issues that compounded:
+
+1. **`RELEVANT_SCORE = 0.30`** — the v0.6 comment claimed
+   `all-MiniLM-L6-v2` noise tops out at 0.20-0.25. That's correct for
+   diverse English queries against an English HNSW. For Spanish
+   queries against the current ~500 k mixed-language Qdrant, noise
+   regularly reaches **0.46-0.48** on entirely unrelated content.
+2. **`f.score >= 0.30 || meaningful.some(w => haystack.includes(w))`** —
+   relevance was an OR: either the score was loosely high OR *any*
+   meaningful query word appeared in *any* fragment text. Either
+   path alone is noisy; combining them with OR made false positives
+   easy.
+
+Direct check on prod with the user's query confirmed all five
+top-5 fragments scored 0.46-0.48; none contained "cocido" or
+"madrileño" in title or text.
+
+### Fix
+
+`query_engine.ts:queryByText`:
+
+- `RELEVANT_SCORE` raised **0.30 → 0.45**.
+- The OR is now an **AND**: `score >= 0.45 AND keywordHit`. Both
+  must pass.
+- `keywordHit` uses a word-boundary regex (`\b{token}`) instead of
+  `String.prototype.includes`, so "madrid" doesn't match "madridista"
+  and "neural" doesn't match "neuralgic".
+- Empty `meaningful` token list (rare; query was all stop-words)
+  falls back to score-only.
+- When `has_hive_data` is false, the API now returns **zero
+  fragments** instead of `markedFragments.slice(0, 3)`. The old
+  behaviour leaked three loosely-related fragments into the response
+  body and the UI rendered them as source chips even though the LLM
+  prompt path was already correct ("answer from general knowledge,
+  no fragments provided"). Now the UI gets a clean empty list and
+  the visual matches the verbal — no chips, "Not verified by HIVE"
+  caveat in the answer.
+
+### Effect on the reported case
+
+- `cocido madrileño` →
+  scores 0.480, 0.477, 0.466, 0.466, 0.460; none contain "cocido"
+  or "madrileño" as words → all marked non-relevant → `has_hive_data
+  = false` → API returns `fragments: []` → LLM answers from general
+  knowledge with the "⚠ Not verified by HIVE" caveat → UI shows no
+  source chips.
+
+### Effect on legitimate queries
+
+- `photosynthesis` → high score AND keyword "photosynthesis" in
+  multiple titles → unchanged, still surfaces correctly.
+- `Toronto subway lines` → multi-token query, at least one of
+  {toronto, subway, lines} present in genuine matches → still
+  surfaces.
+
+### Known limitation
+
+Cross-lingual queries against a single-language corpus now fail
+strict: asking "fotosíntesis" in Spanish against an English HNSW
+will not find the English "Photosynthesis" article even though
+the embedding similarity is there. This is intentional for v0.7.7
+— false positives were the worse failure mode — but a future
+release should add a translation pre-pass or a language-aware
+keyword check.
+
+### Files touched
+
+- `packages/api/src/query_engine.ts` — gating logic.
+- `package.json` — 0.7.6.7 → 0.7.7.
+
+### What did NOT change
+
+- LLM prompt or `llm_client.ts` (already builds a clean prompt
+  when `has_hive_data=false`).
+- `/api/query` response schema.
+- UI rendering code — the UI already conditionally renders chips
+  on `fragments.length`; with the empty list it draws nothing.
+
+---
+
 ## [0.7.6.7] — 2026-05-26 — *Per-item fallback in embedder.add_batch when batch encode raises*
 
 v0.7.6.6's filter still didn't catch every input the tokenizer can
