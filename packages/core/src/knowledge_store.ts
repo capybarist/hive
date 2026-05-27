@@ -394,26 +394,19 @@ export class KnowledgeStore implements IKnowledgeGraph {
       console.log(`[repl] Resuming ${nodeId.slice(0, 16)} from seq=${initialSeq} (cursor persisted)`);
     }
 
-    // v0.7.7.5/.7 — Freshness fast-forward. A bee's Hypercore is ~8× its
-    // fragment count (each fragment writes frag: + src: + dat: index keys,
-    // plus supersede history). A queen that already has the bulk indexed in
-    // Qdrant but whose cursor is far behind the head would spend HOURS
-    // re-streaming entries it already has before reaching the bee's NEWEST
-    // fragments — so a visitor searching for what the bee "just found" comes
-    // up empty. If we're a long way behind AND the embedder is already
-    // populated, jump the cursor to just before the head so live extraction
-    // surfaces within seconds. The skipped range is assumed already indexed;
-    // Qdrant dedup covers the RECENT_WINDOW overlap. A fresh/empty queen
-    // (indexed below the floor) skips this and does the full backfill.
+    // v0.7.7.11 — the "freshness fast-forward" (v0.7.7.5–.9) was REVERTED.
+    // It jumped the cursor near the head to surface new fragments fast, but
+    // it SKIPPED the gap between the old cursor and the head — and that gap
+    // contained recently-extracted fragments not yet in Qdrant (e.g. "The
+    // Go! Team"), so they were silently lost. The v0.7.6.5 embedder-side
+    // fast-skip already makes replaying already-indexed fragments cheap, so
+    // the natural sequential replay reaches the live tail in a reasonable
+    // time AND loses nothing. After a one-time catch-up the queen tracks the
+    // tail live (new fragments index within seconds). Freshness vs.
+    // completeness both want a background backfill of the gap concurrent with
+    // a live-tail watcher; that's the v0.7.8 design. Until then: correctness
+    // (no loss) over the restart-time freshness optimisation.
     //
-    // v0.7.7.7 — the decision MUST read the synced remote head, not the
-    // local length at open time (which is 0 until replication announces the
-    // peer's length). So it lives inside runStreamOnce after core.update(),
-    // guarded by `didFastForward` so it only fires once per watcher.
-    const FRESHNESS_GAP = 200_000;   // only fast-forward past a real backlog
-    const RECENT_WINDOW = 20_000;    // re-scan this many blocks before head
-    const POPULATED_FLOOR = 100_000; // "already has the bulk" threshold
-    let didFastForward = false;
     // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
     // fragment Hypercore from offset 0 grew this Set unbounded and burned
     // Node's V8 heap until the api_server OOM-crashed. The qdrant
@@ -449,41 +442,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       await remoteCore.ready();
       attachConflictHandler(remoteCore, `remote-${nodeId.slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
-      // Pull the peer's latest head before logging / deciding. Without this,
-      // `length` is the locally-known length (often 0 right after open) and
-      // the freshness fast-forward below never fires. Timeout-guarded so a
-      // silent peer can't wedge the watcher.
-      try {
-        await this.withTimeout(remoteCore.update({ wait: true }), 15_000, 'remoteCore.update');
-      } catch { /* no peer yet / timed out — fall through with whatever length we have */ }
-      const head = remoteCore.length as number;
-      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${head}`);
-
-      // v0.7.7.7/.8/.9 — one-time freshness fast-forward, now that `head` is
-      // the synced remote length. See the block above for rationale.
-      //
-      // v0.7.7.9 — the "is this queen already populated?" signal is the
-      // PERSISTED CURSOR, not the embedder's /stats. During replay the
-      // embedder is GIL-bound serving /add_batch, so /stats times out — and
-      // depending on it created a deadlock (the replay we want to skip is
-      // exactly what stops us deciding to skip it). A cursor well past the
-      // floor means this queen has already processed (and indexed) a large
-      // span of the bee's history, so its Qdrant mirrors the bee and skipping
-      // the backlog to chase the live tail is safe. A fresh queen has
-      // cursor≈0 and correctly does the full backfill. (If you ever wipe
-      // Qdrant, also delete repl_cursors/ — documented in the README — so the
-      // cursor resets to 0 and the backfill re-runs.)
-      if (!didFastForward) {
-        const current = this.cursorByNode.get(nodeId) ?? initialSeq;
-        const target = head - RECENT_WINDOW;
-        if (current > POPULATED_FLOOR && head - current > FRESHNESS_GAP && target > current) {
-          console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${current} → ${target} (head=${head}). Established queen; jumping near the tail so new fragments index within seconds.`);
-          await this.saveCursor(nodeId, target); // persists + updates cursorByNode
-        } else {
-          console.log(`[repl] No fast-forward for ${nodeId.slice(0, 16)} (head=${head}, current=${current}) — full backfill.`);
-        }
-        didFastForward = true; // decide once
-      }
+      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
 
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();

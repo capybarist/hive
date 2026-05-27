@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.11] — 2026-05-27 — *Revert the freshness fast-forward — it silently dropped recent fragments*
+
+Testing exposed that "The Go! Team", which the bee had recently
+extracted, was NOT in the queen's Qdrant and not findable. Root cause:
+the v0.7.7.5–.9 "freshness fast-forward" jumped the replication cursor
+from ~1.49 M to ~3.95 M, **skipping 2.47 M blocks** — and that gap
+contained recently-extracted fragments the queen had not yet indexed.
+The assumption "the skipped range is already in Qdrant" was false for
+the bee's recent additions, so they were lost.
+
+Freshness (surface new fragments fast) and completeness (never drop a
+fragment HIVE has) both matter; the fast-forward traded the second for
+the first. For a knowledge base that's the wrong trade.
+
+### What changed
+
+- Removed the fast-forward entirely (the jump, the `update()` head
+  probe, the `FRESHNESS_*` constants, the `embedderCount` helper that
+  v0.7.7.9 already dropped). The watcher is back to natural sequential
+  replay from the persisted cursor.
+- v0.7.6.5's embedder-side fast-skip already makes replaying
+  already-indexed fragments cheap, so the natural replay reaches the
+  live tail in a reasonable one-time catch-up and **loses nothing**.
+  In steady state (no restart) the queen tracks the tail live — new
+  bee fragments index within seconds.
+
+### Follow-up
+
+The ideal (immediate freshness AND completeness) needs a background
+backfill of the gap running concurrently with a live-tail watcher —
+deferred to v0.7.8. Until then, freshness is bounded by the one-time
+post-restart catch-up, which is acceptable because restarts are now
+rare (the OOM loop is fixed).
+
+Operationally, the production cursor (left near the head by the old
+fast-forward) is reset so the queen re-scans the skipped gap and
+indexes the fragments that were dropped.
+
+### Files touched
+- `packages/core/src/knowledge_store.ts` — remove fast-forward.
+- `package.json` — 0.7.7.10 → 0.7.7.11.
+
+---
+
 ## [0.7.7.10] — 2026-05-27 — *Fix: punctuation in the query broke the keyword gate (false "not in HIVE")*
 
 After freshness was fixed, a fresh test exposed a retrieval bug:
