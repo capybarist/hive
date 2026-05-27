@@ -258,7 +258,7 @@ await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 if (HAS_QUERY_API) app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown> } }>(
   '/api/query',
   async (req, reply) => {
-    const { question, top_k = 5, use_llm = true, history = [], filters } = req.body;
+    const { question, top_k = 8, use_llm = true, history = [], filters } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
     const { fragments, has_hive_data, embedder_online } = await queryByText(question, top_k, filters);

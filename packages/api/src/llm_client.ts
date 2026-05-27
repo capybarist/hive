@@ -73,12 +73,16 @@ function sourceUrl(f: SearchResult): string | null {
 }
 
 function buildPrompt(question: string, fragments: SearchResult[]): string {
+  // v0.7.7.6 — widen the context. Was 4 fragments × 400 chars (~1.6k chars),
+  // which starved the model and produced terse answers. 8 × 900 (~7k chars)
+  // gives it enough verbatim material to write the depth the system prompt
+  // asks for, while staying well within Groq/Gemini TPM on a single query.
   const ctx = fragments
-    .slice(0, 4)
+    .slice(0, 8)
     .map((f, i) => {
       const url = sourceUrl(f);
       const sourceLabel = url ? `${f.source} → ${url}` : f.source;
-      const text = f.text.slice(0, 400);
+      const text = f.text.slice(0, 900);
       return `[${i + 1}] ${f.title ?? ''} (${sourceLabel})\n${text}`;
     })
     .join('\n\n');
@@ -108,7 +112,7 @@ export async function synthesize(
     { role: 'user', parts: [{ type: 'text', text: userPrompt }] },
   ];
 
-  const { text } = await provider.generate(messages, SYSTEM_PROMPT, { temperature: 0.5, maxTokens: 1024 });
+  const { text } = await provider.generate(messages, SYSTEM_PROMPT, { temperature: 0.5, maxTokens: 1800 });
 
   // When we never had fragments to begin with, it's a plain general-knowledge
   // answer — not grounded, no badge.

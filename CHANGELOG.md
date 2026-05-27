@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.6] — 2026-05-27 — *Wider context for richer answers + conversational follow-ups*
+
+User: answers are too terse ("escueto") and there's no way to ask a
+follow-up after each one.
+
+### More detailed answers
+
+The synthesis prompt always pushed for depth, but `buildPrompt` only
+fed the model **4 fragments × 400 chars** (~1.6 k chars) and capped
+output at **1024 tokens** — it was starved of material. Now:
+
+- `buildPrompt`: **8 fragments × 900 chars** (~7 k chars of verbatim
+  context). Enough to actually write the depth the system prompt asks
+  for, still well within Groq/Gemini per-query TPM.
+- `maxTokens` 1024 → **1800**.
+- `/api/query` default `top_k` 5 → **8**, so retrieval surfaces enough
+  candidates to fill the wider context.
+
+### Conversational follow-ups (website)
+
+`/api/query` already accepted a `history` array; the capybarahome
+Try-HIVE widget now uses it. It keeps a thread of turns and sends the
+last few exchanges as history, so the user can ask follow-ups that
+build on the previous answer instead of one-shot queries. (Website
+change — this entry notes the API contract it leans on, unchanged.)
+
+### Files touched
+- `packages/api/src/llm_client.ts` — wider `buildPrompt`, maxTokens.
+- `packages/api/src/api_server.ts` — default `top_k` 5 → 8.
+- `package.json` — 0.7.7.5 → 0.7.7.6.
+
+---
+
 ## [0.7.7.5] — 2026-05-27 — *Freshness fast-forward: a populated queen jumps to the tail instead of replaying history*
 
 User observed the queen "stuck" at 504,694 fragments / 1 peer: the
