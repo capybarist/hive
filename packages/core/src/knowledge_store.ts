@@ -344,6 +344,21 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
+  // v0.7.7.5 — how many fragments the embedder already has. Used to decide
+  // whether a queen is "populated enough" to skip historical backfill in
+  // favour of freshness. Returns 0 on any failure (treated as empty → full
+  // backfill, the safe default).
+  private async embedderCount(embedderUrl: string): Promise<number> {
+    try {
+      const res = await fetch(`${embedderUrl}/stats`, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) return 0;
+      const d = (await res.json()) as { fragments?: number };
+      return typeof d.fragments === 'number' ? d.fragments : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   private async saveCursor(nodeId: string, seq: number): Promise<void> {
     const prev = this.cursorByNode.get(nodeId) ?? 0;
     if (seq <= prev) return; // never regress
@@ -393,6 +408,34 @@ export class KnowledgeStore implements IKnowledgeGraph {
     if (initialSeq > 0) {
       console.log(`[repl] Resuming ${nodeId.slice(0, 16)} from seq=${initialSeq} (cursor persisted)`);
     }
+
+    // v0.7.7.5 — Freshness fast-forward. A bee's Hypercore is ~8× its
+    // fragment count (each fragment writes frag: + src: + dat: index keys,
+    // plus supersede history). A queen that already has the bulk indexed in
+    // Qdrant but whose cursor is far behind the head would spend HOURS
+    // re-streaming entries it already has before reaching the bee's NEWEST
+    // fragments — so a visitor searching for what the bee "just found" comes
+    // up empty. If we're a long way behind AND the embedder is already
+    // populated, jump the cursor to just before the head so live extraction
+    // surfaces within seconds. The skipped range is assumed already indexed;
+    // Qdrant dedup covers the RECENT_WINDOW overlap. A fresh/empty queen
+    // (indexed below the floor) skips this and does the full backfill.
+    const FRESHNESS_GAP = 200_000;   // only fast-forward past a real backlog
+    const RECENT_WINDOW = 20_000;    // re-scan this many blocks before head
+    const POPULATED_FLOOR = 100_000; // "already has the bulk" threshold
+    try {
+      const probe = (this.store as any).get({ key: remoteCoreKey });
+      await probe.ready();
+      const head = probe.length as number;
+      if (head - initialSeq > FRESHNESS_GAP) {
+        const indexed = await this.embedderCount(embedderUrl);
+        const target = head - RECENT_WINDOW;
+        if (indexed > POPULATED_FLOOR && target > initialSeq) {
+          console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${initialSeq} → ${target} (head=${head}, indexed=${indexed}). Historical backlog already in Qdrant; jumping near the tail so new fragments index within seconds.`);
+          await this.saveCursor(nodeId, target); // persists + updates cursorByNode
+        }
+      }
+    } catch { /* probe failed — proceed with the normal persisted cursor */ }
     // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
     // fragment Hypercore from offset 0 grew this Set unbounded and burned
     // Node's V8 heap until the api_server OOM-crashed. The qdrant

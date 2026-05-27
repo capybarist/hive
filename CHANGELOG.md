@@ -5,6 +5,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.5] — 2026-05-27 — *Freshness fast-forward: a populated queen jumps to the tail instead of replaying history*
+
+User observed the queen "stuck" at 504,694 fragments / 1 peer: the
+replication cursor was grinding through historical Hypercore entries
+(seq ~1.0M of ~4.0M) that Qdrant **already has**, so a visitor
+searching for what the bee *just* extracted came up empty — the bee's
+newest fragments sit at the tail (seq ~4M+) and the queen wouldn't
+reach them for hours.
+
+### Why this happens
+
+A bee's Hypercore is ~8× its fragment count: each fragment writes
+`frag:` + `src:` + `dat:` index keys plus supersede history. bee-1 has
+~160 k articles → ~504 k fragments → ~4 M Hypercore blocks. Qdrant
+already holds those 504 k fragments. Strict sequential replay from the
+persisted cursor means re-reading ~3 M already-indexed blocks before
+the first genuinely new fragment — at which point "live" is hours
+stale.
+
+### Fix
+
+`watchRemoteCore` now does a one-time **freshness fast-forward** when
+opening a remote core:
+
+- Probe the remote head length.
+- If `head - cursor > 200 000` (a real backlog) AND the embedder is
+  already populated (`/stats` fragments > 100 000), jump the cursor to
+  `head - 20 000` and persist it.
+- Otherwise (fresh/empty queen, or small gap) do the normal full
+  backfill.
+
+The skipped range is assumed already in Qdrant; the 20 k re-scan window
+before the head covers recent overlap and Qdrant dedup handles the
+rest. After the jump the queen tracks the live tail, so a fragment the
+bee writes now is queryable within seconds. The jump is one-time:
+the persisted cursor lands near the head, so restarts don't re-trigger
+it.
+
+New helper `embedderCount(embedderUrl)` (GET `/stats`) gates the
+decision; on any failure it returns 0 → treated as empty → safe full
+backfill.
+
+### Trade-off / known limitation
+
+Fast-forward permanently skips the historical gap rather than
+backfilling it. For a queen whose Qdrant already mirrors the bee
+(the production case) this is lossless. A queen with real holes in
+its index would not refill them this way — a proper low-priority
+background backfill is a v0.7.8 candidate. Freshness was the
+explicit priority here.
+
+### Files touched
+- `packages/core/src/knowledge_store.ts` — fast-forward logic in
+  `watchRemoteCore` + `embedderCount` helper.
+- `package.json` — 0.7.7.4 → 0.7.7.5.
+
+---
+
 ## [0.7.7.4] — 2026-05-27 — *The LLM's verdict, not the retrieval gate, decides the "Verified by HIVE" badge*
 
 User hit the worst-case false positive: a query for **"Guido Fanti"**
