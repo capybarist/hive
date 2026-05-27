@@ -275,8 +275,21 @@ if (HAS_QUERY_API) app.post<{ Body: { question: string; top_k?: number; use_llm?
     }
 
     try {
-      const { answer, mode } = await synthesize(question, fragments, '', has_hive_data, history);
-      return { answer, mode, fragments, has_hive_data, embedder_online };
+      const { answer, mode, grounded } = await synthesize(question, fragments, '', has_hive_data, history);
+      // The retrieval gate (score + keyword) decides what fragments to SEND
+      // the LLM; the LLM's `grounded` verdict decides whether they actually
+      // answered. The badge + source chips follow the LLM, not the gate —
+      // otherwise a topically-near-but-wrong hit (e.g. "Fano" for "Guido
+      // Fanti") shows "Verified by HIVE" over an answer that admits it has
+      // no such data. When not grounded, suppress the chips too.
+      const verified = has_hive_data && grounded;
+      return {
+        answer,
+        mode,
+        fragments: verified ? fragments : [],
+        has_hive_data: verified,
+        embedder_online,
+      };
     } catch (err: any) {
       return reply.code(502).send({ error: err.message });
     }

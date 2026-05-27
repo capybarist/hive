@@ -5,6 +5,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.4] — 2026-05-27 — *The LLM's verdict, not the retrieval gate, decides the "Verified by HIVE" badge*
+
+User hit the worst-case false positive: a query for **"Guido Fanti"**
+showed **"✓ Verified by HIVE"** over an answer that literally said
+*"There is no information available about Guido Fanti in the provided
+knowledge fragments"* — sourced to articles about the city Fano and
+the city Ravenna.
+
+### Why the gate alone can't fix this
+
+The v0.7.7.x retrieval gate (score ≥ 0.45 + majority keyword match)
+decides which fragments to SEND the LLM. But it's a fuzzy pre-filter:
+"Guido Fanti" (a person) pulls "Fano" (a city) at 0.53 and a token
+match sneaks through. No threshold tuning makes a bag-of-words gate
+reliably tell "the person Guido Fanti" from "the city Fano". The only
+component that actually *reads* the fragments and knows they don't
+answer is the LLM — which already said so in plain language. The bug
+was that the badge trusted the gate, not the LLM.
+
+### Fix: the LLM is the final judge
+
+`llm_client.ts` now instructs the model: when the provided fragments
+don't actually contain the answer, begin the reply with a
+`[[NO_MATCH]]` sentinel, then answer from general knowledge under the
+"⚠ Not verified by HIVE" caveat. `synthesize` returns a new
+`grounded: boolean`:
+
+- fragments genuinely used → `grounded: true`, `mode: 'verified'`.
+- sentinel emitted, or no fragments to begin with → `grounded: false`,
+  `mode: 'hybrid'`.
+
+`api_server` sets the response's `has_hive_data = gatePassed &&
+grounded` and **drops the source chips when not grounded**. So the
+"Verified by HIVE" badge and the source list now appear only when the
+LLM confirms it actually answered from HIVE data. No extra LLM call —
+same single synthesis, just a verdict token parsed out of it.
+
+This is also the "dead-end recovery" half of the v0.7.7 plan: a query
+that retrieves near-misses now degrades honestly to a general-knowledge
+answer instead of dressing the near-misses up as verified sources.
+
+### Effect
+
+- "Guido Fanti" → LLM emits `[[NO_MATCH]]` → badge off, no chips,
+  honest "not verified" answer.
+- "photosynthesis" → LLM grounds in the real fragments → "Verified by
+  HIVE" with sources, unchanged.
+
+### Files touched
+- `packages/api/src/llm_client.ts` — sentinel instruction in the
+  system prompt, `grounded` in `LLMResponse`, verdict parsing.
+- `packages/api/src/api_server.ts` — badge + chips follow `grounded`.
+- `package.json` — 0.7.7.3 → 0.7.7.4.
+
+---
+
 ## [0.7.7.3] — 2026-05-27 — *Sanitize ALL payload fields, not just text — the surrogate was in the title*
 
 v0.7.7.2 stripped surrogates from the fragment `text` but the cursor

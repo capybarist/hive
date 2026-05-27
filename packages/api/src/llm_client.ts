@@ -27,26 +27,41 @@ Voice:
   genuinely benefits from a link — the UI shows source chips separately,
   so don't reach for citations every sentence.
 
-When the fragments answer the question:
-- Use them as ground truth.
-- Build a complete, well-organised answer. Synthesise across multiple
-  fragments instead of dumping them one by one.
-- Use bullets for genuine lists (three or more parallel items), not for
-  every short answer.
+You are the FINAL judge of whether the fragments actually answer the
+question. Vector search is fuzzy — it often returns fragments that are
+topically near but do not contain the answer (e.g. an article about the
+city "Fano" for a question about the person "Guido Fanti"). Decide
+honestly, because a badge shown to the user depends on your verdict:
 
-When the fragments do NOT answer the question:
-- Say so in one or two short sentences. Do not enumerate unrelated content
-  that happens to be in the fragments — that's noise, not help.
-- If you can offer general (non-verified) knowledge, do so briefly under a
-  clear caveat, then stop.
+- If the fragments genuinely contain the answer:
+  - Use them as ground truth. Build a complete, well-organised answer.
+    Synthesise across multiple fragments instead of dumping them one by
+    one. Use bullets for genuine lists (three or more parallel items).
+
+- If the fragments do NOT actually contain the answer (loosely related,
+  off-target, or simply silent on the subject):
+  - Your reply MUST begin with the exact token [[NO_MATCH]] on the very
+    first line, with nothing before it.
+  - After that token, answer from your general knowledge, prefixed with
+    "⚠ Not verified by HIVE — answering from general knowledge:".
+  - Do NOT enumerate the unrelated fragments — that's noise, not help.
 
 Never fabricate facts, sources, or links.`;
+
+// The sentinel the model emits when the provided fragments don't actually
+// answer the question. Stripped before the answer reaches the client; its
+// presence flips the "Verified by HIVE" badge off.
+const NO_MATCH_SENTINEL = '[[NO_MATCH]]';
 
 export type LLMMode = 'verified' | 'hybrid' | 'no_data';
 
 export interface LLMResponse {
   answer: string;
   mode: LLMMode;
+  // True only when the answer genuinely rests on HIVE fragments. The
+  // caller uses this — NOT the retrieval gate alone — to decide whether
+  // to show the "Verified by HIVE" badge and the source chips.
+  grounded: boolean;
 }
 
 function sourceUrl(f: SearchResult): string | null {
@@ -79,7 +94,6 @@ export async function synthesize(
   history: Array<{role: string; content: string}> = [],
 ): Promise<LLMResponse> {
   const provider = createLLMProvider();
-  const mode: LLMMode = hasRelevantData ? 'verified' : 'hybrid';
 
   const userPrompt = hasRelevantData
     ? buildPrompt(question, fragments)
@@ -95,5 +109,22 @@ export async function synthesize(
   ];
 
   const { text } = await provider.generate(messages, SYSTEM_PROMPT, { temperature: 0.5, maxTokens: 1024 });
-  return { answer: text, mode };
+
+  // When we never had fragments to begin with, it's a plain general-knowledge
+  // answer — not grounded, no badge.
+  if (!hasRelevantData) {
+    return { answer: text, mode: 'hybrid', grounded: false };
+  }
+
+  // We sent fragments and asked the model to be the final judge. If it
+  // emitted the NO_MATCH sentinel, the fragments didn't actually answer —
+  // strip the token, drop to hybrid, and let the caller suppress the badge
+  // and the (misleading) source chips.
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith(NO_MATCH_SENTINEL)) {
+    const answer = trimmed.slice(NO_MATCH_SENTINEL.length).trimStart();
+    return { answer, mode: 'hybrid', grounded: false };
+  }
+
+  return { answer: text, mode: 'verified', grounded: true };
 }
