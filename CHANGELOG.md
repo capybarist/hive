@@ -5,6 +5,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.1] — 2026-05-26 — *Keyword gate: require MAJORITY of query tokens, not just one*
+
+v0.7.7 fixed the obvious false positive ("cocido madrileño" → 5
+unrelated fragments) but the user immediately found another: query
+"Latest advances in retrieval augmented generation" returned **"✓ In
+HIVE · 1 source"** with the fragment being "Expert — Expertise →
+Related research" — an article about expertise/memory retrieval,
+not RAG.
+
+Root cause: v0.7.7's keyword check was `words.some(...)` — ANY single
+meaningful token appearing in the fragment was enough. For the RAG
+query the meaningful tokens are `[latest, advances, retrieval,
+augmented, generation]` (5 after stop-word filter), and the Expert
+fragment matched on **just "retrieval"** (mention of memory
+retrieval), score 0.458 (just over the 0.45 threshold).
+
+### Fix
+
+`meetsKeywordGate(haystack, words)` now requires **`ceil(N/2)`
+distinct query tokens** to appear in the fragment. For our case:
+
+- "Latest advances in retrieval augmented generation" — 5
+  meaningful tokens → need ≥3. Expert fragment hits 1 → filtered.
+- "cocido madrileño" — 2 tokens → need ≥1 (unchanged from v0.7.7;
+  the single-keyword threshold already filtered all of them).
+- "photosynthesis" — 1 token → need ≥1 (unchanged).
+- "Toronto subway lines" — 3 tokens → need ≥2. A genuine Toronto
+  Line 1 article hits all 3 → still relevant.
+
+For very short queries the gate behaves identically to v0.7.7; the
+new tightening only kicks in for 3+ token queries where the noise
+floor risk is highest.
+
+### Files touched
+
+- `packages/api/src/query_engine.ts` — replaced `keywordHit()`
+  (`some`) with `countTokenHits` + `meetsKeywordGate` (majority).
+- `package.json` — 0.7.7 → 0.7.7.1.
+
+---
+
 ## [0.7.7] — 2026-05-26 — *Retrieval gating: stop showing "In HIVE" for bogus matches*
 
 User reported the canonical false-positive case: a query for

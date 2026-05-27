@@ -32,11 +32,26 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function keywordHit(haystack: string, words: string[]): boolean {
+// v0.7.7.1 — count DISTINCT meaningful tokens that appear in the haystack.
+// v0.7.7's `some()` was still too loose: for a 5-token query like
+// "Latest advances in retrieval augmented generation", one token match
+// ("retrieval" appearing in an article about expertise/memory retrieval)
+// was enough to flip the fragment to relevant. We now require a majority
+// of tokens — `ceil(N/2)` — to appear before we call it a match. For
+// short queries (N=1 or 2) the threshold is still 1, so single-word and
+// two-word queries behave like v0.7.7.
+function countTokenHits(haystack: string, words: string[]): number {
+  let n = 0;
+  for (const w of words) {
+    if (new RegExp(`\\b${escapeRegex(w)}`, 'i').test(haystack)) n++;
+  }
+  return n;
+}
+
+function meetsKeywordGate(haystack: string, words: string[]): boolean {
   if (words.length === 0) return true;
-  return words.some(w =>
-    new RegExp(`\\b${escapeRegex(w)}`, 'i').test(haystack)
-  );
+  const required = Math.ceil(words.length / 2);
+  return countTokenHits(haystack, words) >= required;
 }
 
 export interface SearchResult {
@@ -125,7 +140,7 @@ export async function queryByText(
     const haystack = ((f.title ?? '') + ' ' + f.text).toLowerCase();
     return {
       ...f,
-      relevant: f.score >= RELEVANT_SCORE && keywordHit(haystack, meaningful),
+      relevant: f.score >= RELEVANT_SCORE && meetsKeywordGate(haystack, meaningful),
     };
   });
 
