@@ -31,6 +31,22 @@ def strip_surrogates(s: str) -> str:
     return "".join(ch for ch in s if not 0xD800 <= ord(ch) <= 0xDFFF)
 
 
+def sanitize_meta(meta: dict) -> dict:
+    """Strip lone surrogates from every string value in a metadata dict.
+
+    v0.7.7.3 — v0.7.7.2 only cleaned the `text` field, but the poison
+    surrogate (\\ud804) lived in ANOTHER payload field (a fragment title
+    in this case). The Qdrant client serializes the WHOLE payload to
+    JSON, so a surrogate in any string value fails the upsert and
+    freezes the cursor. Clean every string value (one level deep — the
+    queen's payloads are flat).
+    """
+    out = {}
+    for k, v in meta.items():
+        out[k] = strip_surrogates(v) if isinstance(v, str) else v
+    return out
+
+
 class EmbeddingEngine:
     def __init__(self, index: VectorIndex | None = None):
         self.model = SentenceTransformer(MODEL_NAME)
@@ -49,7 +65,7 @@ class EmbeddingEngine:
     def add(self, id: str, text: str, metadata: dict | None = None) -> None:
         text = strip_surrogates(text)
         vector = self.embed(text)
-        meta = {**(metadata or {}), "text": text}
+        meta = {**sanitize_meta(metadata or {}), "text": text}
         self.index.add(id, vector, meta)
 
     def add_batch(self, items: list[dict]) -> int:
@@ -100,7 +116,7 @@ class EmbeddingEngine:
         try:
             vectors = self.embed_batch(texts)
             prepared = [
-                (it["id"], vec, {**(it.get("metadata") or {}), "text": it["text"]})
+                (it["id"], vec, {**sanitize_meta(it.get("metadata") or {}), "text": it["text"]})
                 for vec, it in zip(vectors, fresh)
             ]
         except Exception as e:
@@ -115,7 +131,7 @@ class EmbeddingEngine:
                     vec = self.embed(it["text"])
                     prepared.append((
                         it["id"], vec,
-                        {**(it.get("metadata") or {}), "text": it["text"]},
+                        {**sanitize_meta(it.get("metadata") or {}), "text": it["text"]},
                     ))
                 except Exception as ee:
                     sample = repr(it["text"])[:120]

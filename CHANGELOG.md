@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.3] — 2026-05-27 — *Sanitize ALL payload fields, not just text — the surrogate was in the title*
+
+v0.7.7.2 stripped surrogates from the fragment `text` but the cursor
+stayed frozen at seq 324,608 and the same error kept firing:
+
+```
+PydanticSerializationError: …UnicodeEncodeError: 'utf-8' codec can't
+encode character '\ud804' in position 91: surrogates not allowed
+```
+
+The poison `\ud804` wasn't in `text` — it was in another payload
+field (the fragment **title**). The Qdrant client serializes the
+WHOLE payload dict to JSON, so a surrogate in *any* string value
+(title, source, …) fails the upsert just the same.
+
+### Fix
+
+`sanitize_meta(meta)` strips surrogates from every string value in
+the metadata dict (one level deep — the queen's payloads are flat).
+Applied wherever we build the Qdrant payload: `add`, the `add_batch`
+batch path, and the per-item fallback. `text` is still cleaned
+separately as before.
+
+### Note on SESSION_CLOSED
+
+The replication stream also logs intermittent `SESSION_CLOSED` on the
+bee-1 core and restarts (~every 24 entries) from the persisted
+cursor. That caps throughput but does not block; it's the separate
+bee-1 ↔ queen Hyperswarm session churn on the backlog. With the
+poison fragment now serialisable, the cursor advances past 324,608
+and `indexed` resumes growing.
+
+### Files touched
+- `packages/embeddings/embedder.py` — `sanitize_meta` + calls.
+- `package.json` — 0.7.7.2 → 0.7.7.3.
+
+---
+
 ## [0.7.7.2] — 2026-05-26 — *Strip lone surrogates before Qdrant — unfreeze the replication cursor*
 
 User noticed the queen's `indexed` count was stuck at 504,678 for
