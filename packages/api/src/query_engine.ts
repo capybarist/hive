@@ -129,8 +129,17 @@ export async function queryByText(
       node_id: r.node_id,
     }));
 
-  // Mark each fragment as relevant or not
+  // Mark each fragment as relevant or not.
+  // v0.7.7.10 — strip punctuation from each token BEFORE filtering. Splitting
+  // on whitespace alone left trailing punctuation attached ("stupa?" from
+  // "What is a stupa?"), and since meetsKeywordGate escapes the token into a
+  // word-boundary regex, it then searched for the literal "stupa?" — which a
+  // fragment containing "stupa" (no punctuation) never matches. The result:
+  // almost every natural-language question (they end in "?" / contain commas)
+  // failed the keyword gate and returned has_hive_data=false even when HIVE
+  // clearly had the answer. Normalising to letters/numbers fixes it.
   const meaningful = question.toLowerCase().split(/\s+/)
+    .map(w => w.replace(/[^\p{L}\p{N}]/gu, ''))
     .filter(w => w.length > 3 && !STOP_WORDS.has(w));
 
   const markedFragments = fragments.map(f => {

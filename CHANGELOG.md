@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.10] — 2026-05-27 — *Fix: punctuation in the query broke the keyword gate (false "not in HIVE")*
+
+After freshness was fixed, a fresh test exposed a retrieval bug:
+**"Stupa"** found HIVE data, but **"What is a stupa?"** returned
+"not verified" — even though the embedder scored stupa fragments at
+0.52–0.61 (e.g. "Relic Stupa of Vaishali").
+
+Cause: `meaningful` query tokens were produced by splitting on
+whitespace only, so the last token kept its punctuation —
+`"stupa?"`. `meetsKeywordGate` escapes each token into a
+word-boundary regex, so it searched for the literal `stupa?` (with
+the question mark), which a fragment containing plain `stupa` never
+matches. The fragment cleared the score threshold but failed the
+keyword gate → `has_hive_data=false`.
+
+Since virtually every natural-language question ends in `?` or
+contains commas, this silently sabotaged most real queries — the
+exact "doesn't return HIVE info even when it has it" symptom.
+
+Fix: normalise each token to letters/numbers
+(`replace(/[^\p{L}\p{N}]/gu, '')`) before the length/stop-word
+filter, so `"stupa?" → "stupa"`. One line.
+
+### Files touched
+- `packages/api/src/query_engine.ts` — strip punctuation from query
+  tokens.
+- `package.json` — 0.7.7.9 → 0.7.7.10.
+
+---
+
 ## [0.7.7.9] — 2026-05-27 — *Fix: base the fast-forward on the cursor, not the embedder (which is GIL-bound during replay)*
 
 Third and final timing fix. v0.7.7.8 polled the embedder's `/stats` to
