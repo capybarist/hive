@@ -62,11 +62,31 @@ class EmbeddingEngine:
         if not fresh:
             return 0
         texts = [it["text"] for it in fresh]
-        vectors = self.embed_batch(texts)
-        prepared = []
-        for vec, it in zip(vectors, fresh):
-            meta = {**(it.get("metadata") or {}), "text": it["text"]}
-            prepared.append((it["id"], vec, meta))
+        try:
+            vectors = self.embed_batch(texts)
+            prepared = [
+                (it["id"], vec, {**(it.get("metadata") or {}), "text": it["text"]})
+                for vec, it in zip(vectors, fresh)
+            ]
+        except Exception as e:
+            # v0.7.6.7 — when the tokenizer chokes on one bad text inside a
+            # batch (e.g. exotic Unicode, post-normalisation empty, oversized
+            # input), sentence-transformers raises and we lose all 20 items.
+            # Re-process per-item so the good ones survive; log one repr() of
+            # any item that fails individually so we can identify the pattern
+            # rather than guess at filter rules.
+            print(f"[add_batch] embed_batch failed ({type(e).__name__}: {e}); falling back to per-item")
+            prepared = []
+            for it in fresh:
+                try:
+                    vec = self.embed(it["text"])
+                    prepared.append((
+                        it["id"], vec,
+                        {**(it.get("metadata") or {}), "text": it["text"]},
+                    ))
+                except Exception as ee:
+                    sample = repr(it["text"])[:120]
+                    print(f"[add_batch] dropping bad item id={it['id']!r} text={sample} err={type(ee).__name__}: {ee}")
         if hasattr(self.index, "upsert_batch"):
             return self.index.upsert_batch(prepared)
         added = 0

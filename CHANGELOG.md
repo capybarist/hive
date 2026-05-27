@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.7] — 2026-05-26 — *Per-item fallback in embedder.add_batch when batch encode raises*
+
+v0.7.6.6's filter still didn't catch every input the tokenizer can
+choke on — log showed ~8 `TypeError: TextEncodeInput must be Union…`
+500s per few hundred batches even after the type/empty filter.
+Without knowing which specific text triggers it, we can't write a
+precise filter — so wrap the batch encode in try/except and fall
+back to per-item embed on failure. One bad item gets logged
+(`repr(text)[:120]`) and dropped; the other 19 in the batch get
+through. Catch-up keeps moving instead of failing the whole batch
+back to the queen.
+
+### Files touched
+- `packages/embeddings/embedder.py` — try/except around
+  `embed_batch`, per-item fallback path.
+- `package.json` — 0.7.6.6 → 0.7.6.7.
+
+---
+
 ## [0.7.6.6] — 2026-05-26 — *Defensive filter in embedder.add_batch: skip malformed items instead of 500-ing the whole batch*
 
 v0.7.6.5 sped up catch-up dramatically (~25× — cursor advanced from
