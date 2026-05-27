@@ -5,6 +5,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.2] — 2026-05-26 — *Strip lone surrogates before Qdrant — unfreeze the replication cursor*
+
+User noticed the queen's `indexed` count was stuck at 504,678 for
+hours even though the embedder looked healthy and bee-1 was extracting
+102 fragments/cycle. The replication cursor was frozen at
+**seq 324,584** — not advancing at all.
+
+### Root cause: a poison-pill fragment
+
+A fragment in bee-1's Hypercore contains a lone UTF-16 surrogate
+(`\ud804`) in its text — same class of bee-side extraction bug as
+the Gothic surrogates found in v0.7.6.7, but this one fails at a
+DIFFERENT layer:
+
+```
+PydanticSerializationError: Error serializing to JSON:
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud804'
+in position 91: surrogates not allowed
+```
+
+v0.7.6.7's per-item fallback guarded the *embedding* step, but this
+fragment embeds fine — it fails when the **Qdrant client serializes
+the payload to JSON**. That fails the entire `upsert_batch`, returns
+HTTP 500, the queen's `doFlush` reinstates the buffer, and the
+cursor never advances past the poison fragment. The queen retried
+the same doomed batch forever — catch-up frozen, `indexed` flat,
+new fragments never reached.
+
+### Fix
+
+New `strip_surrogates(s)` in `embedder.py` removes any code point in
+U+D800–U+DFFF. Applied to fragment text in both `add` and
+`add_batch` BEFORE embedding and before building the Qdrant payload,
+so the sanitised text is what gets stored. Lossless for every
+legitimate character (a properly-decoded UTF-8 codepoint is never a
+surrogate in a Python `str`).
+
+This is the v0.7.6.8 backlog item, promoted to urgent because it
+turned out to be a hard pipeline blocker, not just the per-item
+slowdown we thought.
+
+### Also seen (not fixed here)
+
+The replication stream logs intermittent `SESSION_CLOSED` on the
+bee-1 core and restarts from the persisted cursor — believed to be a
+symptom of the long stall (corestore session timing out while the
+poison batch retried), should resolve once the cursor advances. If
+it persists after this deploy, it's the separate bee-1 ↔ queen
+Hyperswarm topology issue already on the backlog.
+
+### Files touched
+- `packages/embeddings/embedder.py` — `strip_surrogates` + calls.
+- `package.json` — 0.7.7.1 → 0.7.7.2.
+
+---
+
 ## [0.7.7.1] — 2026-05-26 — *Keyword gate: require MAJORITY of query tokens, not just one*
 
 v0.7.7 fixed the obvious false positive ("cocido madrileño" → 5

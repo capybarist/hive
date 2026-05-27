@@ -8,6 +8,29 @@ from hnsw_index import VectorIndex
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 
+def strip_surrogates(s: str) -> str:
+    """Remove lone UTF-16 surrogate code points (U+D800–U+DFFF) from a string.
+
+    v0.7.6.8 — bee-1 extracts Wikipedia text containing 4-byte UTF-8
+    characters (Gothic 𐌸, Brahmic scripts, emoji, …). Somewhere in the
+    extractor a surrogate pair gets split mid-character and a lone
+    surrogate (e.g. `\\ud804`, `\\udf3c`) ends up in the fragment text.
+    Lone surrogates are valid in a Python `str` but cannot be encoded to
+    UTF-8, so they blow up in two places downstream:
+      1. the HF tokenizer (`TextEncodeInput must be Union[...]`)
+      2. the Qdrant client's `model_dump_json` (`UnicodeEncodeError:
+         surrogates not allowed`) — this one is the worse failure because
+         it fails the WHOLE qdrant upsert, returns 500, and the queen
+         never advances its replication cursor past the poison fragment
+         (infinite retry of the same batch → catch-up frozen).
+    Stripping them is lossless for every legitimate character: a properly
+    decoded UTF-8 codepoint is a single `str` element, never a surrogate.
+    """
+    if not s:
+        return s
+    return "".join(ch for ch in s if not 0xD800 <= ord(ch) <= 0xDFFF)
+
+
 class EmbeddingEngine:
     def __init__(self, index: VectorIndex | None = None):
         self.model = SentenceTransformer(MODEL_NAME)
@@ -24,6 +47,7 @@ class EmbeddingEngine:
         return self.model.encode(texts, normalize_embeddings=True, batch_size=64)
 
     def add(self, id: str, text: str, metadata: dict | None = None) -> None:
+        text = strip_surrogates(text)
         vector = self.embed(text)
         meta = {**(metadata or {}), "text": text}
         self.index.add(id, vector, meta)
@@ -53,12 +77,23 @@ class EmbeddingEngine:
         # client-side guard, but a 500 on the whole batch hurts much more
         # than silently dropping one bad item, so re-check id + non-empty
         # string text before letting them near sentence-transformers.
-        fresh = [
-            it for it in items
-            if isinstance(it.get("id"), str) and it["id"]
-            and it["id"] not in known
-            and isinstance(it.get("text"), str) and it["text"].strip()
-        ]
+        # v0.7.6.8 — strip lone surrogates from text up front. The text we
+        # carry forward (for both embedding AND the qdrant payload) is the
+        # sanitised version, so the poison fragment can no longer fail the
+        # qdrant JSON serialization and freeze the queen's cursor.
+        fresh = []
+        for it in items:
+            if not (isinstance(it.get("id"), str) and it["id"]):
+                continue
+            if it["id"] in known:
+                continue
+            raw = it.get("text")
+            if not (isinstance(raw, str) and raw.strip()):
+                continue
+            clean = strip_surrogates(raw)
+            if not clean.strip():
+                continue
+            fresh.append({**it, "text": clean})
         if not fresh:
             return 0
         texts = [it["text"] for it in fresh]
@@ -69,12 +104,10 @@ class EmbeddingEngine:
                 for vec, it in zip(vectors, fresh)
             ]
         except Exception as e:
-            # v0.7.6.7 — when the tokenizer chokes on one bad text inside a
-            # batch (e.g. exotic Unicode, post-normalisation empty, oversized
-            # input), sentence-transformers raises and we lose all 20 items.
-            # Re-process per-item so the good ones survive; log one repr() of
-            # any item that fails individually so we can identify the pattern
-            # rather than guess at filter rules.
+            # v0.7.6.7 — when the tokenizer still chokes on a text inside a
+            # batch (oversized input, exotic combining marks), one bad item
+            # would otherwise lose all 20. Re-process per-item so the good
+            # ones survive; log a repr() of any individual failure.
             print(f"[add_batch] embed_batch failed ({type(e).__name__}: {e}); falling back to per-item")
             prepared = []
             for it in fresh:
