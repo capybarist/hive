@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.9] — 2026-05-27 — *Fix: base the fast-forward on the cursor, not the embedder (which is GIL-bound during replay)*
+
+Third and final timing fix. v0.7.7.8 polled the embedder's `/stats` to
+decide if the queen was "populated enough" to fast-forward. But during
+replay the embedder is GIL-bound serving `/add_batch`, so `/stats`
+times out for minutes — a deadlock: the replay we want to skip is
+exactly what prevents us from deciding to skip it. (Logs: `len=3966110`
+read fine, but no fast-forward and no "No fast-forward" line either —
+the decision was stuck polling.)
+
+Fix: the "is this queen populated?" signal is now the **persisted
+cursor**, which is local and instant. `current > 100 000` means the
+queen has already processed (and indexed) a large span of the bee's
+history, so its Qdrant mirrors the bee and skipping the backlog is
+safe. No embedder call in the decision path at all.
+
+- Established queen (cursor past the floor) → fast-forward to
+  `head − 20 000`, tracks the live tail.
+- Fresh queen (cursor ≈ 0) → full backfill, as required to fill an
+  empty Qdrant.
+- Operational note (now in the README too): if you wipe Qdrant, also
+  delete `repl_cursors/` so the cursor resets and the backfill re-runs.
+
+Removed the now-unused `embedderCount` helper.
+
+### Files touched
+- `packages/core/src/knowledge_store.ts` — cursor-based populated check;
+  drop `embedderCount`.
+- `package.json` — 0.7.7.8 → 0.7.7.9.
+
+---
+
 ## [0.7.7.8] — 2026-05-27 — *Fix: fast-forward skipped because the embedder wasn't ready yet at restart*
 
 v0.7.7.7 fixed the head read, but the fast-forward STILL didn't fire in

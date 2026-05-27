@@ -344,23 +344,6 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
-  // v0.7.7.5/.8 — how many fragments the embedder already has. Used to decide
-  // whether a queen is "populated enough" to skip historical backfill in
-  // favour of freshness. Returns **-1 on failure** (embedder unreachable /
-  // still loading its model) so callers can distinguish "not ready yet" from
-  // a genuine empty index (0). v0.7.7.7 conflated the two and skipped the
-  // fast-forward during the post-restart model-load window.
-  private async embedderCount(embedderUrl: string): Promise<number> {
-    try {
-      const res = await fetch(`${embedderUrl}/stats`, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) return -1;
-      const d = (await res.json()) as { fragments?: number };
-      return typeof d.fragments === 'number' ? d.fragments : -1;
-    } catch {
-      return -1;
-    }
-  }
-
   private async saveCursor(nodeId: string, seq: number): Promise<void> {
     const prev = this.cursorByNode.get(nodeId) ?? 0;
     if (seq <= prev) return; // never regress
@@ -476,29 +459,30 @@ export class KnowledgeStore implements IKnowledgeGraph {
       const head = remoteCore.length as number;
       console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${head}`);
 
-      // v0.7.7.7/.8 — one-time freshness fast-forward, now that `head` is the
-      // synced remote length. See the block above for rationale.
+      // v0.7.7.7/.8/.9 — one-time freshness fast-forward, now that `head` is
+      // the synced remote length. See the block above for rationale.
+      //
+      // v0.7.7.9 — the "is this queen already populated?" signal is the
+      // PERSISTED CURSOR, not the embedder's /stats. During replay the
+      // embedder is GIL-bound serving /add_batch, so /stats times out — and
+      // depending on it created a deadlock (the replay we want to skip is
+      // exactly what stops us deciding to skip it). A cursor well past the
+      // floor means this queen has already processed (and indexed) a large
+      // span of the bee's history, so its Qdrant mirrors the bee and skipping
+      // the backlog to chase the live tail is safe. A fresh queen has
+      // cursor≈0 and correctly does the full backfill. (If you ever wipe
+      // Qdrant, also delete repl_cursors/ — documented in the README — so the
+      // cursor resets to 0 and the backfill re-runs.)
       if (!didFastForward) {
         const current = this.cursorByNode.get(nodeId) ?? initialSeq;
-        if (head - current > FRESHNESS_GAP) {
-          // The embedder is still loading its model for ~30-60s after a
-          // restart and /stats returns nothing in that window. Poll until it
-          // actually answers (>= 0) so we don't mistake "loading" for "empty"
-          // and skip the fast-forward. -1 = unreachable, keep waiting.
-          let indexed = -1;
-          for (let i = 0; i < 18 && indexed < 0; i++) {
-            indexed = await this.embedderCount(embedderUrl);
-            if (indexed < 0) await new Promise(r => setTimeout(r, 5_000));
-          }
-          const target = head - RECENT_WINDOW;
-          if (indexed > POPULATED_FLOOR && target > current) {
-            console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${current} → ${target} (head=${head}, indexed=${indexed}). Historical backlog already in Qdrant; jumping near the tail so new fragments index within seconds.`);
-            await this.saveCursor(nodeId, target); // persists + updates cursorByNode
-          } else {
-            console.log(`[repl] No fast-forward for ${nodeId.slice(0, 16)} (head=${head}, current=${current}, indexed=${indexed}) — doing full backfill.`);
-          }
+        const target = head - RECENT_WINDOW;
+        if (current > POPULATED_FLOOR && head - current > FRESHNESS_GAP && target > current) {
+          console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${current} → ${target} (head=${head}). Established queen; jumping near the tail so new fragments index within seconds.`);
+          await this.saveCursor(nodeId, target); // persists + updates cursorByNode
+        } else {
+          console.log(`[repl] No fast-forward for ${nodeId.slice(0, 16)} (head=${head}, current=${current}) — full backfill.`);
         }
-        didFastForward = true; // decide once, regardless of outcome
+        didFastForward = true; // decide once
       }
 
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
