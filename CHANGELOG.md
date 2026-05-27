@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.6] — 2026-05-26 — *Defensive filter in embedder.add_batch: skip malformed items instead of 500-ing the whole batch*
+
+v0.7.6.5 sped up catch-up dramatically (~25× — cursor advanced from
+40k to 181k in 6 minutes after deploy) but the embedder log lit up
+with `TextEncodeInput must be Union[TextInputSequence, …]`
+TypeErrors from the tokenizer. Some items reaching `add_batch` had
+non-string or empty `text` fields and the sentence-transformers
+`model.encode` raises on the FIRST bad item, failing the entire
+batch with HTTP 500.
+
+The queen has a defensive guard in `_consumeRemoteStream` since
+v0.7.5.2 but it can be defeated by a fragment with weird text
+content the JS-side type check accepts (e.g. a non-empty string
+that's all whitespace, or a string that becomes empty after some
+internal sentence-transformers normalisation).
+
+### Fix
+
+`embedder.py:add_batch` filter now also drops items whose
+`id`/`text` are missing, non-string, or whitespace-only — same
+list as the v0.7.6.5 known-id filter, just stricter. A bad item
+loses, the rest of the batch survives.
+
+```python
+fresh = [
+    it for it in items
+    if isinstance(it.get("id"), str) and it["id"]
+    and it["id"] not in known
+    and isinstance(it.get("text"), str) and it["text"].strip()
+]
+```
+
+### Files touched
+- `packages/embeddings/embedder.py` — tighter filter.
+- `package.json` — 0.7.6.5 → 0.7.6.6.
+
+---
+
 ## [0.7.6.5] — 2026-05-26 — *Filter known IDs in the embedder BEFORE running sentence-transformers (catch-up fast-skip)*
 
 v0.7.6.4 stopped the watcher-loop accumulation and gave us cursor

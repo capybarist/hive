@@ -49,7 +49,16 @@ class EmbeddingEngine:
         known = getattr(self.index, "_known_ids", None)
         if known is None:
             known = getattr(self.index, "_id_to_label", {})
-        fresh = [it for it in items if it["id"] not in known]
+        # Also defend against malformed items here: the queen has its own
+        # client-side guard, but a 500 on the whole batch hurts much more
+        # than silently dropping one bad item, so re-check id + non-empty
+        # string text before letting them near sentence-transformers.
+        fresh = [
+            it for it in items
+            if isinstance(it.get("id"), str) and it["id"]
+            and it["id"] not in known
+            and isinstance(it.get("text"), str) and it["text"].strip()
+        ]
         if not fresh:
             return 0
         texts = [it["text"] for it in fresh]
