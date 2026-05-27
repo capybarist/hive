@@ -11,126 +11,132 @@ A P2P network of autonomous BEEs that extract, sign, and sync knowledge from the
 
 ## Quick start
 
-The recommended deployment is the **full stack via Docker Compose** —
-that gives you a BEE, a queen, Qdrant, and a Caddy reverse proxy all
-wired up. You only need an LLM API key.
+HIVE has two kinds of node:
 
-### 1. Full VPS stack (recommended)
+- **BEE** — *produces* knowledge. Crawls a source (Wikipedia, arXiv,
+  RSS…), extracts verbatim fragments, signs each with ed25519, appends
+  them to its own Hypercore, and replicates to peers. No LLM, no API
+  key, ~150 MB RAM. This is what grows the network.
+- **QUEEN** — *consumes* knowledge. Replicates every BEE it can reach,
+  indexes their fragments into Qdrant, and answers `/api/query` by
+  combining vector search with one LLM synthesis call. Needs an LLM
+  key. This is what you query.
 
+You don't need both. Pick the scenario that matches what you want to do.
+Each one is shown **with Docker** (nothing to install but Docker) and
+**from source** (Node 20+, and Python 3.11+ for a queen).
+
+---
+
+### A · Run a BEE — contribute to the public network
+
+The lightest thing you can run. No key, no LLM, no Python.
+
+**Docker:**
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
-cp .env.example .env
-nano .env                                # paste your LLM_API_KEY
-docker compose up -d                     # caddy + qdrant + bee-1 + queen
+docker compose up -d bee-1            # just the bee, nothing else
 ```
 
-That's it. Open:
-- `http://<your-ip>` → queen UI (via Caddy)
-- `http://<your-ip>:8080` → bee-1 dashboard (extraction activity)
-- `http://<your-ip>:8090` → queen dashboard (Qdrant-backed queries)
-
-> 🔁 **Upgrading from v0.6.x?** Just `git pull && docker compose pull
-> && docker compose up -d`. The service rename `aggregator` → `queen`
-> reuses the existing `aggregator-data` volume — fragments survive.
-> See [CHANGELOG.md](./CHANGELOG.md#070--2026-05-22--bee--queen-role-split)
-> for the full migration table.
-
-Default provider is **Gemini Flash Lite** (free tier covers a 4 GB VPS
-with 1–2 BEEs easily). Get a key in <2 min at
-[aistudio.google.com](https://aistudio.google.com).
-
-#### Add a second BEE
-
-> ⚠️  **Still not recommended on a 4 GB VPS in v0.7.0.** The bee
-> container today carries an embedder + HNSW + sentence-transformers
-> model (~700 MB resident) — the same as in v0.6.x. v0.7.0 only ships
-> the role split scaffolding; HNSW is dropped from bees in v0.7.x once
-> the producer-only mode actually stops talking to the embedder, at
-> which point 2-4 bees fit comfortably on a 4 GB box. Until then,
-> use 8 GB+ VPS for multi-bee deployments.
-
-```bash
-docker compose --profile bee-2 up -d   # 8 GB+ VPS only on v0.6.x
-```
-
-Bee-2 listens on `:8081` and auto-coordinates topics with bee-1 over
-the Hyperswarm P2P network.
-
-#### Run a fully-local LLM (no cloud)
-
-Ollama is **opt-in** since v0.6.4.2 — the default LLM is Gemini, which
-needs a key but covers the free tier with room to spare. If you really
-want zero-cloud:
-
-```bash
-docker compose --profile ollama up -d    # pulls qwen2.5:1.5b on first start
-# then in .env: LLM_PROVIDER=ollama   LLM_MODEL=qwen2.5:1.5b
-```
-
-The `ollama-init` container pulls `qwen2.5:1.5b` (~950 MB) automatically
-on first start. If it fails, pull manually:
-
-```bash
-docker exec hive-ollama ollama pull qwen2.5:1.5b
-```
-
-For a larger (slower, more accurate) model:
-
-```bash
-# In .env:
-OLLAMA_MODEL=qwen2.5:3b   # ~1.9 GB — needs 6 GB+ VPS
-docker compose up -d --force-recreate ollama-init
-```
-
-Ollama adds ~2 GB of RAM and is much slower (~250 frag/h on CPU vs
-several thousand/h on cloud). Use it only if you specifically want
-zero-cloud operation. RAM guide: `qwen2.5:1.5b` ~950 MB → safe on 4 GB
-VPS, `qwen2.5:3b` ~1.9 GB → needs 6 GB+.
-
-### 2. Single node from source
-
-The minimum path — runs a **BEE** (producer-only, ~150 MB, no embedder,
-no LLM, no `/api/query`):
-
+**From source:**
 ```bash
 git clone https://github.com/capybarist/hive.git && cd hive
 npm install
-bash hive.sh                       # bee on :8080 — no .env needed
+bash hive.sh                          # bee on :8080 — no .env needed
 ```
 
-A bee extracts knowledge entirely without an LLM (since v0.6.1 the
-crawl loop is purely mechanical: drain queue → `wikipedia_fetch`
-verbatim → sign → append to Hypercore). It joins the Hyperswarm DHT,
-claims topics from `data/topic_tree.json`, fetches articles, and
-replicates with peers — all on day one, no API key required.
+Open `http://localhost:8080` for the extraction dashboard. The bee
+joins the Hyperswarm DHT on the public topic, claims topics, fetches
+articles, and starts publishing signed fragments immediately. Any queen
+on the network — including the public one — will pick them up.
 
-For **hive** (all-in-one with `/api/query`) or **queen** (query-only),
-you need Python + an embedder + an LLM key (the LLM is used **only**
-to synthesise natural-language answers from verified fragments at
-query time):
+---
 
+### B · Run a QUEEN — query the network
+
+A queen needs an LLM key (synthesis only) and Qdrant for the vector
+index. With Docker, Qdrant comes up automatically.
+
+**Docker:**
 ```bash
-pip install -r packages/embeddings/requirements.txt    # only for hive/queen
+git clone https://github.com/capybarist/hive.git && cd hive
+cp .env.example .env
+# edit .env → set AGGREGATOR_LLM_API_KEY (Gemini/Groq/… key)
+docker compose up -d qdrant queen     # queen + its vector index
+```
+
+**From source:**
+```bash
+git clone https://github.com/capybarist/hive.git && cd hive
+npm install
+pip install -r packages/embeddings/requirements.txt
 echo "LLM_PROVIDER=gemini"        > .env
 echo "LLM_API_KEY=AIza_your_key" >> .env
-
-HIVE_MODE=hive bash hive.sh                            # extractor + queries (dev)
-bash queen.sh                                          # consumer-only with Qdrant (production)
+bash queen.sh                         # queen on :8090, Qdrant auto-started via Docker
 ```
 
-### 3. Launch modes
+Open `http://localhost:8090` for the query dashboard. A fresh queen
+discovers BEEs over Hyperswarm and replicates their history — the
+first catch-up can take a while on a large network, then it tracks
+live.
 
-| Script | `HIVE_MODE` | What it runs | When to use |
-|---|---|---|---|
-| `bash hive.sh` *(default)* | `bee` | Extractor + own Hypercore. No embedder, no LLM, no `/api/query`. | Most people. Contribute to the network. |
-| `HIVE_MODE=hive bash hive.sh` | `hive` | Extractor + embedder + LLM + `/api/query`, all in one process. | Dev, single-machine demos, "I want it all". |
-| `bash queen.sh` | `queen` | Embedder + Qdrant + LLM + `/api/query`. No extractor. | Public query endpoint, vertical-private deployments. |
+Default provider is **Gemini Flash Lite** (free tier is plenty for a
+single queen). Get a key in <2 min at
+[aistudio.google.com](https://aistudio.google.com). See
+[LLM Providers](#llm-providers) for Groq/Claude/OpenAI/Ollama.
 
-The Docker Compose stack runs one bee + one queen by default (see the
-[Quick start](#1-full-vps-stack-recommended) above); the launch scripts
-are for running directly on a host without Docker.
+---
 
-### 4. Dev mode — 3 nodes on one machine
+### C · Run a QUEEN + N BEEs — your own full stack
+
+One command brings up a queen, one bee, Qdrant, and a Caddy reverse
+proxy. This is the default `docker compose up -d` with no service
+named.
+
+**Docker:**
+```bash
+git clone https://github.com/capybarist/hive.git && cd hive
+cp .env.example .env                  # set AGGREGATOR_LLM_API_KEY
+docker compose up -d                  # caddy + qdrant + bee-1 + queen
+
+# add more bees (each coordinates topics over Hyperswarm):
+docker compose --profile bee-2 up -d  # bee-2 on :8081
+```
+
+Open:
+- `http://<host>` → queen UI (via Caddy on :80)
+- `http://<host>:8080` → bee-1 dashboard (what it's extracting)
+- `http://<host>:8090` → queen dashboard (queries against Qdrant)
+
+**From source** (separate terminals or hosts): run one `bash queen.sh`
+and as many `bash hive.sh` as you like — they find each other over the
+DHT automatically, no wiring needed. To split work across bees without
+overlap, give each a scope/partition (see
+[Configuration](#configuration)).
+
+> 💡 **Memory:** a bee is ~150 MB; a queen is ~700 MB (embedder model)
+> plus Qdrant. A queen + 1 bee fits a 2 GB machine; for many bees on
+> one host, budget ~150 MB each.
+
+---
+
+### Fully-local, no cloud (Ollama)
+
+Every scenario above defaults to a cloud LLM (only the queen uses it,
+only at query time). To run the synthesis model locally instead:
+
+```bash
+docker compose --profile ollama up -d         # pulls qwen2.5:1.5b (~950 MB)
+# then in .env:  LLM_PROVIDER=ollama   LLM_MODEL=qwen2.5:1.5b
+```
+
+Local synthesis is much slower (~15–30 s/query on CPU vs ~1–2 s on
+Groq) and adds ~2 GB RAM. Use it when you specifically want zero
+cloud traffic. Bees never touch an LLM either way.
+
+---
+
+### Dev mode — 3 nodes on one machine
 
 ```bash
 bash start.sh                            # 3 nodes on :8080 :8081 :8082
@@ -139,6 +145,19 @@ bash stop.sh --force                     # kill all processes
 ```
 
 Useful for testing P2P + replication locally before deploying.
+
+### The three modes at a glance
+
+| Script | `HIVE_MODE` | Runs | Needs LLM key? | When |
+|---|---|---|---|---|
+| `bash hive.sh` *(default)* | `bee` | Extractor + own Hypercore. No embedder, no `/api/query`. | No | Scenario A — grow the network. |
+| `bash queen.sh` | `queen` | Embedder + Qdrant + LLM + `/api/query`. No extractor. | Yes | Scenario B — query the network. |
+| `HIVE_MODE=hive bash hive.sh` | `hive` | Everything in one process: extract + index + query. | Yes | Dev / single-machine demo. |
+
+> 🔁 **Upgrading from v0.6.x?** `git pull && docker compose pull &&
+> docker compose up -d`. The `aggregator` → `queen` rename reuses the
+> existing `aggregator-data` volume — fragments survive. See
+> [CHANGELOG.md](./CHANGELOG.md#070--2026-05-22--bee--queen-role-split).
 
 ---
 
