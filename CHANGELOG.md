@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.7] — 2026-05-27 — *Fix: freshness fast-forward read the head too early and never fired*
+
+v0.7.7.5 shipped the freshness fast-forward but in production it never
+triggered — the queen kept grinding through history (cursor ~1.4M,
+`indexed` crawling up only as it stumbled on scattered new fragments).
+
+Cause: the fast-forward probed `remoteCore.length` immediately after
+`get({key})` + `ready()`, *before* Hypercore replication had announced
+the peer's length. At that moment `length` is the locally-known value
+(≈0), so `head - cursor` was negative and the condition was always
+false.
+
+Fix: the decision moved into `runStreamOnce`, after
+`remoteCore.update({ wait: true })` (timeout-guarded) pulls the synced
+remote head. Guarded by a `didFastForward` flag so it fires exactly
+once per watcher. Now `head` is the real ~4 M length, the gap check
+passes, and a populated queen jumps to `head - 20 000` as intended.
+
+### Files touched
+- `packages/core/src/knowledge_store.ts` — move fast-forward into
+  `runStreamOnce` after `core.update()`; one-time guard.
+- `package.json` — 0.7.7.6 → 0.7.7.7.
+
+---
+
 ## [0.7.7.6] — 2026-05-27 — *Wider context for richer answers + conversational follow-ups*
 
 User: answers are too terse ("escueto") and there's no way to ask a

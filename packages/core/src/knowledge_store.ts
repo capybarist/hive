@@ -409,7 +409,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
       console.log(`[repl] Resuming ${nodeId.slice(0, 16)} from seq=${initialSeq} (cursor persisted)`);
     }
 
-    // v0.7.7.5 — Freshness fast-forward. A bee's Hypercore is ~8× its
+    // v0.7.7.5/.7 — Freshness fast-forward. A bee's Hypercore is ~8× its
     // fragment count (each fragment writes frag: + src: + dat: index keys,
     // plus supersede history). A queen that already has the bulk indexed in
     // Qdrant but whose cursor is far behind the head would spend HOURS
@@ -420,22 +420,15 @@ export class KnowledgeStore implements IKnowledgeGraph {
     // surfaces within seconds. The skipped range is assumed already indexed;
     // Qdrant dedup covers the RECENT_WINDOW overlap. A fresh/empty queen
     // (indexed below the floor) skips this and does the full backfill.
+    //
+    // v0.7.7.7 — the decision MUST read the synced remote head, not the
+    // local length at open time (which is 0 until replication announces the
+    // peer's length). So it lives inside runStreamOnce after core.update(),
+    // guarded by `didFastForward` so it only fires once per watcher.
     const FRESHNESS_GAP = 200_000;   // only fast-forward past a real backlog
     const RECENT_WINDOW = 20_000;    // re-scan this many blocks before head
     const POPULATED_FLOOR = 100_000; // "already has the bulk" threshold
-    try {
-      const probe = (this.store as any).get({ key: remoteCoreKey });
-      await probe.ready();
-      const head = probe.length as number;
-      if (head - initialSeq > FRESHNESS_GAP) {
-        const indexed = await this.embedderCount(embedderUrl);
-        const target = head - RECENT_WINDOW;
-        if (indexed > POPULATED_FLOOR && target > initialSeq) {
-          console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${initialSeq} → ${target} (head=${head}, indexed=${indexed}). Historical backlog already in Qdrant; jumping near the tail so new fragments index within seconds.`);
-          await this.saveCursor(nodeId, target); // persists + updates cursorByNode
-        }
-      }
-    } catch { /* probe failed — proceed with the normal persisted cursor */ }
+    let didFastForward = false;
     // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
     // fragment Hypercore from offset 0 grew this Set unbounded and burned
     // Node's V8 heap until the api_server OOM-crashed. The qdrant
@@ -471,7 +464,31 @@ export class KnowledgeStore implements IKnowledgeGraph {
       await remoteCore.ready();
       attachConflictHandler(remoteCore, `remote-${nodeId.slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
-      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
+      // Pull the peer's latest head before logging / deciding. Without this,
+      // `length` is the locally-known length (often 0 right after open) and
+      // the freshness fast-forward below never fires. Timeout-guarded so a
+      // silent peer can't wedge the watcher.
+      try {
+        await this.withTimeout(remoteCore.update({ wait: true }), 15_000, 'remoteCore.update');
+      } catch { /* no peer yet / timed out — fall through with whatever length we have */ }
+      const head = remoteCore.length as number;
+      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${head}`);
+
+      // v0.7.7.7 — one-time freshness fast-forward, now that `head` is the
+      // synced remote length. See the block above for rationale.
+      if (!didFastForward) {
+        const current = this.cursorByNode.get(nodeId) ?? initialSeq;
+        if (head - current > FRESHNESS_GAP) {
+          const indexed = await this.embedderCount(embedderUrl);
+          const target = head - RECENT_WINDOW;
+          if (indexed > POPULATED_FLOOR && target > current) {
+            console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${current} → ${target} (head=${head}, indexed=${indexed}). Historical backlog already in Qdrant; jumping near the tail so new fragments index within seconds.`);
+            await this.saveCursor(nodeId, target); // persists + updates cursorByNode
+          }
+        }
+        didFastForward = true; // decide once, regardless of outcome
+      }
+
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();
       // Read peer's BeeManifest (v0.7.3) — once per stream open is enough since
