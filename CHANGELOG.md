@@ -5,6 +5,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.6.5] — 2026-05-26 — *Filter known IDs in the embedder BEFORE running sentence-transformers (catch-up fast-skip)*
+
+v0.7.6.4 stopped the watcher-loop accumulation and gave us cursor
+persistence, but the embedder was **still OOM-killed** ~2 h after the
+deploy. Root cause: `add_batch` in `embedder.py` was running
+`sentence-transformers.encode` on every text in the batch *before*
+checking which IDs were already in Qdrant. Dedup happened inside
+`upsert_batch` AFTER embedding, so the wasted vectors were discarded
+silently.
+
+During queen catch-up of a remote bee's Hypercore, **~99 % of items
+in every batch are already in Qdrant** (we just resumed from a
+cursor, but qdrant still has every historical fragment). The
+embedder was running the transformer model on millions of texts
+whose vectors would be immediately thrown away — at 20 items per
+batch, 384-dim vectors, and CPU-only inference, this ate ~2 GB of
+working set and burned the box's 3.7 GB OOM budget.
+
+### Fix
+
+`embedder.py:add_batch` now snapshots the index's known-id set
+(`_known_ids` for Qdrant, `_id_to_label` keys for HNSW) and **filters
+items BEFORE `embed_batch`**:
+
+```python
+known = getattr(self.index, "_known_ids", None) or \
+        getattr(self.index, "_id_to_label", {})
+fresh = [it for it in items if it["id"] not in known]
+if not fresh:
+    return 0
+texts = [it["text"] for it in fresh]
+vectors = self.embed_batch(texts)
+```
+
+Effects:
+
+- During catch-up, a 20-item batch where all are known returns
+  in microseconds (set lookup × 20) instead of running the
+  transformer.
+- Embedder RAM stays close to baseline (~500 MB model + qdrant
+  client) instead of climbing toward the OOM line.
+- Queen catch-up rate jumps from ~930 seq/min to limited only by
+  Hypercore block I/O. The ~70 h ETA collapses to minutes.
+
+### Why this matters at scale
+
+With hundreds of bees and millions of articles, **every queen
+restart was facing a catch-up storm**: each remote core, each peer
+reconnect, every restart re-ran the transformer on already-known
+content. The new behaviour means a queen only ever embeds what's
+genuinely new to its Qdrant — restart cost scales with **net new
+fragments since last shutdown**, not with the total network history.
+
+### What did NOT change
+
+- API surface (`/add_batch` returns the same shape).
+- HNSW fallback path (was already doing the right thing in the
+  per-item loop; now also skipped earlier).
+- Queen-side code unchanged from v0.7.6.4.
+
+### Files touched
+
+- `packages/embeddings/embedder.py` — one filter pass before
+  `embed_batch`.
+- `package.json` — version 0.7.6.4 → 0.7.6.5.
+
+---
+
 ## [0.7.6.4] — 2026-05-26 — *Cursor persistence + watcher dedup: stop the recurring embedder OOM loop*
 
 Post-demo root-cause fix for the recurring queen instability: the
