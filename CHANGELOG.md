@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.8] — 2026-05-27 — *Fix: fast-forward skipped because the embedder wasn't ready yet at restart*
+
+v0.7.7.7 fixed the head read, but the fast-forward STILL didn't fire in
+production. The logs showed everything right — `len=3966110`, cursor
+≈1.44M, indexed 514k — yet no jump.
+
+Cause: `embedderCount()` calls the embedder's `/stats`, but the embedder
+is still loading its sentence-transformers model for ~30-60 s after a
+restart. During that window `/stats` is unreachable and the old
+`embedderCount` returned `0`, indistinguishable from a genuinely empty
+index — so `indexed > 100 000` was false and the fast-forward was
+skipped (then `didFastForward` latched, never retried).
+
+Fix:
+- `embedderCount` now returns **-1** on failure (unreachable / loading),
+  reserving `0` for a real empty index.
+- The fast-forward polls `embedderCount` up to 18 × 5 s, waiting out the
+  model-load window, and only decides once the embedder actually answers
+  (≥ 0). A populated queen then sees its true count and jumps; a fresh
+  queen sees 0 and does the full backfill (correct).
+- Added a "No fast-forward … doing full backfill" log for the negative
+  case so this is never a silent mystery again.
+
+### Files touched
+- `packages/core/src/knowledge_store.ts` — `embedderCount` -1 sentinel +
+  poll loop in the fast-forward.
+- `package.json` — 0.7.7.7 → 0.7.7.8.
+
+---
+
 ## [0.7.7.7] — 2026-05-27 — *Fix: freshness fast-forward read the head too early and never fired*
 
 v0.7.7.5 shipped the freshness fast-forward but in production it never

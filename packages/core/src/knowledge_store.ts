@@ -344,18 +344,20 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
-  // v0.7.7.5 — how many fragments the embedder already has. Used to decide
+  // v0.7.7.5/.8 — how many fragments the embedder already has. Used to decide
   // whether a queen is "populated enough" to skip historical backfill in
-  // favour of freshness. Returns 0 on any failure (treated as empty → full
-  // backfill, the safe default).
+  // favour of freshness. Returns **-1 on failure** (embedder unreachable /
+  // still loading its model) so callers can distinguish "not ready yet" from
+  // a genuine empty index (0). v0.7.7.7 conflated the two and skipped the
+  // fast-forward during the post-restart model-load window.
   private async embedderCount(embedderUrl: string): Promise<number> {
     try {
       const res = await fetch(`${embedderUrl}/stats`, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) return 0;
+      if (!res.ok) return -1;
       const d = (await res.json()) as { fragments?: number };
-      return typeof d.fragments === 'number' ? d.fragments : 0;
+      return typeof d.fragments === 'number' ? d.fragments : -1;
     } catch {
-      return 0;
+      return -1;
     }
   }
 
@@ -474,16 +476,26 @@ export class KnowledgeStore implements IKnowledgeGraph {
       const head = remoteCore.length as number;
       console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${head}`);
 
-      // v0.7.7.7 — one-time freshness fast-forward, now that `head` is the
+      // v0.7.7.7/.8 — one-time freshness fast-forward, now that `head` is the
       // synced remote length. See the block above for rationale.
       if (!didFastForward) {
         const current = this.cursorByNode.get(nodeId) ?? initialSeq;
         if (head - current > FRESHNESS_GAP) {
-          const indexed = await this.embedderCount(embedderUrl);
+          // The embedder is still loading its model for ~30-60s after a
+          // restart and /stats returns nothing in that window. Poll until it
+          // actually answers (>= 0) so we don't mistake "loading" for "empty"
+          // and skip the fast-forward. -1 = unreachable, keep waiting.
+          let indexed = -1;
+          for (let i = 0; i < 18 && indexed < 0; i++) {
+            indexed = await this.embedderCount(embedderUrl);
+            if (indexed < 0) await new Promise(r => setTimeout(r, 5_000));
+          }
           const target = head - RECENT_WINDOW;
           if (indexed > POPULATED_FLOOR && target > current) {
             console.log(`[repl] Freshness fast-forward for ${nodeId.slice(0, 16)}: seq ${current} → ${target} (head=${head}, indexed=${indexed}). Historical backlog already in Qdrant; jumping near the tail so new fragments index within seconds.`);
             await this.saveCursor(nodeId, target); // persists + updates cursorByNode
+          } else {
+            console.log(`[repl] No fast-forward for ${nodeId.slice(0, 16)} (head=${head}, current=${current}, indexed=${indexed}) — doing full backfill.`);
           }
         }
         didFastForward = true; // decide once, regardless of outcome
