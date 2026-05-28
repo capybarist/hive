@@ -48,6 +48,6 @@ ENV HIVE_PORT=8080
 ENV HIVE_DATA_DIR=/hive/data/bee
 
 HEALTHCHECK --interval=30s --timeout=5s \
-  CMD curl -f http://localhost:8080/api/status || exit 1
+  CMD bash -c 'curl -f http://localhost:${HIVE_PORT:-8080}/api/status' || exit 1
 
 CMD ["bash", "hive.sh"]
