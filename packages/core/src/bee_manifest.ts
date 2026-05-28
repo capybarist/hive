@@ -69,6 +69,18 @@ export interface BeeManifest {
   version: string;
   /** ISO timestamp when this manifest was written. */
   published_at: string;
+
+  // ── v0.8 — embedding + schema standard this BEE produces ──
+  // Queens use these to verify a bee's vectors are comparable with the
+  // network standard before indexing them (producer-side vectorization).
+  /** e.g. "intfloat/multilingual-e5-base". Must match the network standard. */
+  embedding_model?: string;
+  /** e.g. 768. */
+  embedding_dim?: number;
+  /** Deterministic chunker version (corroboration needs identical chunking). */
+  chunker_version?: string;
+  /** Fragment schema version this bee writes (2 = v0.8). */
+  schema_version?: number;
 }
 
 /**
