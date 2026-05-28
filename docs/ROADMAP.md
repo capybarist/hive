@@ -45,6 +45,25 @@ These were working in v0.7 and the migration silently broke them. Priority is
   *Shape:* rewrite the script for v0.8 (`npm install && bash hive.sh`, no
   pip), or remove the bin entry from `package.json` and document `bash
   hive.sh` as the canonical path.
+- **🆕 NPM-installable HIVE (no git, no Docker)** — the v0.8 stack is 100 %
+  Node, so we *can* finally ship HIVE as a real NPM package: `npm install -g
+  @capybarist/hive` (or `npx @capybarist/hive`) and run a queen / bee / hive
+  node end-to-end without cloning the repo and without Docker. This is
+  separate from the `npx hive-bee` regression above — that one fixes the
+  in-repo helper, this one **publishes HIVE itself** so anyone with Node 22+
+  can spin it up in a single command.
+  *Shape:*
+  - A new `@capybarist/hive` workspace package that bundles the api_server +
+    a small `hive` CLI (`hive run bee | queen | hive` + `hive settings` once
+    §3 ships).
+  - First-run wizard that creates the data dir, generates an ed25519
+    identity, downloads the e5-base ONNX weights to a user cache, writes a
+    starter manifest, and starts the node.
+  - Native deps (rocksdb-native, sodium-native) ship via prebuilds; fall
+    back to `node-gyp` build with a clear message if a prebuild is missing.
+  - Publish to the public npm registry under `@capybarist/`.
+  - Updates the README quickstart so the "from source" path becomes one
+    `npm install -g` line (Docker stays as the alternative).
 - **Generic web crawler regression** — `packages/agent/src/forager/web_source.ts`
   is alive in code but no caller dispatches non-Wikipedia URLs to it. In v0.6
   the forager had a generic "URL doesn't fall to a specialised adapter →
