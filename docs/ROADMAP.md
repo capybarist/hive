@@ -53,6 +53,15 @@ These were working in v0.7 and the migration silently broke them. Priority is
   *Shape:* add a URL→adapter dispatcher to `autonomous_extractor` so external
   links discovered during a crawl can hand off to WebSource. Useful first for
   the Wikipedia adapter (lots of outbound non-wiki links).
+- **arXiv adapter backoff hardening** — the adapter's 2 attempts × 5 s
+  backoff isn't enough once a box has been rate-limited by an arXiv 429.
+  Discovered while standing up bee-2 (the adapter code is correct, queries
+  are well-formed, but arXiv's rate window punished the CI-driven deploy
+  churn). Each deploy and every crawl cycle compounds it.
+  *Shape:* honour the `Retry-After` header arXiv sends with 429, persist a
+  cooldown across cycles (file in `data/`), exponential up to ~30 min.
+  Until this lands, bee-2 uses RSS — flip `HIVE_SOURCES` back to `arxiv` in
+  compose once the cooldown logic ships.
 
 ---
 

@@ -126,13 +126,18 @@ services:
       - HIVE_PORT=8081
       - HIVE_DATA_DIR=/hive/data
       - HIVE_API_URL=http://bee-2:8081
-      # ── Manifest knobs — bee-2 is an arXiv specialist on ML papers ──
-      - HIVE_SOURCES=${BEE2_SOURCES:-arxiv}
+      # ── Manifest knobs — bee-2 is an RSS news specialist (BBC World) to
+      # exercise multi-bee with a wholly different adapter, fragment shape,
+      # and refresh cadence vs bee-1 (Wikipedia). arXiv was the original
+      # choice but the arXiv API rate-limited the box at every deploy; the
+      # adapter is correct (verified in v0.8.3 fix) — backoff hardening is on
+      # the roadmap, switch HIVE_SOURCES back to "arxiv" once that lands.
+      - HIVE_SOURCES=${BEE2_SOURCES:-rss}
       - HIVE_POLICY=${BEE2_POLICY:-exclusive}
-      - HIVE_SCOPE=${BEE2_SCOPE:-{"categories":["cs.LG","cs.AI","cs.CL"]}}
+      - HIVE_SCOPE=${BEE2_SCOPE:-{"feeds":["https://feeds.bbci.co.uk/news/world/rss.xml"]}}
       - HIVE_LANGUAGES=${BEE2_LANGUAGES:-en}
       - HIVE_BEE_REPLICATE=${BEE2_REPLICATE:-none}
-      - HIVE_OBJECTIVE=${BEE2_OBJECTIVE:-machine learning research}
+      - HIVE_OBJECTIVE=${BEE2_OBJECTIVE:-current world news}
       - HIVE_EXTRACT_INTERVAL_MS=${BEE2_INTERVAL_MS:-60000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${BEE2_MAX_FRAGS:-6}
       - HIVE_EXTRACT_BUDGET_MINUTES=${BEE2_BUDGET_MIN:-15}
