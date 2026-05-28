@@ -12,7 +12,7 @@ import {
 } from '@hive/core';
 import type { PeerMeta, BeeManifest } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
-import { runAutonomousExtraction, discoverObjective } from '@hive/agent';
+import { runAutonomousExtraction } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -500,31 +500,29 @@ if (IS_QUEEN) {
 }
 
 // ── Extractor setup (bee + hive) ───────────────────────────────────────────
-let resolvedObjective = HAS_EXTRACTOR ? HIVE_OBJECTIVE : '';
-if (HAS_EXTRACTOR && !resolvedObjective) {
-  logEvent('start', 'No HIVE_OBJECTIVE — assigning topics from knowledge tree...');
-  try {
-    resolvedObjective = await discoverObjective([], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
-    logEvent('start', `Assigned objective: "${resolvedObjective}"`);
-  } catch (e: any) {
-    logEvent('error', `Topic assignment failed: ${e.message}`);
-  }
+// v0.8 — manifest-driven seeding. HIVE_OBJECTIVE wins when explicitly set; the
+// fallback derives from the bee's BeeManifest (partition → scope → adapter
+// default) so an operator who only declared sources still gets a sensible
+// crawl seed without needing the old topic_tree.json fallback. Soft topic
+// domain (HIVE_TOPIC_DOMAIN) is still honoured for adapter selection later in
+// the cycle.
+function deriveObjectiveFromManifest(): string {
+  const sources = buildDeclaredSources();
+  if (sources.length === 0) return 'general knowledge';
+  const s = sources[0];
+  if (s.partition) return s.partition.replace(/^Category:/i, '');
+  const scope = (s.scope ?? {}) as Record<string, unknown>;
+  if (typeof scope.category_tree === 'string') return scope.category_tree.replace(/^Category:/i, '');
+  if (Array.isArray(scope.categories) && scope.categories.length > 0) return (scope.categories as string[]).join(' ');
+  if (Array.isArray(scope.domains) && scope.domains.length > 0) return (scope.domains as string[])[0]!;
+  if (HIVE_TOPIC_DOMAIN) return HIVE_TOPIC_DOMAIN;
+  return s.id.startsWith('wikipedia') ? 'science' : 'general knowledge';
 }
 
-if (HAS_EXTRACTOR && resolvedObjective) {
-  try {
-    const { loadTree } = await import('@hive/core');
-    const leaves = loadTree();
-    const objLower = resolvedObjective.toLowerCase();
-    const matched = leaves.filter(leaf =>
-      leaf.keywords.some(kw => objLower.includes(kw.toLowerCase())) ||
-      objLower.includes(leaf.name_en.toLowerCase())
-    ).slice(0, 5);
-    for (const leaf of matched) {
-      await claimRegistry.claim(leaf.id, identity.nodeId);
-    }
-    if (matched.length) logEvent('start', `Registered ${matched.length} claims (replicated via Hypercore to all peers)`);
-  } catch { /* topic tree not available yet */ }
+let resolvedObjective = HAS_EXTRACTOR ? HIVE_OBJECTIVE : '';
+if (HAS_EXTRACTOR && !resolvedObjective) {
+  resolvedObjective = deriveObjectiveFromManifest();
+  logEvent('start', `No HIVE_OBJECTIVE — seeded from manifest: "${resolvedObjective}"`);
 }
 
 // ── LLM health tracking ───────────────────────────────────────────────────
@@ -562,14 +560,11 @@ const runLoop = async () => {
       logEvent('start', `Starting cycle: ${activeClaims.length}/${claims.length} topics, ~${fragsPerTopic} frags each`);
 
       for (const claim of activeClaims) {
-        let topicObjective = resolvedObjective;
-        if (claim.topicId !== 'default') {
-          try {
-            const { loadTree, buildObjectiveFromTopics } = await import('@hive/core');
-            const leaf = loadTree().find(t => t.id === claim.topicId);
-            if (leaf) topicObjective = buildObjectiveFromTopics([leaf]);
-          } catch { /* use resolved */ }
-        }
+        // v0.8 — partition claims look like "<source_id>:<partition_key>"; the
+        // autonomous_extractor reads partition info from the BeeManifest itself
+        // and overrides the seed accordingly. Everything else just uses the
+        // resolved objective (no more topic_tree leaf lookup).
+        const topicObjective = resolvedObjective;
 
         logEvent('start', `Topic: ${claim.topicId}`);
         const topicMaxMin = Math.ceil(EXTRACT_BUDGET_MINUTES / activeClaims.length);
@@ -612,12 +607,8 @@ async function startExtractionIfReady() {
     logEvent('start', 'LLM not configured — queries will fail, but extraction proceeds.');
   }
   if (!resolvedObjective) {
-    try {
-      resolvedObjective = await discoverObjective([], '', identity.nodeId, DATA_DIR, 3, claimRegistry, HIVE_TOPIC_DOMAIN || undefined);
-      logEvent('start', `Assigned objective: "${resolvedObjective}"`);
-    } catch (e: any) {
-      logEvent('error', `Topic assignment failed: ${e.message}`);
-    }
+    resolvedObjective = deriveObjectiveFromManifest();
+    logEvent('start', `Seeded objective from manifest: "${resolvedObjective}"`);
   }
   if (!resolvedObjective) return;
 

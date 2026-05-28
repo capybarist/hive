@@ -33,10 +33,6 @@ RUN npm install
 # ── Source ──────────────────────────────────────────────────────────────────
 COPY . .
 
-# topic_tree.json lives outside the data volume so it survives mounts.
-# The code looks for /hive/topic_tree.json regardless of HIVE_DATA_DIR.
-RUN cp data/topic_tree.json topic_tree.json
-
 # ── Warm the e5-base ONNX int8 model at build time ──────────────────────────
 # Otherwise every fresh container re-downloads ~200 MB on first request,
 # which makes the first /api/query (or first bee extraction) a 30s wait.

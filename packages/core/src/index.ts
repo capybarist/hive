@@ -5,8 +5,6 @@ export { HiveP2PNode } from './p2p_node.js';
 export { ClaimRegistry } from './claim_registry.js';
 export { PeerRegistry } from './peer_registry.js';
 export type { PeerMeta } from './p2p_node.js';
-export { assignTopics, buildObjectiveFromTopics, loadTree } from './topic_assignment.js';
-export type { TopicNode } from './topic_assignment.js';
 export { createLLMProvider, isLLMConfigured, validateLLMKey } from './llm_provider.js';
 export type { LLMProvider, LLMMessage, MessagePart, ToolDef, ToolCall, GenerateOptions, GenerateResult } from './llm_provider.js';
 export { buildDeclaredSources } from './bee_manifest.js';

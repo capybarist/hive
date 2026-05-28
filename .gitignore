@@ -32,8 +32,6 @@ data/claim_registry/
 data/crawl_queue.jsonl
 data/crawl_visited.jsonl
 data/.runtime.env
-# topic_tree.json IS committed (it's source data, not runtime)
-!data/topic_tree.json
 
 # Model cache (downloaded by sentence-transformers / HuggingFace)
 .cache/
