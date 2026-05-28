@@ -5,6 +5,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.7.12] — 2026-05-27 — *Graceful shutdown: stop forking the Hypercore on container stop*
+
+Root-cause fix for the 2026-05-27 fork incident. The bee's fragments
+core forked (two signed roots for length 3,966,110), which permanently
+broke the queen's replication and froze `indexed`. Investigation
+traced it to abrupt container kills: the ~15 rapid redeploys today each
+recreated the bee container, and the bee's node process was
+**SIGKILLed mid-Hypercore-append** without flushing — on the next start
+the corestore rolled back and re-appended different content → fork.
+
+Why an abrupt kill happened at all: the container's PID 1 was
+`exec tail -f` (the log streamer in hive.sh/queen.sh), so Docker's
+SIGTERM went to `tail`, not to node. Node never got a chance to close
+its corestore; it was force-killed after the grace period.
+
+### Fix (three parts)
+
+1. **`api_server.ts`** — a `SIGTERM`/`SIGINT` handler that closes the
+   stores cleanly (`app.close` → `p2pNode.stop` → `claimRegistry.close`
+   → `knowledgeStore.close`, flushing the corestore), with a 25 s
+   force-exit guard.
+2. **`hive.sh` / `queen.sh`** — node is now started with `exec` in a
+   subshell so `$!` is its real PID; the launcher traps SIGTERM/SIGINT
+   and forwards it to node, then waits for node to exit before stopping
+   (replaces `exec tail`, which hid node from signals).
+3. **`docker-compose.yml`** — `stop_grace_period: 40s` on bee-1, bee-2,
+   queen so the clean shutdown has time to finish before SIGKILL.
+
+### Recovery applied to production
+
+The already-forked state was repaired by purging the QUEEN's replica of
+the bee core (corestore + repl_cursors; identity + Qdrant preserved) and
+letting it re-download the bee's current, consistent history. The bee
+was untouched (its core is internally fine; only the queen's cached copy
+had diverged). Queries kept working throughout (Qdrant is separate).
+
+### Files touched
+- `packages/api/src/api_server.ts`, `hive.sh`, `queen.sh`,
+  `docker-compose.yml`, `package.json` (0.7.7.11 → 0.7.7.12).
+
+---
+
 ## [0.7.7.11] — 2026-05-27 — *Revert the freshness fast-forward — it silently dropped recent fragments*
 
 Testing exposed that "The Go! Team", which the bee had recently

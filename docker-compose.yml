@@ -119,6 +119,10 @@ services:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-1
     restart: unless-stopped
+    # v0.7.7.12 — give the node process time to flush its Hypercore on stop
+    # (the launcher forwards SIGTERM to it). Without this, abrupt kills forked
+    # the bee's fragments core. Default is 10s; 40s is ample headroom.
+    stop_grace_period: 40s
     environment:
       # v0.7: explicit producer role. Disables /api/query and remote-core
       # replication; keeps extractor + local Hypercore + embedder.
@@ -162,6 +166,7 @@ services:
     container_name: hive-bee-2
     profiles: ["bee-2"]
     restart: unless-stopped
+    stop_grace_period: 40s   # v0.7.7.12 — clean Hypercore flush on stop
     environment:
       - HIVE_MODE=bee
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
@@ -195,6 +200,7 @@ services:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-queen
     restart: unless-stopped
+    stop_grace_period: 40s   # v0.7.7.12 — clean Hypercore flush on stop
     command: ["bash", "queen.sh"]
     networks:
       default:

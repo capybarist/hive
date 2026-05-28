@@ -177,10 +177,12 @@ EOF
   # queen replays a bee's Hypercore from offset 0, plus the replication
   # buffer and remote manifests. The 4 GB box has plenty of headroom; the
   # limit was Node's own heap, not the container.
+  # `exec` so $! is node's real PID for the signal-forwarding trap (v0.7.7.12).
   ( cd packages/api && unset LLM_API_KEY LLM_PROVIDER LLM_MODEL && \
-    HIVE_MODE=queen NODE_OPTIONS="--max-old-space-size=2560" nohup node --env-file="$tmp_env" \
+    HIVE_MODE=queen NODE_OPTIONS="--max-old-space-size=2560" exec node --env-file="$tmp_env" \
       --import tsx/esm src/api_server.ts \
-      > /tmp/hive_queen.log 2>&1 & )
+      > /tmp/hive_queen.log 2>&1 ) &
+  NODE_PID=$!
 
   for i in $(seq 1 20); do
     alive "http://127.0.0.1:$PORT/api/status" && break
@@ -217,5 +219,18 @@ else
   err "Queen failed to start. Check /tmp/hive_queen.log"
 fi
 
-# Keep the container alive and stream logs to stdout.
+# Keep the container alive, stream logs, AND forward stop signals to node so it
+# closes its corestore cleanly (v0.7.7.12 — see hive.sh for the full rationale;
+# prevents Hypercore forks from abrupt container kills).
+if [ -n "${NODE_PID:-}" ]; then
+  trap 'echo "[queen.sh] stop signal — forwarding SIGTERM to node ($NODE_PID)"; kill -TERM "$NODE_PID" 2>/dev/null' TERM INT
+  tail -f /tmp/hive_queen.log /tmp/hive_embedder.log &
+  TAIL_PID=$!
+  while kill -0 "$NODE_PID" 2>/dev/null; do
+    wait "$NODE_PID" 2>/dev/null || true
+  done
+  kill "$TAIL_PID" 2>/dev/null || true
+  exit 0
+fi
+
 exec tail -f /tmp/hive_queen.log /tmp/hive_embedder.log

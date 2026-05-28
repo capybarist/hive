@@ -845,3 +845,32 @@ try {
 // No HTTP announcement to a bootstrap peer since v0.6.4 — Hyperswarm
 // discovery + the Protomux `hive/meta/v1` channel cover everything that
 // /api/register-peer used to do.
+
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+// v0.7.7.12 — without this, a `docker stop`/redeploy killed the node process
+// mid-Hypercore-append. The corestore was left inconsistent, so on the next
+// start it rolled back and re-appended different content → a FORK (two signed
+// roots for the same length) that permanently broke the queen's replication of
+// the bee (the 2026-05-27 incident). Closing the corestore on SIGTERM flushes
+// pending appends durably before exit. Requires the launcher (hive.sh) to
+// forward SIGTERM here — the container's PID 1 is the launcher, not node — and
+// a docker `stop_grace_period` long enough for this to finish.
+let _shuttingDown = false;
+async function gracefulShutdown(sig: string): Promise<void> {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[shutdown] ${sig} received — closing stores cleanly…`);
+  const force = setTimeout(() => {
+    console.warn('[shutdown] timed out after 25s — forcing exit');
+    process.exit(1);
+  }, 25_000);
+  try { await app.close(); } catch (e: any) { console.warn(`[shutdown] app.close: ${e?.message ?? e}`); }
+  try { await p2pNode.stop(); } catch (e: any) { console.warn(`[shutdown] p2pNode.stop: ${e?.message ?? e}`); }
+  try { await claimRegistry.close(); } catch (e: any) { console.warn(`[shutdown] claimRegistry.close: ${e?.message ?? e}`); }
+  try { await knowledgeStore.close(); } catch (e: any) { console.warn(`[shutdown] knowledgeStore.close: ${e?.message ?? e}`); }
+  clearTimeout(force);
+  console.log('[shutdown] stores closed — exiting cleanly');
+  process.exit(0);
+}
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });

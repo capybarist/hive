@@ -159,8 +159,11 @@ HIVE_EXTRACT_MAX_FRAGMENTS=$MAX_FRAGS
 HIVE_EXTRACT_INTERVAL_MS=$INTERVAL_MS
 EOF
 
-  ( cd packages/api && nohup node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
-      > "/tmp/hive_api.log" 2>&1 & )
+  # `exec` so the subshell BECOMES node → $! is node's real PID, which the
+  # signal-forwarding trap below uses to shut it down cleanly (v0.7.7.12).
+  ( cd packages/api && exec node --env-file="$tmp_env" --import tsx/esm src/api_server.ts \
+      > "/tmp/hive_api.log" 2>&1 ) &
+  NODE_PID=$!
 
   for i in $(seq 1 20); do
     alive "http://127.0.0.1:$PORT/api/status" && break
@@ -195,7 +198,31 @@ else
 fi
 echo ""
 
-# Keep the foreground process alive and stream logs to stdout.
+# Keep the foreground process alive, stream logs, AND forward container stop
+# signals to node so it flushes its corestore before exit.
+# v0.7.7.12 — was `exec tail`, which made tail PID 1; node was then SIGKILLed
+# without a chance to close its Hypercore cleanly, which forked the bee's core
+# (the 2026-05-27 incident). Now: trap SIGTERM/SIGINT → forward to node → wait
+# for node's graceful shutdown to finish. Needs docker `stop_grace_period`
+# longer than the node shutdown (compose sets 30s).
+if [ -n "${NODE_PID:-}" ]; then
+  trap 'echo "[hive.sh] stop signal — forwarding SIGTERM to node ($NODE_PID)"; kill -TERM "$NODE_PID" 2>/dev/null' TERM INT
+  if [ "$NEEDS_EMBEDDER" = "true" ]; then
+    tail -f /tmp/hive_api.log /tmp/hive_embedder.log &
+  else
+    tail -f /tmp/hive_api.log &
+  fi
+  TAIL_PID=$!
+  # `wait` returns when the trap fires; loop until node has truly exited so we
+  # don't let the container stop before the clean shutdown finishes.
+  while kill -0 "$NODE_PID" 2>/dev/null; do
+    wait "$NODE_PID" 2>/dev/null || true
+  done
+  kill "$TAIL_PID" 2>/dev/null || true
+  exit 0
+fi
+
+# Fallback (node PID unknown): original behaviour.
 if [ "$NEEDS_EMBEDDER" = "true" ]; then
   exec tail -f /tmp/hive_api.log /tmp/hive_embedder.log
 else
