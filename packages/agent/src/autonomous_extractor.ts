@@ -32,6 +32,12 @@ export type { BudgetConfig } from './budget_controller.js';
 
 export interface ExtractionResult {
   fragmentsIndexed: number;
+  /** Items that an adapter emitted but the bee already had a fresh-TTL copy of. */
+  skippedFresh: number;
+  /** Per-VerbatimFragment build/save errors during this cycle. */
+  errors: number;
+  /** Cumulative total of locally-signed fragments after the cycle (for dashboards). */
+  totalLocal: number;
   summary: string;
   budget: ReturnType<BudgetController['summary']>;
 }
@@ -177,6 +183,8 @@ export async function runAutonomousExtraction(
   await warmupEmbedder();
 
   let fragmentsIndexed = 0;
+  let skippedFresh = 0;
+  let errors = 0;
   let finalSummary = '';
 
   // ── Manifest-driven source selection (v0.7.5+) ───────────────────────────
@@ -208,6 +216,7 @@ export async function runAutonomousExtraction(
     const sourceType = sourceTypeFor(adapterId);
     if (await isFresh(store, vf, ttlSecondsFor(sourceType))) {
       console.log(`  [skip-fresh] ${vf.id}`);
+      skippedFresh++;
       return;
     }
     try {
@@ -217,6 +226,7 @@ export async function runAutonomousExtraction(
       if (n > 0) console.log(`  [+] Indexed: ${vf.id} → ${n} chunk${n === 1 ? '' : 's'}`);
     } catch (e: any) {
       console.warn(`[v0.8] Build/save failed for ${vf.id}: ${e?.message ?? e}`);
+      errors++;
     }
   };
 
@@ -365,14 +375,24 @@ export async function runAutonomousExtraction(
     }
   }
 
+  // Read the Hypercore-resident total so the runLoop log carries "I signed X
+  // overall" alongside the per-cycle delta — the contextualising signal a bee
+  // operator wants when most cycles legitimately produce 0 (RSS sources hit
+  // their TTL fast).
+  const totalLocal = store.localFragmentCount;
+
   if (!finalSummary) {
-    finalSummary = `Crawl cycle complete. Indexed ${fragmentsIndexed} new fragments. Queue: ${crawlQueue.size()}, visited: ${crawlQueue.visitedSize()}.`;
+    const parts: string[] = [`Indexed ${fragmentsIndexed} new`];
+    if (skippedFresh > 0) parts.push(`${skippedFresh} already fresh`);
+    if (errors > 0) parts.push(`${errors} errors`);
+    parts.push(`${totalLocal} total signed`);
+    finalSummary = `Crawl cycle complete: ${parts.join(' · ')}. Queue: ${crawlQueue.size()}, visited: ${crawlQueue.visitedSize()}.`;
   }
   console.log(`\n[done] ${finalSummary}`);
 
   await crawlQueue.flush();
   if (ownStore) await store.close();
-  return { fragmentsIndexed, summary: finalSummary, budget: budget.summary() };
+  return { fragmentsIndexed, skippedFresh, errors, totalLocal, summary: finalSummary, budget: budget.summary() };
 }
 
 // ── CLI entry ────────────────────────────────────────────────────────────────

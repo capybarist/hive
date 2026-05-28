@@ -137,7 +137,10 @@ services:
       # Multiple feeds so the extractor cycles through distinct content sources
       # each iteration instead of constantly re-skipping a single freshly-cached
       # feed. The autonomous_extractor picks one feed at random per cycle.
-      - HIVE_SCOPE=${BEE2_SCOPE:-{"feeds":["https://feeds.bbci.co.uk/news/world/rss.xml","https://feeds.bbci.co.uk/news/technology/rss.xml","https://www.theguardian.com/world/rss","https://feeds.arstechnica.com/arstechnica/index","https://feeds.npr.org/1004/rss.xml"]}}
+      # Swapped out The Guardian feed: fast-xml-parser blows up parsing it
+      # ("Entity expansion limit exceeded: 1008 > 1000") on every cycle that
+      # picks it. Hacker News frontpage takes its slot — high churn, reliable.
+      - HIVE_SCOPE=${BEE2_SCOPE:-{"feeds":["https://feeds.bbci.co.uk/news/world/rss.xml","https://feeds.bbci.co.uk/news/technology/rss.xml","https://hnrss.org/frontpage","https://feeds.arstechnica.com/arstechnica/index","https://feeds.npr.org/1004/rss.xml"]}}
       - HIVE_LANGUAGES=${BEE2_LANGUAGES:-en}
       - HIVE_BEE_REPLICATE=${BEE2_REPLICATE:-none}
       - HIVE_OBJECTIVE=${BEE2_OBJECTIVE:-current world news}

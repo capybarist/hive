@@ -597,6 +597,8 @@ const runLoop = async () => {
     extracting = true;
     nextCycleAt = null;
     let totalIndexed = 0;
+    let cycleSkippedFresh = 0;
+    let cycleErrors = 0;
 
     try {
       const released = await claimRegistry.releaseExpired();
@@ -640,9 +642,12 @@ const runLoop = async () => {
             ),
           ]);
           totalIndexed += result.fragmentsIndexed;
+          cycleSkippedFresh += result.skippedFresh ?? 0;
+          cycleErrors += result.errors ?? 0;
           await claimRegistry.claim(claim.topicId, identity.nodeId, claim.fragmentCount + result.fragmentsIndexed);
         } catch (e: any) {
           logEvent('error', `Topic ${claim.topicId}: ${e.message}`);
+          cycleErrors++;
         }
       }
     } catch (e: any) {
@@ -650,7 +655,17 @@ const runLoop = async () => {
     } finally {
       extracting = false;
       nextCycleAt = Date.now() + EXTRACT_INTERVAL_MS;
-      logEvent('done', `Cycle complete: ${totalIndexed} fragments`);
+      // v0.8.5 — the old "Cycle complete: 0 fragments" read like the bee was
+      // idle even when it had just processed dozens of fresh-cached items.
+      // Include the cache-hit count, the error count and the cumulative
+      // locally-signed total so the dashboard activity log actually tells the
+      // operator what happened.
+      const localTotal = HAS_LOCAL_STORE ? knowledgeStore.localFragmentCount : 0;
+      const parts: string[] = [`${totalIndexed} new`];
+      if (cycleSkippedFresh > 0) parts.push(`${cycleSkippedFresh} already fresh`);
+      if (cycleErrors > 0) parts.push(`${cycleErrors} errors`);
+      parts.push(`${localTotal} total signed`);
+      logEvent('done', `Cycle: ${parts.join(' · ')}`);
       logEvent('start', `Next cycle in ${Math.round(EXTRACT_INTERVAL_MS / 60_000)}min`);
       setTimeout(runLoop, EXTRACT_INTERVAL_MS);
     }

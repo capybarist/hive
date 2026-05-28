@@ -92,6 +92,22 @@ These were working in v0.7 and the migration silently broke them. Priority is
   *Shape:* tighter slugger that strips Wiki markup leftovers and caps length
   before forming the id.
 - **Settings UI in the node web** *(big new direction — see §3)*.
+- **Bee dashboard ≠ queen dashboard** — `packages/ui/index.html` is one HTML
+  served by both roles, so a bee currently shows "0 indexed" (the queen's
+  LanceDB count, always zero on producers) and proxies the queen-side widgets.
+  Operators looking at a bee dashboard want to see *what it just signed* and
+  *how its Hypercore is growing*, not the queen's view.
+  *Shape:* a real bee-mode view: `local_fragments` counter (already in
+  /api/status since v0.8.4), a "recently signed" list (tail of the local
+  Hyperbee), per-cycle stats (new / fresh-cached / errors), and the BeeManifest
+  it's running with. Suppress the queen widgets when `mode === 'bee'`.
+- **RSS adapter — XML parser hardening** — Guardian's RSS feed trips
+  `fast-xml-parser`'s entity expansion limit ("1008 > 1000") and the whole
+  cycle returns zero items. Other "well-formed-ish" feeds will hit the same
+  wall.
+  *Shape:* configure the parser to raise/disable the entity limit, or fall
+  back to a more permissive parser (`@xmldom/xmldom`) per-feed when it fires.
+  Until then, Guardian and similar feeds are off the default list.
 - **Newest-first indexing on the queen** — was a v0.7 idea blocked by the
   Hypercore fork bug. v0.8 fresh cores make it less urgent (we see 16 k →
   20 k indexed within minutes after a restart), but it would still smooth
