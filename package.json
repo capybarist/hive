@@ -1,6 +1,6 @@
 {
   "name": "hive-network",
-  "version": "0.7.7.12",
+  "version": "0.8.0",
   "description": "HIVE — Decentralized verifiable knowledge base for LLMs",
   "license": "BUSL-1.1",
   "repository": {
@@ -11,17 +11,20 @@
     "hive-bee": "bin/hive-bee"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "workspaces": [
     "packages/core",
     "packages/agent",
     "packages/api",
-    "packages/embeddings"
+    "packages/embeddings-node"
   ],
   "scripts": {
     "start": "bash hive.sh",
     "start:dev": "bash start.sh",
     "clean": "bash start.sh --clean"
+  },
+  "devDependencies": {
+    "tsx": "4.19.2"
   }
 }

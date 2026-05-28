@@ -1,30 +1,25 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# HIVE — Queen launcher (v0.7+, renamed from aggregator.sh)
+# HIVE v0.8 — Queen launcher.
 #
-# Starts a HIVE queen node: connects to the P2P network, indexes all
-# fragments from every BEE it follows, and exposes a public query API.
-# No extraction — read-only from the network's perspective.
+# Starts a HIVE queen: joins Hyperswarm, replicates bee Hypercores into an
+# in-process LanceDB, embeds only the query (e5-base ONNX int8) and serves
+# /api/query + LLM synthesis.
 #
-# The queen is what v0.6 called "aggregator". The rename keeps the bee
-# metaphor consistent: bees forage, queens organise. See CLAUDE.md
-# v0.7.0 section for the full rationale.
+# v0.8 cuts the Python embedder + the standalone Qdrant container. Everything
+# is one node process — `HIVE_MODE=queen bash hive.sh` would do the same job
+# verbatim; this launcher just prints a queen-flavoured banner and waits.
 #
 # Usage:
-#   bash queen.sh                                      # HNSW mode (testing)
-#   QDRANT_URL=http://localhost:6333 bash queen.sh     # Qdrant mode (production)
+#   bash queen.sh                       # queen on default :8090
 #
-# Required env:
-#   LLM_PROVIDER=gemini|claude|openai|groq   (default: gemini)
-#   LLM_API_KEY=your_api_key_here       (for synthesis queries)
+# Required env (for synthesis):
+#   LLM_PROVIDER=gemini|claude|openai|groq   (default: groq — fast public path)
+#   LLM_API_KEY=your_api_key_here
 #
 # Optional env:
-#   QDRANT_URL          Qdrant server URL. If set, uses Qdrant backend.
-#                       If not set, uses in-process HNSW (testing only).
 #   HIVE_PORT           API port (default: 8090)
-#   HIVE_EMBEDDER_PORT  Embedder port (default: 7790)
 #   HIVE_DATA_DIR       Data directory (default: ~/.hive-queen)
-#   HIVE_PEER           Bootstrap BEE URL to connect on startup
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 cd "$(dirname "$(realpath "$0")")"
@@ -39,115 +34,31 @@ info(){ echo -e "${C}ℹ${N} $1"; }
 
 alive() { curl -s --max-time 2 "$1" 2>/dev/null | grep -q '"ok"\|"status"\|"indexed"'; }
 
-# ── Config ────────────────────────────────────────────────────────────────────
 PORT="${HIVE_PORT:-8090}"
-EMB_PORT="${HIVE_EMBEDDER_PORT:-7790}"
 DATA_DIR="${HIVE_DATA_DIR:-$HOME/.hive-queen}"
-BOOTSTRAP="${HIVE_PEER:-}"
-QDRANT_URL="${QDRANT_URL:-}"
 
-# ── Qdrant — wait for it instead of falling back silently ───────────────────
-# v0.6.4.4: if QDRANT_URL was set explicitly (Docker Compose path, env-driven
-# deployment) we wait up to 60s for it to become ready. Falling back to HNSW
-# silently in that case loses the persistent index (the bug we hit when the
-# queen restarted faster than Qdrant on Hetzner).
-#
-# If QDRANT_URL is empty, we use the legacy auto-start path: try localhost,
-# auto-launch via docker if available, otherwise HNSW.
-QDRANT_URL_EXPLICIT="${QDRANT_URL:-}"
-QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+LLM_PROVIDER="${LLM_PROVIDER:-${QUEEN_LLM_PROVIDER:-${AGGREGATOR_LLM_PROVIDER:-groq}}}"
+LLM_API_KEY="${LLM_API_KEY:-${QUEEN_LLM_API_KEY:-${AGGREGATOR_LLM_API_KEY:-}}}"
+LLM_MODEL="${LLM_MODEL:-${QUEEN_LLM_MODEL:-${AGGREGATOR_LLM_MODEL:-}}}"
 
-qdrant_ready() {
-  # /readyz returns 200 only when storage is fully open. /healthz is too eager.
-  curl -s --max-time 2 -o /dev/null -w '%{http_code}' "$QDRANT_URL/readyz" 2>/dev/null | grep -q '^200$' \
-    || curl -s --max-time 2 "$QDRANT_URL/healthz" 2>/dev/null | grep -q 'healthz check passed'
-}
-
-if qdrant_ready; then
-  ok "Qdrant already running at $QDRANT_URL"
-elif [ -n "$QDRANT_URL_EXPLICIT" ]; then
-  # Explicit URL — wait, don't auto-start, don't fall back silently.
-  echo -n "  Waiting for Qdrant at $QDRANT_URL"
-  for i in $(seq 1 60); do
-    qdrant_ready && break
-    echo -n "."; sleep 1
-  done
-  echo ""
-  if qdrant_ready; then
-    ok "Qdrant ready"
-  else
-    err "Qdrant at $QDRANT_URL never became ready after 60s — aborting to avoid losing the persistent index"
-  fi
-elif command -v docker &>/dev/null; then
-  run "Starting Qdrant via Docker..."
-  docker run -d --rm -p 6333:6333 qdrant/qdrant > /dev/null 2>&1
-  echo -n "  Waiting for Qdrant"
-  for i in $(seq 1 20); do
-    qdrant_ready && break
-    echo -n "."; sleep 1
-  done
-  echo ""
-  qdrant_ready \
-    && ok "Qdrant ready" \
-    || { run "Qdrant failed to start — falling back to HNSW"; QDRANT_URL=""; }
-else
-  run "Docker not available — using HNSW backend (set QDRANT_URL to use Qdrant)"
-  QDRANT_URL=""
-fi
-
-if [ -n "$QDRANT_URL" ]; then
-  BACKEND="qdrant"
-else
-  BACKEND="hnsw"
-fi
-
-# ── Validate ──────────────────────────────────────────────────────────────────
-LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
 case "$LLM_PROVIDER" in
   gemini|claude|openai|groq|ollama) ;;
   *) err "Unknown LLM_PROVIDER='$LLM_PROVIDER'. Valid values: gemini, claude, openai, groq, ollama" ;;
 esac
 [ "$LLM_PROVIDER" != "ollama" ] && [ -z "$LLM_API_KEY" ] && err "LLM_API_KEY is required (used for synthesis queries)."
 
-# ── Header ────────────────────────────────────────────────────────────────────
 echo ""
-echo "  🐝  HIVE — Queen"
-echo "  Backend : $BACKEND$([ -n "$QDRANT_URL" ] && echo " ($QDRANT_URL)")"
+echo "  🐝  HIVE — Queen  (v0.8 — in-process LanceDB, no Python, no Qdrant)"
+echo "  Backend : lancedb"
 echo "  LLM     : $LLM_PROVIDER"
 echo "  Data    : $DATA_DIR"
-[ -n "$BOOTSTRAP" ] && echo "  Peer    : $BOOTSTRAP"
 echo "────────────────────────────────────────"
 
-# ── Python embedder ───────────────────────────────────────────────────────────
-if alive "http://127.0.0.1:$EMB_PORT/health"; then
-  ok "Embedder :$EMB_PORT already running"
-else
-  run "Starting embedder on :$EMB_PORT (backend: $BACKEND)..."
+mkdir -p "$DATA_DIR/identity" "$DATA_DIR/corestore" "$DATA_DIR/lancedb"
 
-  EMBEDDER_ENV="HIVE_EMBEDDER_PORT=$EMB_PORT EMBEDDER_BACKEND=$BACKEND"
-  [ -n "$QDRANT_URL" ] && EMBEDDER_ENV="$EMBEDDER_ENV QDRANT_URL=$QDRANT_URL"
-
-  ( cd packages/embeddings && \
-    eval "nohup env $EMBEDDER_ENV python api_server.py \
-      > /tmp/hive_embedder.log 2>&1 &" )
-
-  echo -n "  Loading model"
-  for i in $(seq 1 45); do
-    alive "http://127.0.0.1:$EMB_PORT/health" && break
-    echo -n "."; sleep 2
-  done
-  echo ""
-  alive "http://127.0.0.1:$EMB_PORT/health" || err "Embedder failed. Check /tmp/hive_embedder.log"
-
-  BACKEND_REPORTED=$(curl -s "http://127.0.0.1:$EMB_PORT/health" | \
-    python3 -c "import json,sys; print(json.load(sys.stdin).get('backend','?'))" 2>/dev/null)
-  ok "Embedder ready (backend: $BACKEND_REPORTED)"
-fi
-
-# ── Queen node ────────────────────────────────────────────────────────────────
 if alive "http://127.0.0.1:$PORT/api/status"; then
   MODE=$(curl -s "http://127.0.0.1:$PORT/api/status" | \
-    python3 -c "import json,sys; print(json.load(sys.stdin).get('mode','?'))" 2>/dev/null)
+    node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).mode||'?')}catch{console.log('?')}})" 2>/dev/null)
   ok "Queen :$PORT already running (mode: $MODE)"
 else
   run "Starting queen on :$PORT..."
@@ -158,43 +69,32 @@ else
 HIVE_MODE=queen
 HIVE_PORT=$PORT
 HIVE_DATA_DIR=$DATA_DIR
-EMBEDDER_URL=http://127.0.0.1:$EMB_PORT
-EMBEDDER_BACKEND=$BACKEND
-HIVE_PEER=$BOOTSTRAP
 LLM_PROVIDER=$LLM_PROVIDER
 LLM_API_KEY=$LLM_API_KEY
-LLM_MODEL=${LLM_MODEL:-}
+LLM_MODEL=$LLM_MODEL
 EOF
-  [ -n "$QDRANT_URL" ] && echo "QDRANT_URL=$QDRANT_URL" >> "$tmp_env"
 
-  # Unset LLM vars so --env-file is the sole source of truth.
-  # HIVE_MODE is passed explicitly because it must override any inherited value.
-  #
-  # v0.7.6.1 — --max-old-space-size=2560 raises the V8 heap from the ~1.5 GB
-  # default to 2.5 GB. Default was crashing the queen on Hetzner with
-  # "FATAL ERROR: Reached heap limit Allocation failed". Root cause: the
-  # `seen` Set in watchRemoteCore grows to 600k+ string entries while the
-  # queen replays a bee's Hypercore from offset 0, plus the replication
-  # buffer and remote manifests. The 4 GB box has plenty of headroom; the
-  # limit was Node's own heap, not the container.
-  # `exec` so $! is node's real PID for the signal-forwarding trap (v0.7.7.12).
+  # Unset LLM vars so --env-file is the sole source of truth. HIVE_MODE is
+  # passed explicitly because it must override any inherited value. The Node
+  # heap stays generous (2.5GB) since LanceDB writes are in-process and the
+  # corestore replays peer history. `exec` so $! is node's real PID for the
+  # signal-forwarding trap (v0.7.7.12).
   ( cd packages/api && unset LLM_API_KEY LLM_PROVIDER LLM_MODEL && \
     HIVE_MODE=queen NODE_OPTIONS="--max-old-space-size=2560" exec node --env-file="$tmp_env" \
       --import tsx/esm src/api_server.ts \
       > /tmp/hive_queen.log 2>&1 ) &
   NODE_PID=$!
 
-  for i in $(seq 1 20); do
+  for i in $(seq 1 30); do
     alive "http://127.0.0.1:$PORT/api/status" && break
     sleep 1
   done
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
 STATUS=$(curl -s "http://127.0.0.1:$PORT/api/status" 2>/dev/null)
 if echo "$STATUS" | grep -q '"ok"'; then
-  NODE=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('nodeId','?'))" 2>/dev/null)
-  IDX=$(echo  "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin).get('indexed',0))" 2>/dev/null)
+  NODE=$(echo "$STATUS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).nodeId||'?')}catch{console.log('?')}})" 2>/dev/null)
+  IDX=$(echo  "$STATUS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).indexed||0)}catch{console.log(0)}})" 2>/dev/null)
   echo ""
   ok "Queen running"
   echo "  Node ID : $NODE"
@@ -210,21 +110,17 @@ if echo "$STATUS" | grep -q '"ok"'; then
   fi
 
   echo ""
-  echo "  Logs → /tmp/hive_queen.log  /tmp/hive_embedder.log"
+  echo "  Logs → /tmp/hive_queen.log"
   echo ""
-  [ -n "$BOOTSTRAP" ] && info "Connected to bootstrap BEE: $BOOTSTRAP"
   info "Waiting for BEEs to connect via Hyperswarm..."
   echo ""
 else
   err "Queen failed to start. Check /tmp/hive_queen.log"
 fi
 
-# Keep the container alive, stream logs, AND forward stop signals to node so it
-# closes its corestore cleanly (v0.7.7.12 — see hive.sh for the full rationale;
-# prevents Hypercore forks from abrupt container kills).
 if [ -n "${NODE_PID:-}" ]; then
   trap 'echo "[queen.sh] stop signal — forwarding SIGTERM to node ($NODE_PID)"; kill -TERM "$NODE_PID" 2>/dev/null' TERM INT
-  tail -f /tmp/hive_queen.log /tmp/hive_embedder.log &
+  tail -f /tmp/hive_queen.log &
   TAIL_PID=$!
   while kill -0 "$NODE_PID" 2>/dev/null; do
     wait "$NODE_PID" 2>/dev/null || true
@@ -233,4 +129,4 @@ if [ -n "${NODE_PID:-}" ]; then
   exit 0
 fi
 
-exec tail -f /tmp/hive_queen.log /tmp/hive_embedder.log
+exec tail -f /tmp/hive_queen.log

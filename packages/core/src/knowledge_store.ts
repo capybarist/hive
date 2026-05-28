@@ -1,57 +1,64 @@
+// HIVE v0.8 — KnowledgeStore.
+// Holds the bee's signed v0.8 Hypercore (Hyperbee on top), and reads remote
+// peer cores so the queen can pipe their already-signed, already-vectorized
+// fragments into its in-process index (LanceDB).
+//
+// The v0.7 HTTP fan-out to a Python embedder is GONE in v0.8: the queen is
+// in-process Node + LanceDB, so we just hand decoded fragments to a callback.
 import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Fragment, FragmentId, FragmentInput, IKnowledgeGraph, QueryFilter } from './interfaces.js';
-import { buildEmbedderPayload } from './interfaces.js';
-import { hashPayload, signPayload, verifySignature, type NodeIdentity } from './node_identity.js';
-import type { PeerRegistry } from './peer_registry.js';
+import { type NodeIdentity } from './node_identity.js';
+import { type FragmentV08 } from './schema_v08.js';
+import { verifyFragmentV08 } from './fragment_v08.js';
 import type { BeeManifest } from './bee_manifest.js';
 
 const K = {
   frag: (id: string)                 => `frag:${id}`,
   src:  (source: string, id: string) => `src:${source}:${id}`,
   dat:  (date: string, id: string)   => `dat:${date}:${id}`,
-  hist: (id: string, ts: string)     => `hist:${id}:${ts}`,
 };
 
+export interface QueryFilter {
+  source?: string;
+  status?: FragmentV08['status'];
+  limit?: number;
+}
+
 // Hypercore emits 'conflict' when disk state disagrees with a received proof
-// (typically from an unclean shutdown / OOM kill). Log once per core then silence —
-// the core remains readable, writes from before the crash may be absent.
+// (typically after an unclean shutdown). Log once per core then silence — the
+// core remains readable, writes from before the crash may be absent.
 function attachConflictHandler(core: any, label: string): void {
   let logged = false;
   core.on('conflict', () => {
     if (!logged) {
       const key = core.key?.toString('hex')?.slice(0, 16) ?? '?';
-      console.warn(`[store] Hypercore conflict in ${label} core (${key}) — last write before crash may be missing. This is safe to ignore.`);
+      console.warn(`[store] Hypercore conflict in ${label} core (${key}) — last write before crash may be missing. Safe to ignore.`);
       logged = true;
     }
   });
 }
 
-export class KnowledgeStore implements IKnowledgeGraph {
+export class KnowledgeStore {
   private store: Corestore;
-  private core!: any;       // strong reference prevents GC from closing the Hypercore
+  private core!: any;
   private bee!: Hyperbee;
   private identity: NodeIdentity;
   private _ready = false;
-  // Serialize all Hyperbee writes to prevent concurrent flush conflicts
+  private _readyPromise: Promise<void> | null = null;
+  // Serialize Hyperbee writes to prevent concurrent flush conflicts.
   private _writeQueue: Promise<void> = Promise.resolve();
   // Manifests received from remote peers (nodeId → manifest). Populated during
-  // watchRemoteCore; read by /api/directory on the queen.
+  // watchRemoteCoreV08; read by /api/directory on the queen.
   private remoteManifests: Map<string, BeeManifest> = new Map();
-  // v0.7.6.4 — Cursor persistence + watcher deduplication.
-  // dataDir holds the path used to derive `repl_cursors/`. activeWatchers
-  // prevents accumulating concurrent watchRemoteCore loops when the same
-  // peer churn-reconnects — without this, every reconnect spawned a fresh
-  // for-await loop reading from offset 0 of a 600k-entry Hypercore, which
-  // OOM-killed the Python embedder on a 3.7 GB Hetzner box every ~30 min.
+  // Cursor persistence + watcher deduplication (carried over from v0.7.6.4).
+  // Without this every peer reconnect would spawn a fresh watcher loop
+  // replaying the peer's core from offset 0 — OOM-killed prod at scale.
   private dataDir: string;
   private cursorDir: string;
   private activeWatchers: Set<string> = new Set();
   private cursorByNode: Map<string, number> = new Map();
-
-  private _readyPromise: Promise<void> | null = null;
 
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
@@ -61,15 +68,9 @@ export class KnowledgeStore implements IKnowledgeGraph {
   }
 
   get nodeId(): string { return this.identity.nodeId; }
-
-  /** Public key of the local fragments Hypercore. Shared with peers so they can replicate it. */
+  /** Public key of the local fragments Hypercore. Shared with peers via PeerMeta. */
   get coreKey(): Buffer { return this.core.key; }
-
-  /**
-   * The parent Corestore — passed to P2PNode for replication.
-   * Replication uses a per-connection session so closing a connection
-   * never affects the write session.
-   */
+  /** The parent Corestore — passed to P2PNode for native replication. */
   get corestore(): Corestore { return this.store; }
 
   async ready(): Promise<void> {
@@ -78,9 +79,6 @@ export class KnowledgeStore implements IKnowledgeGraph {
 
     this._readyPromise = (async () => {
       await this.store.ready();
-      // Store the core as an instance field to prevent garbage collection.
-      // A local variable would go out of scope after ready() returns and the GC
-      // would close the Hypercore, causing SESSION_CLOSED on subsequent writes.
       this.core = this.store.get({ name: 'fragments' });
       await this.core.ready();
       attachConflictHandler(this.core, 'fragments');
@@ -93,21 +91,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return this._readyPromise;
   }
 
-  // ── Write helpers ───────────────────────────────────────────────────────────
-
-  private buildFragment(
-    input: FragmentInput,
-    status: Fragment['status'] = 'current',
-    supersedes: FragmentId[] = [],
-    superseded_by: FragmentId | null = null,
-  ): Fragment {
-    const partial = { ...input, status, supersedes, superseded_by };
-    const hash = hashPayload(partial);
-    const signature = signPayload({ id: partial.id, hash }, this.identity.privateKeyHex);
-    return { ...partial, hash, signature };
-  }
-
-  // ── IKnowledgeGraph ─────────────────────────────────────────────────────────
+  // ── Internal helpers ──────────────────────────────────────────────────────
 
   private async ensureOpen(): Promise<void> {
     if (this.core?.closed) {
@@ -135,53 +119,47 @@ export class KnowledgeStore implements IKnowledgeGraph {
     return result;
   }
 
-  async save(input: FragmentInput): Promise<Fragment> {
+  // ── v0.8 fragment persistence ─────────────────────────────────────────────
+
+  /**
+   * Save a pre-built, pre-signed v0.8 fragment to the local Hyperbee. The bee
+   * must construct the fragment upstream (chunk → embed → buildSignedFragmentV08)
+   * because v0.8 puts the vector inside the signed hash. The store is just the
+   * append-only durable layer.
+   */
+  async save(frag: FragmentV08): Promise<void> {
     await this.ready();
-    const fragment = this.buildFragment(input);
     return this.enqueue(async () => {
       await this.ensureOpen();
       const b = this.bee.batch();
-      // batch.put() is async in Hyperbee v2 — must be awaited or puts are lost
-      await b.put(K.frag(fragment.id), fragment);
-      await b.put(K.src(fragment.source, fragment.id), fragment.id);
-      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
+      // batch.put() is async in Hyperbee v2 — must be awaited or puts are lost.
+      await b.put(K.frag(frag.id), frag);
+      await b.put(K.src(frag.source, frag.id), frag.id);
+      await b.put(K.dat(frag.extracted_at.slice(0, 10), frag.id), frag.id);
       await this.withTimeout(b.flush(), 8_000, 'save flush');
-      return fragment;
     });
   }
 
-  async saveReplicated(fragment: Fragment): Promise<void> {
-    await this.ready();
-    return this.enqueue(async () => {
-      await this.ensureOpen();
-      const b = this.bee.batch();
-      await b.put(K.frag(fragment.id), fragment);
-      await b.put(K.src(fragment.source, fragment.id), fragment.id);
-      await b.put(K.dat(fragment.extracted_at.slice(0, 10), fragment.id), fragment.id);
-      await this.withTimeout(b.flush(), 8_000, 'saveReplicated flush');
-    });
-  }
-
-  async get(id: FragmentId): Promise<Fragment | null> {
+  async get(id: string): Promise<FragmentV08 | null> {
     await this.ready();
     const node = await this.bee.get(K.frag(id));
-    return node ? (node.value as Fragment) : null;
+    return node ? (node.value as FragmentV08) : null;
   }
 
-  async *query(filter: QueryFilter = {}): AsyncIterable<Fragment> {
+  async *query(filter: QueryFilter = {}): AsyncIterable<FragmentV08> {
     await this.ready();
     const prefix = filter.source ? K.src(filter.source, '') : 'frag:';
     let count = 0;
     const limit = filter.limit ?? Infinity;
     for await (const node of this.bee.createReadStream({ gt: prefix, lt: prefix + '\xff' })) {
       if (count >= limit) break;
-      let fragment: Fragment;
+      let fragment: FragmentV08;
       if (filter.source) {
         const full = await this.get(node.value as string);
         if (!full) continue;
         fragment = full;
       } else {
-        fragment = node.value as Fragment;
+        fragment = node.value as FragmentV08;
       }
       if (filter.status && fragment.status !== filter.status) continue;
       yield fragment;
@@ -189,47 +167,12 @@ export class KnowledgeStore implements IKnowledgeGraph {
     }
   }
 
-  async supersede(oldId: FragmentId, newInput: FragmentInput): Promise<Fragment> {
-    await this.ready();
-    const old = await this.get(oldId);
-    if (!old) throw new Error(`Fragment ${oldId} not found`);
-    const newFragment = this.buildFragment(newInput, 'current', [oldId], null);
-    const updatedOld: Fragment = { ...old, status: 'superseded', superseded_by: newFragment.id };
-    const oldHash = hashPayload({ ...updatedOld, hash: undefined, signature: undefined });
-    const oldSig = signPayload({ id: updatedOld.id, hash: oldHash }, this.identity.privateKeyHex);
-    const signedOld = { ...updatedOld, hash: oldHash, signature: oldSig };
-    return this.enqueue(async () => {
-      await this.ensureOpen();
-      const b = this.bee.batch();
-      await b.put(K.hist(oldId, old.extracted_at), signedOld);
-      await b.put(K.frag(oldId), signedOld);
-      await b.put(K.frag(newFragment.id), newFragment);
-      await b.put(K.src(newFragment.source, newFragment.id), newFragment.id);
-      await b.put(K.dat(newFragment.extracted_at.slice(0, 10), newFragment.id), newFragment.id);
-      await this.withTimeout(b.flush(), 8_000, 'supersede flush');
-      return newFragment;
-    });
+  verify(fragment: FragmentV08): boolean {
+    return verifyFragmentV08(fragment, fragment.node_pubkey);
   }
 
-  async history(id: FragmentId): Promise<Fragment[]> {
-    await this.ready();
-    const prefix = K.hist(id, '');
-    const results: Fragment[] = [];
-    for await (const node of this.bee.createReadStream({ gt: prefix, lt: prefix + '\xff' })) {
-      results.push(node.value as Fragment);
-    }
-    return results;
-  }
+  // ── BeeManifest (v0.7.3, additive fields in v0.8) ─────────────────────────
 
-  async verify(fragment: Fragment): Promise<boolean> {
-    const { hash, signature, ...rest } = fragment;
-    return hashPayload(rest) === hash &&
-      verifySignature({ id: fragment.id, hash }, signature, this.identity.publicKeyHex);
-  }
-
-  // ── BeeManifest (v0.7.3) ───────────────────────────────────────────────────
-
-  /** Publish this BEE's manifest to its own Hyperbee so peers can read it. */
   async publishManifest(manifest: BeeManifest): Promise<void> {
     await this.ready();
     return this.enqueue(async () => {
@@ -238,93 +181,22 @@ export class KnowledgeStore implements IKnowledgeGraph {
     });
   }
 
-  /** Read back the manifest this BEE previously published (null if not yet published). */
   async getLocalManifest(): Promise<BeeManifest | null> {
     await this.ready();
     const node = await this.bee.get('bee:manifest');
     return node ? (node.value as BeeManifest) : null;
   }
 
-  /** All manifests received from remote peers via watchRemoteCore. */
   getRemoteManifests(): ReadonlyMap<string, BeeManifest> {
     return this.remoteManifests;
   }
 
-  /**
-   * Stream all fragments from Hyperbee history (past + live) and POST each one
-   * to the HNSW embedder. This replaces HTTP-based sync: Hypercore replication
-   * delivers blocks to this BEE, the history stream picks them up, and HNSW
-   * stays in sync automatically — no polling, no separate sync layer needed.
-   *
-   * Call once after ready(). Never resolves (live stream). Auto-restarts the
-   * stream if it dies — previously a hyperbee internal error or session
-   * close would tear down the for-await loop and silently stop indexing
-   * until the bee was restarted.
-   */
-  async watchFragments(embedderUrl: string): Promise<void> {
-    await this.ready();
-    const seen = new Set<string>();
+  // ── Cursor persistence (per remote nodeId) ────────────────────────────────
+  // Resume each remote core's history stream from the last successfully
+  // delivered Hyperbee block seq. Without this, every reconnect replays from
+  // offset 0 — the dominant trigger of the v0.7 embedder OOM loop.
 
-    const post = async (frag: Fragment) => {
-      if (seen.has(frag.id)) return;
-      try {
-        await fetch(`${embedderUrl}/add`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: frag.id,
-            text: frag.text,
-            metadata: buildEmbedderPayload(frag),
-          }),
-          signal: AbortSignal.timeout(10_000),
-        });
-        seen.add(frag.id);
-      } catch { /* embedder offline — not marked seen, will retry on next appearance */ }
-    };
-
-    const runStreamOnce = async () => {
-      // Dedicated session per attempt so a torn-down stream doesn't poison
-      // the next retry's session state.
-      const watchSession = this.store.session();
-      const watchCore = watchSession.get({ name: 'fragments' });
-      await watchCore.ready();
-      const watchBee = new Hyperbee(watchCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-      await watchBee.ready();
-      for await (const { key, value } of (watchBee as any).createHistoryStream({ live: true })) {
-        if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
-          await post(value as Fragment);
-        }
-      }
-    };
-
-    // Restart loop with bounded backoff. If the stream throws we wait and
-    // re-open from scratch; `seen` is preserved across restarts so already-
-    // indexed fragments are skipped immediately.
-    let backoffMs = 1_000;
-    while (true) {
-      try {
-        await runStreamOnce();
-        backoffMs = 1_000;   // clean exit (unlikely with live:true) → reset
-      } catch (err: any) {
-        console.warn(`[watch] watchFragments stream died: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs = Math.min(backoffMs * 2, 30_000);
-      }
-    }
-  }
-
-  // v0.7.6.4 — Cursor persistence. We store the highest Hyperbee block seq
-  // we've successfully POSTed to /add_batch for each remote nodeId. On the
-  // next stream open we pass `gt: lastSeq` to createHistoryStream so the
-  // queen resumes where it left off instead of replaying 600k entries from
-  // offset 0 — which was the dominant trigger of the embedder OOM loop.
-  //
-  // Files live at `${dataDir}/repl_cursors/<sanitised-nodeId>.json` and
-  // contain a single integer `{ "lastSeq": <n> }`. Atomic write via
-  // `rename` from a tmp sibling — we never want a half-written cursor.
   private cursorFile(nodeId: string): string {
-    // nodeIds come from peer-published meta and are arbitrary strings. Strip
-    // anything that isn't [a-zA-Z0-9_-] so they map safely to filenames.
     const safe = nodeId.replace(/[^A-Za-z0-9_-]/g, '_');
     return join(this.cursorDir, `${safe}.json`);
   }
@@ -346,7 +218,7 @@ export class KnowledgeStore implements IKnowledgeGraph {
 
   private async saveCursor(nodeId: string, seq: number): Promise<void> {
     const prev = this.cursorByNode.get(nodeId) ?? 0;
-    if (seq <= prev) return; // never regress
+    if (seq <= prev) return;
     this.cursorByNode.set(nodeId, seq);
     const file = this.cursorFile(nodeId);
     const tmp = `${file}.tmp`;
@@ -354,114 +226,115 @@ export class KnowledgeStore implements IKnowledgeGraph {
       await writeFile(tmp, JSON.stringify({ lastSeq: seq }), 'utf-8');
       await rename(tmp, file);
     } catch (err: any) {
-      // Persistence failure is non-fatal — the in-memory cursor still
-      // works for the lifetime of this process; we'll just replay on the
-      // next restart. Log once per node to avoid log noise.
       console.warn(`[repl] Failed to persist cursor for ${nodeId.slice(0, 16)}: ${err?.message ?? err}`);
     }
   }
 
+  // ── Remote core watcher (v0.8 — feeds the queen's LanceDB) ────────────────
+
   /**
-   * Watch a remote peer's fragments core (opened read-only by key) and POST
-   * each fragment to HNSW. Called after key exchange with a peer.
-   * `nodeId` is the HIVE app-level identity of the peer — used to store its
-   * BeeManifest (v0.7.3) and as a label for conflict logs.
-   * The optional `peerRegistry` enables full ed25519 verification — without
-   * it we fall back to the v0.6.1.x hash-recompute check.
+   * Open a peer's fragments core (already opened+downloading via P2PNode),
+   * read its 'bee:manifest' once, then stream v0.8 fragments to `onBatch` in
+   * chunks of FLUSH_SIZE. Cursor advances only after onBatch resolves so a
+   * crashing queen-side index doesn't lose its place.
    *
-   * v0.7.6.4 — deduplicated by nodeId. If a watcher loop is already running
-   * for this nodeId we return immediately. The peer-meta event fires on
-   * every Hyperswarm reconnect, and pre-v0.7.6.4 every reconnect spawned a
-   * fresh while(true) loop that re-opened a Hyperbee history stream from
-   * offset 0. After a few hours of peer churn the queen had dozens of
-   * concurrent /add_batch fan-outs racing each other and OOM-killing the
-   * Python embedder. The single-watcher invariant fixes the accumulation;
-   * the cursor persistence below fixes the per-open replay cost.
+   * Single-watcher invariant per nodeId so peer-meta churn doesn't accumulate
+   * concurrent loops (same v0.7.6.4 fix; just no HTTP fan-out now).
    */
-  async watchRemoteCore(remoteCoreKey: Buffer, nodeId: string, embedderUrl: string, peerRegistry?: PeerRegistry): Promise<void> {
+  async watchRemoteCoreV08(
+    remoteCoreKey: Buffer,
+    nodeId: string,
+    onBatch: (batch: FragmentV08[]) => Promise<void>,
+  ): Promise<void> {
     await this.ready();
-    // v0.7.6.4 — single watcher per nodeId. See class doc above for why.
     if (this.activeWatchers.has(nodeId)) {
-      console.log(`[repl] watchRemoteCore already active for ${nodeId.slice(0, 16)} — skipping duplicate`);
+      console.log(`[repl] watchRemoteCoreV08 already active for ${nodeId.slice(0, 16)} — skipping duplicate`);
       return;
     }
     this.activeWatchers.add(nodeId);
-    // v0.7.6.4 — load + log once. The actual `gt` value passed to
-    // createHistoryStream is read INSIDE runStreamOnce so each restart of
-    // the inner stream picks up the latest in-memory cursor.
+
     const initialSeq = await this.loadCursor(nodeId);
     if (initialSeq > 0) {
       console.log(`[repl] Resuming ${nodeId.slice(0, 16)} from seq=${initialSeq} (cursor persisted)`);
     }
 
-    // v0.7.7.11 — the "freshness fast-forward" (v0.7.7.5–.9) was REVERTED.
-    // It jumped the cursor near the head to surface new fragments fast, but
-    // it SKIPPED the gap between the old cursor and the head — and that gap
-    // contained recently-extracted fragments not yet in Qdrant (e.g. "The
-    // Go! Team"), so they were silently lost. The v0.7.6.5 embedder-side
-    // fast-skip already makes replaying already-indexed fragments cheap, so
-    // the natural sequential replay reaches the live tail in a reasonable
-    // time AND loses nothing. After a one-time catch-up the queen tracks the
-    // tail live (new fragments index within seconds). Freshness vs.
-    // completeness both want a background backfill of the gap concurrent with
-    // a live-tail watcher; that's the v0.7.8 design. Until then: correctness
-    // (no loss) over the restart-time freshness optimisation.
-    //
-    // v0.7.6.1 — bounded seen Set. On Hetzner, replaying a bee's 600k+
-    // fragment Hypercore from offset 0 grew this Set unbounded and burned
-    // Node's V8 heap until the api_server OOM-crashed. The qdrant
-    // `_known_ids` on the embedder side is the canonical dedup; this Set
-    // is just an optimisation to avoid re-POSTing within the same session.
-    // Capping at 10k is safe — duplicate POSTs are cheap (embedder returns
-    // skipped=true) and we won't hit the cap in normal operation.
-    const SEEN_CAP = 10_000;
-    const seen = new Set<string>();
-    const trackSeen = (id: string) => {
-      if (seen.size >= SEEN_CAP) {
-        // Drop the oldest half — Set preserves insertion order so we can
-        // peel off the front. Simpler than a real LRU and good enough.
-        const drop = Math.floor(SEEN_CAP / 2);
-        let i = 0;
-        for (const k of seen) {
-          if (i++ >= drop) break;
-          seen.delete(k);
-        }
-      }
-      seen.add(id);
-    };
-    let droppedUnsigned = 0;
-    let droppedBadSig = 0;
-    let droppedUnknownPeer = 0;
+    const FLUSH_SIZE = 20;
+    const FLUSH_INTERVAL_MS = 500;
 
     const runStreamOnce = async () => {
-      // The core was already opened + download()-enabled in api_server.ts
-      // before emitting peer-core. Getting it again is a no-op (Corestore
-      // caches by key). Re-fetching on every restart picks up the latest
-      // length naturally.
       const remoteCore = (this.store as any).get({ key: remoteCoreKey });
       await remoteCore.ready();
       attachConflictHandler(remoteCore, `remote-${nodeId.slice(0, 8)}`);
       remoteCore.download({ start: 0, end: -1 });
-      console.log(`[repl] watchRemoteCore: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
+      console.log(`[repl] watchRemoteCoreV08: key=${remoteCoreKey.toString('hex').slice(0, 16)} len=${remoteCore.length}`);
 
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();
-      // Read peer's BeeManifest (v0.7.3) — once per stream open is enough since
-      // it's written at startup and practically never changes.
+
       try {
         const manifestNode = await remoteBee.get('bee:manifest');
         if (manifestNode?.value) {
           const m = manifestNode.value as BeeManifest;
           this.remoteManifests.set(nodeId, m);
           const srcs = m.declared_sources?.map((s: any) => s.id).join(', ') ?? '—';
-          console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (policy: ${m.declared_sources?.[0]?.policy ?? '?'})`);
+          console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (schema_v=${m.schema_version ?? '?'}, model=${m.embedding_model ?? '?'})`);
         }
-      } catch { /* manifest absent or unreadable — not fatal */ }
-      await this._consumeRemoteStream(remoteBee, nodeId, embedderUrl, seen, trackSeen, peerRegistry, {
-        droppedUnsignedRef: () => droppedUnsigned, incUnsigned: () => droppedUnsigned++,
-        droppedBadSigRef: () => droppedBadSig,    incBadSig:    () => droppedBadSig++,
-        droppedUnknownPeerRef: () => droppedUnknownPeer, incUnknownPeer: () => droppedUnknownPeer++,
-      });
+      } catch { /* manifest absent — not fatal */ }
+
+      let buffer: FragmentV08[] = [];
+      let lastSeqInBuffer = 0;
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      let flushing = false;
+
+      const doFlush = async () => {
+        if (buffer.length === 0 || flushing) return;
+        flushing = true;
+        const batch = buffer;
+        const maxSeq = lastSeqInBuffer;
+        buffer = [];
+        lastSeqInBuffer = 0;
+        try {
+          await onBatch(batch);
+          this.saveCursor(nodeId, maxSeq).catch(() => { /* logged inside */ });
+        } catch (err: any) {
+          console.warn(`[repl] onBatch failed for ${nodeId.slice(0, 16)} (${batch.length} frags): ${err?.message ?? err}`);
+          buffer = [...batch, ...buffer];
+        } finally {
+          flushing = false;
+        }
+      };
+
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        flushTimer = setTimeout(async () => {
+          flushTimer = null;
+          await doFlush();
+        }, FLUSH_INTERVAL_MS);
+      };
+
+      const resumeFrom = this.cursorByNode.get(nodeId) ?? 0;
+      if (resumeFrom > 0) {
+        console.log(`[repl] Opening history stream for ${nodeId.slice(0, 16)} gt=${resumeFrom}`);
+      }
+
+      try {
+        for await (const { key, value, seq } of (remoteBee as any).createHistoryStream({ gt: resumeFrom, live: true })) {
+          if (typeof key !== 'string' || !key.startsWith('frag:')) continue;
+          const frag = value as FragmentV08;
+          if (!frag?.text || !frag.vector || !frag.id) continue;
+          buffer.push(frag);
+          lastSeqInBuffer = seq;
+          if (buffer.length >= FLUSH_SIZE) {
+            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+            await doFlush();
+          } else {
+            scheduleFlush();
+          }
+        }
+      } finally {
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+        await doFlush();
+      }
     };
 
     let backoffMs = 1_000;
@@ -471,199 +344,80 @@ export class KnowledgeStore implements IKnowledgeGraph {
           await runStreamOnce();
           backoffMs = 1_000;
         } catch (err: any) {
-          console.warn(`[repl] watchRemoteCore stream died for ${nodeId.slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+          console.warn(`[repl] watchRemoteCoreV08 stream died for ${nodeId.slice(0, 16)}: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
           await new Promise(r => setTimeout(r, backoffMs));
           backoffMs = Math.min(backoffMs * 2, 30_000);
         }
       }
     } finally {
-      // Unreachable in practice (while(true) above), but if the loop ever
-      // exits we want the next peer-meta event to be able to restart the
-      // watcher rather than be silenced by a stale activeWatchers entry.
       this.activeWatchers.delete(nodeId);
     }
   }
 
-  // Extracted so watchRemoteCore can wrap the for-await loop in a restartable
-  // closure. Counters are passed via getter/incrementer pairs so the outer
-  // scope keeps a stable running total across restarts.
-  // v0.7.5.1 — buffered batch flush instead of per-fragment POST.
-  //
-  // The old serial loop was ~80 ms per fragment (HTTP + sentence-transformers
-  // encode + Qdrant upsert) — about 750 frags/min. With v0.7.2.3's continuous
-  // bee extraction producing faster than that, the queen fell permanently
-  // behind: recently-indexed articles (SEMA, Chen Xi, Highway 209) sat in the
-  // queen's local Hypercore replica but never reached Qdrant. /api/query
-  // returned vector-similar neighbours and the LLM honestly reported "I
-  // don't have that".
-  //
-  // The new design:
-  //   1. Stream items into an in-memory buffer (FLUSH_SIZE = 50).
-  //   2. Flush when the buffer fills OR every FLUSH_INTERVAL_MS.
-  //   3. POST the whole batch to /add_batch. Embedder runs a single batch
-  //      encode + single Qdrant upsert. ~25× throughput in practice.
-  //
-  // Signature verification stays per-fragment before items enter the buffer
-  // so an invalid fragment never makes it into a batch. Items the embedder
-  // rejects are reinstated at the head of the buffer; only after a 2xx
-  // response do we mark `seen`. The finally block flushes the partial
-  // buffer on stream end so we don't lose items at restart boundary.
-  private async _consumeRemoteStream(
-    remoteBee: any,
-    nodeId: string,
-    embedderUrl: string,
-    seen: Set<string>,
-    trackSeen: (id: string) => void,
-    peerRegistry: PeerRegistry | undefined,
-    counters: {
-      droppedUnsignedRef: () => number; incUnsigned: () => void;
-      droppedBadSigRef: () => number;   incBadSig: () => void;
-      droppedUnknownPeerRef: () => number; incUnknownPeer: () => void;
-    },
+  /**
+   * Local-core watcher used by `hive` mode (single-box bee+queen): stream
+   * THIS node's own appended fragments to a callback so the in-process
+   * QueenIndex can ingest them without a second round-trip through the
+   * remote-core path. Identical batching semantics to watchRemoteCoreV08.
+   */
+  async watchLocalCoreV08(
+    onBatch: (batch: FragmentV08[]) => Promise<void>,
   ): Promise<void> {
-    // v0.7.6.4 — BatchItem carries the Hyperbee block seq it came from so we
-    // can persist the highest successfully-flushed seq as a resume cursor.
-    type BatchItem = { id: string; text: string; metadata: ReturnType<typeof buildEmbedderPayload>; seq: number };
-    // v0.7.5.3 — FLUSH_SIZE 50 → 20.
-    //
-    // 50 was too aggressive on the Hetzner 4 GB box. Each batch of 50
-    // pushed the embedder's working set up enough to lift queen memory
-    // to ~2.15 GB and block /health responses on the GIL under load. 20
-    // keeps the throughput speedup (~10×, not 25×) while leaving more
-    // headroom for the api_server, Hypercore replication, and other
-    // queen components on a memory-tight box.
+    await this.ready();
     const FLUSH_SIZE = 20;
     const FLUSH_INTERVAL_MS = 500;
 
-    let buffer: BatchItem[] = [];
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    let flushing = false;
+    const runOnce = async () => {
+      const session = this.store.session();
+      const localCore = session.get({ name: 'fragments' });
+      await localCore.ready();
+      const localBee = new Hyperbee(localCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
+      await localBee.ready();
 
-    const doFlush = async () => {
-      if (buffer.length === 0 || flushing) return;
-      flushing = true;
-      const batch = buffer;
-      buffer = [];
-      // The stream emits entries in ascending seq order, so the last item
-      // in the batch is the highest seq. Capture before we strip seq below.
-      const maxSeq = batch[batch.length - 1].seq;
-      // The embedder rejects unknown payload keys, so send a clean items array.
-      const payload = batch.map(({ id, text, metadata }) => ({ id, text, metadata }));
-      try {
-        const res = await fetch(`${embedderUrl}/add_batch`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: payload }),
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (res.ok) {
-          for (const it of batch) trackSeen(it.id);
-          // v0.7.6.4 — persist cursor on success. Fire-and-forget so the
-          // next stream iteration doesn't wait on disk I/O; saveCursor is
-          // idempotent and rejects regressions internally.
-          this.saveCursor(nodeId, maxSeq).catch(() => { /* logged inside */ });
-        } else {
-          // Embedder rejected — reinstate so the next flush retries.
+      let buffer: FragmentV08[] = [];
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      let flushing = false;
+
+      const doFlush = async () => {
+        if (buffer.length === 0 || flushing) return;
+        flushing = true;
+        const batch = buffer;
+        buffer = [];
+        try { await onBatch(batch); }
+        catch (err: any) {
+          console.warn(`[local-watch] onBatch failed (${batch.length} frags): ${err?.message ?? err}`);
           buffer = [...batch, ...buffer];
         }
-      } catch {
-        // Embedder offline or timed out. Reinstate so we retry next flush.
-        buffer = [...batch, ...buffer];
-      } finally {
-        flushing = false;
-      }
-    };
+        finally { flushing = false; }
+      };
 
-    const scheduleFlush = () => {
-      if (flushTimer) return;
-      flushTimer = setTimeout(async () => {
-        flushTimer = null;
-        await doFlush();
-      }, FLUSH_INTERVAL_MS);
-    };
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        flushTimer = setTimeout(async () => { flushTimer = null; await doFlush(); }, FLUSH_INTERVAL_MS);
+      };
 
-    // v0.7.6.4 — resume from the persisted cursor. createHistoryStream
-    // treats `gt: 0` as "start from the beginning" (falsy in Hyperbee's
-    // HistoryIterator), so we can safely always pass it. Reading the
-    // in-memory cursor here means each restart of the inner stream picks
-    // up wherever the previous attempt got to, not just the very first.
-    const resumeFrom = this.cursorByNode.get(nodeId) ?? 0;
-    if (resumeFrom > 0) {
-      console.log(`[repl] Opening history stream for ${nodeId.slice(0, 16)} gt=${resumeFrom}`);
-    }
-    try {
-      for await (const { key, value, seq } of remoteBee.createHistoryStream({ gt: resumeFrom, live: true })) {
-        if (typeof key === 'string' && key.startsWith('frag:') && value?.text) {
-          const frag = value as Fragment;
-          if (seen.has(frag.id)) continue;
-
-          // ── Signature verification (unchanged from pre-batching version) ──
-          if (!frag.hash || !frag.signature) {
-            counters.incUnsigned();
-            const n = counters.droppedUnsignedRef();
-            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping unsigned remote fragment ${frag.id} (count=${n})`);
-            continue;
-          }
-          const { hash, signature, ...rest } = frag;
-          const recomputed = hashPayload(rest);
-          if (recomputed !== hash) {
-            counters.incBadSig();
-            const n = counters.droppedBadSigRef();
-            if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping tampered remote fragment ${frag.id} (count=${n})`);
-            continue;
-          }
-          if (peerRegistry) {
-            const pubkey = peerRegistry.pubkeyFor(frag.node_id);
-            if (!pubkey) {
-              counters.incUnknownPeer();
-              const n = counters.droppedUnknownPeerRef();
-              if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — no pubkey known for ${frag.node_id} (count=${n})`);
-              continue;
-            }
-            if (!verifySignature({ id: frag.id, hash }, signature, pubkey)) {
-              counters.incBadSig();
-              const n = counters.droppedBadSigRef();
-              if (n <= 3 || n % 50 === 0) console.warn(`[repl] Dropping fragment ${frag.id} — ed25519 signature does not verify against ${frag.node_id}'s key (count=${n})`);
-              continue;
-            }
-          }
-
-          // v0.7.5.2 — guard against malformed Hyperbee entries.
-          // /add_batch was returning 422 "metadata: null" for a fraction of
-          // batches on Hetzner. Root cause traced to fragments where
-          // buildEmbedderPayload returns a partially-populated object
-          // (some Hypercore entries from older bee versions lack fields
-          // like status or extracted_at). Pydantic v2 on the embedder side
-          // is strict — one bad item fails the whole batch.
-          //
-          // Defensive coercion: ensure id + text are strings and metadata
-          // is an object before queuing. Items that don't qualify are
-          // dropped quietly (we already verified the signature, so it's
-          // not a security concern — just garbage we can't index).
-          const metadata = buildEmbedderPayload(frag) || {};
-          if (typeof frag.id !== 'string' || !frag.id ||
-              typeof frag.text !== 'string' || !frag.text ||
-              typeof metadata !== 'object' || metadata === null) {
-            continue;
-          }
-          buffer.push({
-            id: frag.id,
-            text: frag.text,
-            metadata,
-            seq,
-          });
-
-          if (buffer.length >= FLUSH_SIZE) {
-            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-            await doFlush();
-          } else {
-            scheduleFlush();
-          }
+      for await (const { key, value } of (localBee as any).createHistoryStream({ live: true })) {
+        if (typeof key !== 'string' || !key.startsWith('frag:')) continue;
+        const frag = value as FragmentV08;
+        if (!frag?.text || !frag.vector || !frag.id) continue;
+        buffer.push(frag);
+        if (buffer.length >= FLUSH_SIZE) {
+          if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+          await doFlush();
+        } else {
+          scheduleFlush();
         }
       }
-    } finally {
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-      await doFlush();
+    };
+
+    let backoffMs = 1_000;
+    while (true) {
+      try { await runOnce(); backoffMs = 1_000; }
+      catch (err: any) {
+        console.warn(`[local-watch] stream died: ${err?.message ?? err} — restarting in ${backoffMs}ms`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+      }
     }
   }
 

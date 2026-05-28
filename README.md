@@ -1,473 +1,205 @@
-# HIVE — Heuristic Intelligent Vector Extraction
+<div align="center">
 
-**A decentralized, verifiable knowledge base built for LLMs.**  
-A P2P network of autonomous BEEs that extract, sign, and sync knowledge from the open web.
+# 🐝 HIVE
 
-> *What Wikipedia is for humans — but for machines.*
+### Wikipedia for machines — a decentralized, verifiable knowledge base built for LLMs.
 
-→ **[Read the Manifesto](./MANIFESTO.md)** — why this exists and where it's going.
+A peer-to-peer network of autonomous **BEEs** that extract knowledge from the
+open web, **sign every fact** with ed25519, and sync it over Hypercore. LLMs
+query HIVE to get **up-to-date, source-traceable** answers — no central server,
+no black box.
 
----
+**[Manifesto](./MANIFESTO.md) · [Architecture](./docs/ARCHITECTURE.md) · [Changelog](./CHANGELOG.md)**
 
-## Quick start
-
-HIVE has two kinds of node:
-
-- **BEE** — *produces* knowledge. Crawls a source (Wikipedia, arXiv,
-  RSS…), extracts verbatim fragments, signs each with ed25519, appends
-  them to its own Hypercore, and replicates to peers. No LLM, no API
-  key, ~150 MB RAM. This is what grows the network.
-- **QUEEN** — *consumes* knowledge. Replicates every BEE it can reach,
-  indexes their fragments into Qdrant, and answers `/api/query` by
-  combining vector search with one LLM synthesis call. Needs an LLM
-  key. This is what you query.
-
-You don't need both. Pick the scenario that matches what you want to do.
-Each one is shown **with Docker** (nothing to install but Docker) and
-**from source** (Node 20+, and Python 3.11+ for a queen).
+</div>
 
 ---
 
-### A · Run a BEE — contribute to the public network
-
-The lightest thing you can run. No key, no LLM, no Python.
-
-**Docker:**
-```bash
-git clone https://github.com/capybarist/hive.git && cd hive
-docker compose up -d bee-1            # just the bee, nothing else
-```
-
-**From source:**
-```bash
-git clone https://github.com/capybarist/hive.git && cd hive
-npm install
-bash hive.sh                          # bee on :8080 — no .env needed
-```
-
-Open `http://localhost:8080` for the extraction dashboard. The bee
-joins the Hyperswarm DHT on the public topic, claims topics, fetches
-articles, and starts publishing signed fragments immediately. Any queen
-on the network — including the public one — will pick them up.
-
----
-
-### B · Run a QUEEN — query the network
-
-A queen needs an LLM key (synthesis only) and Qdrant for the vector
-index. With Docker, Qdrant comes up automatically.
-
-**Docker:**
-```bash
-git clone https://github.com/capybarist/hive.git && cd hive
-cp .env.example .env
-# edit .env → set AGGREGATOR_LLM_API_KEY (Gemini/Groq/… key)
-docker compose up -d qdrant queen     # queen + its vector index
-```
-
-**From source:**
-```bash
-git clone https://github.com/capybarist/hive.git && cd hive
-npm install
-pip install -r packages/embeddings/requirements.txt
-echo "LLM_PROVIDER=gemini"        > .env
-echo "LLM_API_KEY=AIza_your_key" >> .env
-bash queen.sh                         # queen on :8090, Qdrant auto-started via Docker
-```
-
-Open `http://localhost:8090` for the query dashboard. A fresh queen
-discovers BEEs over Hyperswarm and replicates their history — the
-first catch-up can take a while on a large network, then it tracks
-live.
-
-Default provider is **Gemini Flash Lite** (free tier is plenty for a
-single queen). Get a key in <2 min at
-[aistudio.google.com](https://aistudio.google.com). See
-[LLM Providers](#llm-providers) for Groq/Claude/OpenAI/Ollama.
-
----
-
-### C · Run a QUEEN + N BEEs — your own full stack
-
-One command brings up a queen, one bee, Qdrant, and a Caddy reverse
-proxy. This is the default `docker compose up -d` with no service
-named.
-
-**Docker:**
-```bash
-git clone https://github.com/capybarist/hive.git && cd hive
-cp .env.example .env                  # set AGGREGATOR_LLM_API_KEY
-docker compose up -d                  # caddy + qdrant + bee-1 + queen
-
-# add more bees (each coordinates topics over Hyperswarm):
-docker compose --profile bee-2 up -d  # bee-2 on :8081
-```
-
-Open:
-- `http://<host>` → queen UI (via Caddy on :80)
-- `http://<host>:8080` → bee-1 dashboard (what it's extracting)
-- `http://<host>:8090` → queen dashboard (queries against Qdrant)
-
-**From source** (separate terminals or hosts): run one `bash queen.sh`
-and as many `bash hive.sh` as you like — they find each other over the
-DHT automatically, no wiring needed. To split work across bees without
-overlap, give each a scope/partition (see
-[Configuration](#configuration)).
-
-> 💡 **Memory:** a bee is ~150 MB; a queen is ~700 MB (embedder model)
-> plus Qdrant. A queen + 1 bee fits a 2 GB machine; for many bees on
-> one host, budget ~150 MB each.
-
----
-
-### Fully-local, no cloud (Ollama)
-
-Every scenario above defaults to a cloud LLM (only the queen uses it,
-only at query time). To run the synthesis model locally instead:
-
-```bash
-docker compose --profile ollama up -d         # pulls qwen2.5:1.5b (~950 MB)
-# then in .env:  LLM_PROVIDER=ollama   LLM_MODEL=qwen2.5:1.5b
-```
-
-Local synthesis is much slower (~15–30 s/query on CPU vs ~1–2 s on
-Groq) and adds ~2 GB RAM. Use it when you specifically want zero
-cloud traffic. Bees never touch an LLM either way.
-
----
-
-### Dev mode — 3 nodes on one machine
-
-```bash
-bash start.sh                            # 3 nodes on :8080 :8081 :8082
-bash start.sh --clean                    # wipe data and restart
-bash stop.sh --force                     # kill all processes
-```
-
-Useful for testing P2P + replication locally before deploying.
-
-### The three modes at a glance
-
-| Script | `HIVE_MODE` | Runs | Needs LLM key? | When |
-|---|---|---|---|---|
-| `bash hive.sh` *(default)* | `bee` | Extractor + own Hypercore. No embedder, no `/api/query`. | No | Scenario A — grow the network. |
-| `bash queen.sh` | `queen` | Embedder + Qdrant + LLM + `/api/query`. No extractor. | Yes | Scenario B — query the network. |
-| `HIVE_MODE=hive bash hive.sh` | `hive` | Everything in one process: extract + index + query. | Yes | Dev / single-machine demo. |
-
-> 🔁 **Upgrading from v0.6.x?** `git pull && docker compose pull &&
-> docker compose up -d`. The `aggregator` → `queen` rename reuses the
-> existing `aggregator-data` volume — fragments survive. See
-> [CHANGELOG.md](./CHANGELOG.md#070--2026-05-22--bee--queen-role-split).
-
----
-
-## LLM Providers
-
-HIVE uses an LLM in exactly **one place**: **query synthesis on the
-queen**. When a client hits `/api/query`, the queen takes the top
-verified fragments returned by vector search and asks the LLM to weave
-them into a natural-language answer with citations. That's it.
-
-**Bees never call an LLM.** Since v0.6.1 the extractor is a purely
-mechanical loop (drain queue → `wikipedia_fetch` verbatim → sign →
-append). Topic assignment comes from `data/topic_tree.json` + hash-
-based round-robin among peers — no LLM, no API key needed for bee
-mode.
-
-The embeddings model (`all-MiniLM-L6-v2`, ~80 MB) runs locally on
-queens and is not an LLM.
-
-| Provider | Cost | Default model | Where to get a key |
-|---|---|---|---|
-| **Gemini** *(default)* | Generous free tier | `gemini-2.5-flash-lite` | [aistudio.google.com](https://aistudio.google.com) |
-| **Groq** | Free 100K tok/day | `llama-3.3-70b-versatile` | [console.groq.com](https://console.groq.com) |
-| **Claude** | Paid | `claude-sonnet-4-6` | [console.anthropic.com](https://console.anthropic.com) |
-| **OpenAI** | Paid | `gpt-4o` | [platform.openai.com](https://platform.openai.com) |
-| **Ollama** | Free, local, slow | `qwen2.5:1.5b` | runs on your VPS — opt in via `--profile ollama` |
-
-Set in `.env`:
-
-```bash
-LLM_PROVIDER=gemini
-LLM_API_KEY=AIza_your_key_here
-LLM_MODEL=gemini-2.5-flash-lite          # optional override
-```
-
-Or configure at runtime via the UI — click the provider chip in the
-sidebar. **Note:** UI-set provider lives in container memory; for
-persistence across redeploys, set it in `.env`.
-
----
-
-## Configuration
-
-```bash
-# Role (since v0.7.0)
-HIVE_MODE=bee                # bee | queen | hive (default: bee)
-
-# Provider (used by queen and hive — bee skips LLM)
-LLM_PROVIDER=groq            # groq | gemini | claude | openai | ollama
-LLM_API_KEY=your_key         # not needed for ollama or bee
-
-# Queen-specific LLM (Docker Compose path — lets the queen run a fast
-# cloud LLM for synthesis while bees use whatever they want for extraction)
-AGGREGATOR_LLM_PROVIDER=groq         # variable name kept for v0.6 compat; renames to QUEEN_LLM_PROVIDER in v0.8
-AGGREGATOR_LLM_API_KEY=your_groq_key
-AGGREGATOR_LLM_MODEL=                # optional override
-
-# Optional model override (defaults shown)
-LLM_MODEL=llama-3.3-70b-versatile   # groq default
-LLM_MODEL=gemini-2.5-flash-lite     # gemini default
-LLM_MODEL=claude-sonnet-4-6         # claude default
-LLM_MODEL=gpt-4o                    # openai default
-LLM_MODEL=qwen2.5:1.5b             # ollama default (950MB, fits 4GB VPS)
-
-# Ports
-HIVE_PORT=8080
-HIVE_EMBEDDER_PORT=7700
-
-# Data (default: ~/.hive in production, data/bee-N/ in dev)
-HIVE_DATA_DIR=/path/to/data
-
-# Connect to existing network (optional)
-HIVE_PEER=http://peer.example.com
-
-# Suggest a domain (BEE still decides autonomously)
-BEE_TOPIC_DOMAIN=health   # or: science, tech, history, culture...
-
-# Source declaration (v0.7.3 BeeManifest)
-HIVE_SOURCES=wikipedia-en           # comma-separated: wikipedia-en, arxiv, rss, web, common-crawl
-HIVE_POLICY=drift-ok                # drift-ok (follow all links) | exclusive (stay in scope)
-HIVE_SCOPE='{"category_tree":"Category:Medicine"}'  # JSON scope — optional
-HIVE_BEE_REPLICATE=all              # all | neighbors | none (peer-to-peer replication)
-HIVE_LANGUAGES=en                   # comma-separated BCP-47 language codes
-
-# Scope partitioning (v0.7.6 — opt-in coordination for multi-bee deployments)
-HIVE_PARTITION='Category:Pharmacology'  # plain string when there's only one source
-# OR per-source: HIVE_PARTITION='{"wikipedia-en":"Category:Pharmacology","arxiv":"cs.LG"}'
-# Partition lives INSIDE the declared scope — three Medicine bees can pick
-# Pharmacology / Surgery / Oncology and never overlap, while staying exclusive.
-
-# Extraction tuning
-HIVE_EXTRACT_MAX_FRAGMENTS=9        # fragments per cycle, split across claimed topics
-HIVE_EXTRACT_INTERVAL_MS=60000      # pause between cycles (1 min = near-continuous)
-HIVE_EXTRACT_BUDGET_MINUTES=20      # wall-clock budget per cycle, divided across topics
-```
-
-**Bee throughput** depends only on `MAX_FRAGMENTS`, `INTERVAL_MS`, and
-Wikipedia's response time — there's no LLM in the loop. With the
-defaults (9 fragments/cycle, 60 s cycle) a healthy bee produces
-~13 000 fragments/day. Lower `INTERVAL_MS` for more, raise it to be
-gentler on the source.
-
-**Query latency** (queen `/api/query`) is dominated by the LLM
-synthesis call:
-
-| Provider | Typical query latency | Notes |
-|---|---|---|
-| Groq | ~1–2 s | Free 100K tok/day. Best speed/quality trade-off. |
-| Gemini Flash Lite | ~2–3 s | Generous free tier. Default. |
-| OpenAI / Claude | ~2–4 s | Paid. Highest quality. |
-| Ollama qwen2.5:1.5b | ~15–30 s | Free, local, slow. Useful for fully-offline demos. |
-
----
-
-## Queen node (was: aggregator)
-
-A queen connects to all BEEs in the network, replicates their Hypercore data, and indexes everything into Qdrant for scalable vector search. It doesn't extract — it consumes. (Renamed from "aggregator" in v0.7.0 to keep the bee metaphor consistent: bees forage, queens organise.)
-
-```bash
-# Requires Docker for Qdrant (started automatically)
-bash queen.sh
-
-# Or with explicit Qdrant URL
-QDRANT_URL=http://localhost:6333 bash queen.sh
-```
-
-The queen's Qdrant dashboard is available at `http://localhost:6333/dashboard`.
-
-Any node can become a queen — it will automatically sync all existing fragments from peers via Hypercore replication.
-
-> ℹ️  `bash aggregator.sh` still works in v0.7.0: it's now a wrapper
-> that prints a deprecation notice and execs `queen.sh`. The wrapper
-> goes away in v0.8.
+## Why HIVE
+
+LLMs are frozen at training time and hallucinate sources. The usual fix — RAG —
+means standing up your own crawler, embedder, and vector DB, and trusting
+whatever it scraped. HIVE makes that knowledge layer **shared, verifiable, and
+serverless**:
+
+- 🔏 **Every fragment is signed.** ed25519 over the text *and* its embedding
+  vector. You can prove who produced a fact and that it wasn't altered.
+- 🌐 **Peer-to-peer, no middleman.** Nodes find each other over a DHT and
+  replicate append-only logs directly. There's no "HIVE Inc." server between
+  you and the data.
+- 🧠 **Built for retrieval.** Multilingual embeddings (e5-base), deterministic
+  chunking, and a tuned relevance gate — ask in Spanish, match an English
+  source.
+- 🪶 **Run a contributor in one command.** No API key, no cloud bill.
 
 ---
 
 ## How it works
 
+Two kinds of node. **BEEs** produce knowledge; **QUEENs** consume it.
+
+```mermaid
+flowchart LR
+    subgraph BEE["🐝 BEE · producer"]
+        X[crawl source] --> C[deterministic chunk]
+        C --> E[embed chunk<br/>e5-base ONNX]
+        E --> S[sign text + vector<br/>ed25519]
+        S --> H[(own Hypercore<br/>append-only)]
+    end
+
+    subgraph QUEEN["👑 QUEEN · consumer"]
+        R[replicate bee cores] --> V[verify signature]
+        V --> U[upsert vector<br/>into LanceDB]
+        U --> I[(vector index)]
+        Q[embed the query] --> ANN[ANN search + gate]
+        I --> ANN
+        ANN --> L[LLM synthesis<br/>+ grounded verdict]
+    end
+
+    H -- "Hyperswarm / Hypercore<br/>P2P replication" --> R
+    USER([your LLM / app]) -- "POST /api/query" --> Q
+    L -- "answer + signed sources" --> USER
 ```
-Every node (bee | queen | hive) starts:
-  → Loads ed25519 identity from data/identity/node.json (created on first boot)
-  → Opens its Hypercore pair (fragments + claims) in a shared Corestore
-  → Joins Hyperswarm DHT on topic = sha256("hive-network-v0.1")
 
-On every peer connection (all modes):
-  → store.replicate(socket) opens native Hypercore replication
-  → Protomux channel `hive/meta/v2` exchanges:
-       { nodeId, publicKey, coreKey, claimsCoreKey }
-  → peer-meta event:
-      • register peer's pubkey for ed25519 verify on receive
-      • queen / hive: open peer's fragments core read-only → download
-                        + watchRemoteCore: live stream → verify sig → POST to embedder
-      • bee: registers the peer but does not download remote cores (v0.7)
+The key idea: **bees embed, the queen does not.** Each bee computes and signs
+its own vectors; the queen just copies them into its index. A queen's
+per-fragment cost is a database upsert, not a model forward pass — so a single
+queen can aggregate **hundreds** of bees.
 
-Bee extraction loop (every HIVE_EXTRACT_INTERVAL_MS) — NO LLM:
-  → Dequeue 5 titles from crawl_queue.jsonl
-  → For each: wikipedia_fetch verbatim → onFragment per H2/H3
-       → store.get(id) — check Hypercore for existing fragment
-            → Fresh (within TTL — wiki 7d, rss 24h, arxiv 30d): skip
-            → Stale: supersede() — old marked, new appended (still signed)
-            → New: save() — signed and appended to own Hypercore
-  → Aux fetch by rule: news topics → rss_fetch; science → arxiv_search
-
-Queen query path (/api/query) — the ONLY LLM call in HIVE:
-  → embedder.embed(question) → top-K vectors from Qdrant
-  → fragments = fetch text for each match (already signed when ingested)
-  → llm.generate(system_prompt, "fragments + question") → natural-language answer
-  → return { answer, sources: [{ url, title, source }, ...] }
-
-No HTTP between two HIVE nodes anywhere since v0.6.4. The Fastify
-server is for external clients only (dashboard + /api/query).
+```mermaid
+sequenceDiagram
+    participant W as Wikipedia / arXiv / RSS
+    participant B as 🐝 BEE
+    participant Q as 👑 QUEEN
+    participant U as Your app
+    W->>B: fetch verbatim
+    B->>B: chunk → embed → sign (vector inline)
+    B-->>Q: replicate signed fragment (P2P)
+    Q->>Q: verify ed25519 → upsert into LanceDB
+    U->>Q: "What is photosynthesis?"
+    Q->>Q: embed query → search → relevance gate → LLM
+    Q-->>U: grounded answer + signed source chips
 ```
+
+→ Full mechanics in **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**.
 
 ---
 
-## Architecture
+## Use cases
 
-```
-packages/
-  core/        — KnowledgeStore (Hypercore+Hyperbee), P2P node, PeerRegistry,
-                  ClaimRegistry, ed25519 identity, topic assignment
-  agent/       — Autonomous extractor + crawl queue, wikipedia_fetch,
-                  arxiv_search, rss_fetch, text_chunker, HTML-entity decoder
-  embeddings/  — Python: all-MiniLM-L6-v2 → HNSW (hive mode) or Qdrant (queens). v0.7 bees skip the embedder entirely.
-  api/         — Fastify :8080 + UI server, runtime-env loader, version badge
-  ui/          — Web UI (vanilla HTML/JS, light theme, version + mode chips)
-
-data/
-  topic_tree.json    — committed taxonomy (95 topics, 9 domains)
-  identity/          — runtime ed25519 keypair per node (gitignored)
-  corestore/         — Hypercore data: fragments + claims cores (gitignored)
-  repl_cursors/      — last-processed Hyperbee seq per remote peer
-                       (queen-side, since v0.7.6.4; resume cursor for
-                       watchRemoteCore — safe to delete, costs a one-time
-                       full replay)
-  crawl_queue.jsonl  — persistent BFS queue of titles to fetch
-  .runtime.env       — UI-set LLM overrides (since v0.6.4.3)
-```
+| | Use case | How HIVE helps |
+|---|---|---|
+| 🔌 | **Drop-in RAG for your LLM app** | Point `/api/query` at the network and get grounded, cited answers without building a crawler + vector DB. |
+| 🏢 | **Private vertical knowledge base** | Run bees scoped to your domain (a category tree, a set of feeds, a corpus) and a private queen — your own verifiable RAG, on your hardware. |
+| 🤝 | **Shared knowledge commons** | Many operators run bees on different topics; everyone's queen sees the union. Contribute compute, consume the whole network. |
+| 🔎 | **Provenance you can audit** | Every answer traces to signed fragments with source URLs — defensible for compliance, research, journalism. |
+| 🌍 | **Cross-lingual retrieval** | Multilingual embeddings match a Spanish question to an English source (and vice-versa) out of the box. |
+| 🏠 | **Fully-local, no cloud** | Pair a queen with Ollama for a private agent that never sends a byte to a third party. |
 
 ---
 
-## v0.7 architecture
+## Quick start
 
-v0.7 brings two architectural changes. **Section 1 is shipped in
-v0.7.0**; sections 2-5 land progressively in v0.7.1+. See
-[CHANGELOG.md](./CHANGELOG.md) for what's released today and
-[CLAUDE.md](./CLAUDE.md) for the detailed roadmap.
+Pick what you want to do. Each is shown **with Docker** (nothing to install but
+Docker) and **from source** (Node 22+ — no Python, no external services in v0.8).
 
-### 1. Role split: `bee` / `queen` / `hive` *(shipped in v0.7.0)*
-
-Same binary, same Docker image, mode selected at runtime via the
-`HIVE_MODE` env var:
-
-| Mode | Role | Who runs it |
-|------|------|-------------|
-| `HIVE_MODE=bee` *(default since v0.7.0.6)* | **Producer** — extracts, signs, propagates its Hypercore. No embedder, no LLM, no query API. ~150 MB. | Most operators. Contribute to the network. Raspberry-Pi-friendly. |
-| `HIVE_MODE=queen` (renamed from aggregator) | **Consumer / indexer** — replicates every bee's Hypercore into Qdrant, serves `/api/query` with LLM synthesis. ~600 MB. | Anyone who wants to query (public services, private corporate verticals). |
-| `HIVE_MODE=hive` | Both in one process. | Devs, single-machine quickstart, advanced users who want extractor + queries in one. |
-
-The metaphor stays: bees forage, the queen organises. Splitting roles
-amplifies Hypercore's single-writer pattern — it does not break P2P.
-No "HIVE Inc." middle layer; anyone can run their own queen indexing
-whichever bees they care about.
-
-### 2. Source-driven extraction (replaces topic-driven)
-
-The v0.6 `topic_tree.json` was a static taxonomy committed in the repo
-— a soft point of centralisation. v0.7 replaces it with **per-BEE
-source declarations**:
-
-Each BEE publishes a self-declared **BeeManifest** to its Hyperbee at
-startup, listing which sources it covers (`wikipedia-en`, `arxiv`,
-`common-crawl-2026-04` …). Queens read manifests when they replicate a
-core and expose `GET /api/directory` — a live view of all known BEE
-declarations. No central source list lives in the repo.
-
-```
-GET /api/directory          → all known BeeManifests (queen: all peers; bee: self only)
-GET /api/status             → node health, mode, version, peer count
-GET /api/topics             → Knowledge Network panel data (fragment counts per node)
-GET /api/crawl              → forager state (queue, visited, next titles)  [bee/hive]
-GET /api/query?q=…          → vector search + LLM synthesis                [queen/hive]
-```
-
-All source adapters implement the same `ForagerSource` interface
-(`seed`, `fetch`, `normalize`, `owns`). The generic forager owns
-queue + visited + dedup + budgeting + claims. Adding a new source =
-one file.
-
-Open-web extraction goes through **Common Crawl** (publicly hosted,
-reproducible, snapshot-versioned). Google / Bing / proprietary search
-are explicitly out of scope: non-reproducible, ToS-hostile,
-recentralising.
-
-The shift in framing:
-
-- **v0.6:** *a P2P network of BEEs that extract from configured fetch tools, organised by a shared topic taxonomy.*
-- **v0.7+:** *a P2P network of BEEs that extract from objectively-identifiable public sources they self-declare, organised by what each BEE chose to cover.*
-
-Closer to what HIVE has always wanted to be — Wikipedia for machines —
-without the last vestige of editorial centralisation.
-
-### 3. Bee specialisation: scope + policy + recovery
-
-A BEE's manifest can declare a **scope** within each source (Wikipedia
-`Category:Medicine` subtree; arXiv `q-bio.QM`; a list of domains in
-Common Crawl). The `policy` field controls what the forager does with
-out-of-scope links it discovers:
-
-- `"exclusive"` — drop them. Specialist bees stay focused.
-- `"drift-ok"` — follow them. Reproduces v0.6 BFS-everything behaviour.
-
-When a specialist bee exhausts its scope, the forager runs an
-automatic recovery ladder: **expand scope → rotate source → relax
-policy → announce exhausted**. A focused bee never sits idle silently.
-
-### 4. Bee replication topology (opt-in)
-
-Default `HIVE_BEE_REPLICATE=neighbors` — a bee only replicates peers
-whose declared scope overlaps with its own. `none` (lightest) and
-`all` (v0.6.4 behaviour) are also valid. Queens always replicate every
-bee they index, so network-level durability does not depend on
-bee↔bee replication — that is an extra resilience bonus.
-
-### 5. Queens are durability nodes, not just query nodes
-
-A queen does two things with each bee it follows: keeps a full
-**read-replica of the bee's Hypercore** on disk (signed,
-append-only, durable) and **indexes new fragments into Qdrant** as a
-derived vector index. Qdrant is rebuildable from the cores; the cores
-are the source of truth. If every queen disappeared, bees still hold
-their own signed cores; one operator restarting a queen rebuilds the
-index from scratch.
-
----
-
-## Logs
-
+### 🐝 Contribute — run a BEE
+The lightest thing you can run. No key, no LLM.
 ```bash
-tail -f /tmp/hive_api_bee-1.log   # BEE-1 activity
-tail -f /tmp/hive_embedder.log    # queen embedder
-tail -f /tmp/hive_queen.log       # queen P2P + sync (was: hive_aggregator.log)
+git clone https://github.com/capybarist/hive.git && cd hive
+docker compose up -d bee-1          # Docker
+# — or —
+npm install && bash hive.sh          # from source, bee on :8080
+```
+Open `http://localhost:8080` for the live extraction dashboard. The bee joins
+the DHT, claims topics, and starts publishing signed fragments immediately.
+
+### 👑 Query — run a QUEEN
+Needs an LLM key (synthesis only). The vector index is an in-process LanceDB —
+no separate container.
+```bash
+cp .env.example .env                 # set QUEEN_LLM_API_KEY (Gemini/Groq/…)
+docker compose up -d queen           # Docker
+# — or —
+npm install && bash queen.sh         # from source, queen on :8090
+```
+Open `http://localhost:8090` to query. A fresh queen discovers bees over the
+DHT and replicates their history, then tracks live.
+
+### 🐝👑 Full stack — QUEEN + BEE + reverse proxy
+```bash
+cp .env.example .env                 # set QUEEN_LLM_API_KEY
+docker compose up -d                 # caddy + bee-1 + queen
+docker compose --profile bee-2 up -d # add more bees (auto-coordinate topics)
+```
+- `http://<host>` → queen UI (Caddy on :80) · `:8080` → bee · `:8090` → queen
+
+### 🏠 Fully-local (Ollama)
+```bash
+docker compose --profile ollama up -d   # pulls qwen2.5:1.5b
+# then in .env:  QUEEN_LLM_PROVIDER=ollama   QUEEN_LLM_MODEL=qwen2.5:1.5b
 ```
 
-For Docker deployments use `docker compose logs -f <service>`
-(`bee-1`, `queen`, `qdrant`, `caddy`).
+### Dev — 3 nodes on one machine
+```bash
+bash start.sh            # nodes on :8080 :8081 :8082
+bash start.sh --clean    # wipe data and restart
+bash stop.sh --force     # kill all
+```
+
+> 💡 **Memory:** every node loads the e5-base ONNX model in-process, so budget
+> ~900 MB–1 GB per node. A queen + 1 bee fits a 4 GB machine.
+
+> ⚠️ **Upgrading from v0.7.x?** v0.8 is a coordinated **hard reset** (new model,
+> new fragment format, new vector store). Follow the cutover runbook in
+> [docs/V0.8-MIGRATION.md §10](./docs/V0.8-MIGRATION.md#10-cutover-runbook).
+
+---
+
+## The three modes
+
+| Command | `HIVE_MODE` | Does | LLM key? |
+|---|---|---|---|
+| `bash hive.sh` *(default)* | `bee` | Extract + embed + sign + own Hypercore. No query API. | No |
+| `bash queen.sh` | `queen` | In-process LanceDB + `/api/query`. Embeds only the query. | Yes |
+| `HIVE_MODE=hive bash hive.sh` | `hive` | Everything in one process. | Yes |
+
+---
+
+## LLM providers
+
+HIVE uses an LLM in exactly **one place**: query synthesis on the queen. **Bees
+never call an LLM** — extraction is a mechanical crawl→chunk→embed→sign loop.
+The embedding model (`intfloat/multilingual-e5-base`, ONNX int8) runs in-process
+on every node and is *not* an LLM.
+
+| Provider | Cost | Default model |
+|---|---|---|
+| **Gemini** *(default)* | Generous free tier | `gemini-2.5-flash-lite` |
+| **Groq** *(recommended for queens)* | Free 100K tok/day | `llama-3.3-70b-versatile` |
+| **Claude** | Paid | `claude-sonnet-4-6` |
+| **OpenAI** | Paid | `gpt-4o` |
+| **Ollama** | Free, local, slow | `qwen2.5:1.5b` |
+
+Set `QUEEN_LLM_PROVIDER` + `QUEEN_LLM_API_KEY` in `.env`, or switch at runtime
+via the UI provider chip. Full config reference:
+[docs/ARCHITECTURE.md §10](./docs/ARCHITECTURE.md#10-configuration-reference).
+
+---
+
+## Tech stack
+
+All-Node since v0.8 — no Python, no external database.
+
+- **P2P:** Hyperswarm (DHT discovery) + Hypercore/Hyperbee (signed append-only logs)
+- **Identity & integrity:** ed25519 signatures over text + metadata + vector
+- **Embeddings:** `intfloat/multilingual-e5-base` (768-d, ONNX int8) via `@huggingface/transformers`
+- **Vector store:** LanceDB (embedded, in-process)
+- **API:** Fastify + a vanilla-JS dashboard
 
 ---
 
 ## License
 
-BUSL-1.1 — free to use non-commercially. Converts to MIT after 4 years.  
+BUSL-1.1 — free to use non-commercially. Converts to MIT after 4 years.
 See [LICENSE](./LICENSE) and [MANIFESTO.md](./MANIFESTO.md).

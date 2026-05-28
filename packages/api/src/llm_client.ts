@@ -1,6 +1,21 @@
 import { createLLMProvider } from '@hive/core';
 import type { LLMMessage } from '@hive/core';
-import type { SearchResult } from './query_engine.js';
+
+// v0.8 — the LLM only needs the rendering-relevant subset of a v0.8 hit.
+// Kept shallow on purpose: api_server projects QueenSearchHit into this shape
+// so this module doesn't take a dep on @hive/embeddings-node.
+export interface RetrievedFragment {
+  id: string;
+  text: string;
+  title?: string;
+  url: string;
+  source: string;            // adapter id (wikipedia-en, arxiv, …)
+  source_type: string;
+  lang: string;
+  node_id: string;
+  score: number;
+  relevant: boolean;
+}
 
 // v0.7.6.2 — system prompt tuned for *depth* without losing the v0.7.2.5
 // improvements. The v0.7.2.5 rewrite stopped the verbose "the fragment
@@ -64,15 +79,13 @@ export interface LLMResponse {
   grounded: boolean;
 }
 
-function sourceUrl(f: SearchResult): string | null {
-  if (f.arxiv_id) return `https://arxiv.org/abs/${f.arxiv_id}`;
-  const m = f.source?.match(/arXiv:(\S+)/i);
-  if (m) return `https://arxiv.org/abs/${m[1]}`;
-  if (f.doi) return `https://doi.org/${f.doi}`;
-  return null;
+function sourceUrl(f: RetrievedFragment): string | null {
+  // v0.8 — the per-fragment url is the canonical link. The adapter id
+  // (wikipedia-en, arxiv, …) is the display label.
+  return f.url || null;
 }
 
-function buildPrompt(question: string, fragments: SearchResult[]): string {
+function buildPrompt(question: string, fragments: RetrievedFragment[]): string {
   // v0.7.7.6 — widen the context. Was 4 fragments × 400 chars (~1.6k chars),
   // which starved the model and produced terse answers. 8 × 900 (~7k chars)
   // gives it enough verbatim material to write the depth the system prompt
@@ -92,8 +105,7 @@ function buildPrompt(question: string, fragments: SearchResult[]): string {
 
 export async function synthesize(
   question: string,
-  fragments: SearchResult[],
-  _apiKey: string,
+  fragments: RetrievedFragment[],
   hasRelevantData: boolean,
   history: Array<{role: string; content: string}> = [],
 ): Promise<LLMResponse> {

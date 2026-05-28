@@ -23,7 +23,7 @@ session) to:
    carries `installSteps`, tech-stack copy, and the version label
    tooltip. Whatever a visitor copy-pastes to bring up a node has to
    work against the current image.
-4. **Shell scripts** — `hive.sh`, `queen.sh`, `aggregator.sh` (and any
+4. **Shell scripts** — `hive.sh`, `queen.sh`, `start.sh` (and any
    future launcher) must agree on env-var names and `HIVE_MODE`
    defaults.
 5. **`docker-compose.yml`** — service names, container names, volume
@@ -44,38 +44,54 @@ the obligation to update the docs.
 
 ---
 
-## Post-demo state — 2026-05-26 evening
+## Current state — v0.8.0 (all-Node, producer-side vectorization)
 
-Demo is done. Production is at v0.7.7.12 (graceful shutdown to prevent
-Hypercore forks; see CHANGELOG). The v0.7.7.x line stabilized
-retrieval gating, the LLM grounded-verdict badge, and a fork-recovery.
+v0.8 landed the unified migration as one coordinated breaking change.
+Full plan + cutover runbook: [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md);
+per-version summary in CHANGELOG.
 
-> **NEXT MAJOR: v0.8 unified migration** — all-Node stack (drop Python +
-> Qdrant), `multilingual-e5-base` (ONNX int8) embeddings, **producer-side
-> vectorization** (bees embed; vector signed inline in the Hypercore;
-> thin queen), LanceDB, deterministic chunking, new Fragment schema. One
-> coordinated hard reset. Full plan: [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
-> The v0.7.8/.9 items below are folded into it.
+What v0.8 is, in one screen:
+- **Bees embed; the queen does not.** Each bee chunks deterministically,
+  embeds every chunk with `intfloat/multilingual-e5-base` (ONNX int8, 768-d)
+  in-process, and **signs the vector inline** in its Hypercore fragment
+  (`schema_version = 2`). The queen replicates bee cores and upserts the
+  pre-computed vectors into an embedded **LanceDB** — no passage embedding,
+  no transformer forward pass per fragment. It embeds only the *query*.
+- **No Python, no Qdrant.** The whole stack is Node. `packages/embeddings`
+  (Python) is deleted; `packages/embeddings-node` owns the embedder
+  (`@huggingface/transformers`), the deterministic chunker, the fp16 vector
+  codec, the `QueenIndex` (LanceDB) and the retrieval gate.
+- **Retrieval gate** recalibrated for e5: `RELEVANT_SCORE = 0.82` (was 0.45
+  for MiniLM). Same logic (score AND majority-keyword) + LLM grounded-verdict.
+- **Fragment schema v2** is source-agnostic: `identifiers` map replaces
+  `doi`/`arxiv_id`; `content_hash` (NFC + trim + collapse-ws, no lowercase)
+  enables corroboration across bees that share `chunker_version`.
 
-### Open items
-- **v0.7.7** — Retrieval gating (raise `RELEVANT_SCORE` 0.30→0.45 in
-  `query_engine.ts`, multi-token keyword check) + dead-end recovery
-  ladder for queries that fall below the new threshold.
-- **v0.7.8** — Remove topic-tree code paths (`loadTree()`,
-  `topic_tree.json`) — superseded by BeeManifest declared_sources.
-- **v0.7.9** — Score-by-corroboration (`cos_sim × log(1 +
-  corroboration_count)`).
-- **Discovery glitch under investigation**: on the Hetzner box,
-  local bee-1 (same docker network as queen) is NOT a Hyperswarm
-  peer of the queen — the queen replicates from external "ghost"
-  bees discovered via DHT instead. Probably a NAT/holepunch
-  topology issue with two containers behind the same host IP.
-  Doesn't break the demo (the ghosts ARE valid HIVE bees with
-  shared topic) but is unintuitive.
+Key files:
+- `packages/core`: `schema_v08.ts`, `fragment_v08.ts`
+  (`buildSignedFragmentV08`/`verifyFragmentV08`), `content_hash.ts`,
+  `knowledge_store.ts` (`save(FragmentV08)`, `watchRemoteCoreV08`,
+  `watchLocalCoreV08`).
+- `packages/embeddings-node`: `embedder.ts`, `chunker.ts`, `vector_codec.ts`,
+  `lance_index.ts`, `queen_index.ts`, `retrieval_gate.ts`.
+- `packages/api/src/api_server.ts`: instantiates `QueenIndex` for queen/hive,
+  routes `/api/query` through it, pipes replicated + local cores into it.
+- `packages/agent/src/autonomous_extractor.ts`: chunk → embed → sign → save.
+
+### Open items (post-v0.8)
+- **Topic-tree cleanup**: `loadTree()` / `topic_tree.json` are still the
+  fallback when no manifest is published. BeeManifest `declared_sources` is the
+  replacement; finish removing the topic-tree path.
+- **Score-by-corroboration**: `cos_sim × log(1 + corroboration_count)` using
+  the v0.8 `content_hash` corroboration signal.
+- **Fragment id hygiene**: the Wikipedia adapter leaks long heading text
+  (incl. `_edit_`) into chunk ids — cosmetic, worth slugging tighter.
+- **Distributed model migration** (designed-in, not built): re-embed on bee
+  startup from local text when the network model changes — see migration §9.
 
 ---
 
-## Current state: v0.7.6 — opt-in scope partitions for multi-bee coordination
+## v0.7.6 — opt-in scope partitions for multi-bee coordination (still current)
 
 ### v0.7.6 — Scope partitions
 Adds an opt-in `partition` field per declared source so multiple bees on

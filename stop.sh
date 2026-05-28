@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# HIVE — stop all BEE, embedder, and aggregator processes
+# HIVE v0.8 — stop all node processes for the local dev launcher.
+#
 # Usage:
 #   bash stop.sh          — stop everything
 #   bash stop.sh --force  — skip graceful shutdown, kill -9 immediately
+#
+# v0.8 has no Python embedder, so there is no separate embedder process to kill.
 
 cd "$(dirname "$(realpath "$0")")"
 
@@ -27,7 +30,6 @@ kill_pattern() {
     # Graceful SIGTERM first
     echo "$pids" | xargs kill -SIGTERM 2>/dev/null
     sleep 1
-    # Force-kill survivors
     pids=$(pgrep -f "$pattern" 2>/dev/null | tr '\n' ' ')
     [ -n "$pids" ] && echo "$pids" | xargs kill -9 2>/dev/null
   else
@@ -41,19 +43,13 @@ kill_pattern() {
 }
 
 echo ""
-echo "  HIVE — stopping all processes$([ $FORCE -eq 1 ] && echo ' [--force]')"
+echo "  HIVE — stopping all node processes$([ $FORCE -eq 1 ] && echo ' [--force]')"
 echo "────────────────────────────────────────"
 
-# BEE embedders (Python FastAPI)
-kill_pattern "embedders"   "packages/embeddings/api_server.py"
+# BEE/Queen API servers (node + tsx)
+kill_pattern "HIVE node processes" "packages/api.*api_server"
 
-# BEE API servers (Node/TSX)
-kill_pattern "BEE API servers" "packages/api.*api_server"
-
-# Aggregator (when aggregator.sh exists — runs a separate node process)
-kill_pattern "aggregator"  "packages/agent.*aggregat"
-
-# Clean up temp env files created by start.sh / hive.sh
+# Clean up temp env files created by start.sh / hive.sh / queen.sh
 tmp_files=$(ls /tmp/hive_*.env 2>/dev/null)
 if [ -n "$tmp_files" ]; then
   count=$(echo "$tmp_files" | wc -l | tr -d ' ')
@@ -61,10 +57,10 @@ if [ -n "$tmp_files" ]; then
   ok "Removed $count temp env file(s)"
 fi
 
-# ── Verify ports are free (and force-kill stragglers if --force) ──────────────
+# ── Verify ports are free (and force-kill stragglers if --force) ────────────
 echo ""
 still_running=()
-for port in 7700 7701 7702 7703 7790 8080 8081 8082 8083 8090; do
+for port in 8080 8081 8082 8083 8090; do
   pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1)
   [ -z "$pid" ] && continue
   if [ $FORCE -eq 1 ]; then
@@ -75,10 +71,9 @@ for port in 7700 7701 7702 7703 7790 8080 8081 8082 8083 8090; do
   fi
 done
 
-# Re-check after force kills
 if [ $FORCE -eq 1 ]; then
   still_running=()
-  for port in 7700 7701 7702 7703 7790 8080 8081 8082 8083 8090; do
+  for port in 8080 8081 8082 8083 8090; do
     pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1)
     [ -n "$pid" ] && still_running+=("port $port (pid=$pid)")
   done
@@ -91,6 +86,6 @@ if [ ${#still_running[@]} -gt 0 ]; then
 elif [ $killed -eq 0 ]; then
   run "No HIVE processes were running"
 else
-  ok "All done — ports 7700-7703 and 8080-8083 are free"
+  ok "All done — ports 8080-8083 and 8090 are free"
 fi
 echo ""

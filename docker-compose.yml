@@ -1,25 +1,21 @@
-# HIVE — Full VPS stack
+# HIVE v0.8 — Full VPS stack (all-Node, no Python, no Qdrant).
 #
 # Usage:
 #   cp .env.example .env && nano .env   # set LLM_PROVIDER + LLM_API_KEY
-#   docker compose up -d                # starts caddy + qdrant + bee-1 + queen
+#   docker compose up -d                # starts caddy + bee-1 + queen
 #
-# v0.7 rename: the consumer node is now `queen` (was `aggregator`). The
-# old `aggregator` DNS alias is preserved on the network so any external
-# consumer that still references `http://aggregator:8090` keeps working.
+# v0.8 changes vs v0.7:
+#   - No qdrant service: the queen now owns an in-process LanceDB (embedded).
+#   - No Python embedder: every node runs e5-base ONNX int8 via transformers.js.
+#   - The queen volume is renamed aggregator-data → queen-data (one-time op).
 #
-# Default LLM provider is `gemini` (gemini-2.5-flash-lite). To switch:
-#   LLM_PROVIDER=groq   LLM_API_KEY=gsk_...
-#   LLM_PROVIDER=claude LLM_API_KEY=sk-ant-...
-#   LLM_PROVIDER=openai LLM_API_KEY=sk-...
-#   LLM_PROVIDER=ollama (then also `docker compose --profile ollama up -d`)
+# Default LLM provider is `gemini` for bees, `groq` for the queen (fast public
+# query path). Switch at any time with /api/config or via .env.
 #
 # Access points (no domain needed):
 #   http://your-ip        → Queen (via Caddy)
 #   http://your-ip:8080   → BEE-1 directly
-#   http://your-ip:8081   → BEE-2 directly (if started)
 #   http://your-ip:8090   → Queen directly
-#   http://your-ip:6333/dashboard → Qdrant
 #
 # Optional services (off by default — opt in via --profile):
 #   docker compose --profile bee-2 up -d     # add a 2nd extractor BEE
@@ -27,7 +23,7 @@
 
 services:
 
-  # ── Reverse proxy ─────────────────────────────────────────────────────────────
+  # ── Reverse proxy ─────────────────────────────────────────────────────────
   caddy:
     image: caddy:2-alpine
     container_name: hive-caddy
@@ -50,35 +46,7 @@ services:
     depends_on:
       - queen
 
-  # ── Vector database ───────────────────────────────────────────────────────────
-  qdrant:
-    image: qdrant/qdrant:v1.13.6
-    container_name: hive-qdrant
-    restart: unless-stopped
-    volumes:
-      - qdrant-data:/qdrant/storage
-    ports:
-      - "6333:6333"
-    healthcheck:
-      # Qdrant exposes /readyz which returns 200 only once the storage is open
-      # and ready to serve. /healthz is too eager — it returns 200 while the
-      # collections are still loading from disk on cold start, which causes
-      # the aggregator to fall through to its HNSW fallback (v0.6.4.4 bug).
-      #
-      # The Qdrant image has neither wget, curl, nc, nor python — only bash.
-      # We use bash's /dev/tcp pseudo-device to issue a raw HTTP/1.0 request.
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3; head -n1 <&3 | grep -q ' 200'"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-
-  # ── Ollama — local LLM (OPTIONAL, opt-in via profile) ────────────────────────
-  # Off by default since v0.6.4.2: most operators run with a cloud LLM
-  # (LLM_PROVIDER=gemini/groq/claude/openai) and the Ollama container was
-  # eating ~2 GB of RAM doing nothing. To turn it on:
-  #   docker compose --profile ollama up -d
-  # Then set LLM_PROVIDER=ollama in your .env and restart the bees.
+  # ── Ollama — local LLM (OPTIONAL, opt-in via profile) ─────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: hive-ollama
@@ -95,7 +63,6 @@ services:
       retries: 15
       start_period: 30s
 
-  # Pulls the model once on first start via Ollama HTTP API (no TTY needed), then exits
   ollama-init:
     image: curlimages/curl:latest
     container_name: hive-ollama-init
@@ -114,30 +81,23 @@ services:
       ollama:
         condition: service_healthy
 
-  # ── BEE — extracts and indexes knowledge ──────────────────────────────────────
+  # ── BEE — extracts and signs v0.8 fragments (vector inline) ────────────────
   bee-1:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-1
     restart: unless-stopped
-    # v0.7.7.12 — give the node process time to flush its Hypercore on stop
-    # (the launcher forwards SIGTERM to it). Without this, abrupt kills forked
-    # the bee's fragments core. Default is 10s; 40s is ample headroom.
+    # v0.7.7.12 — give node time to flush its Hypercore on SIGTERM (launcher
+    # forwards). Without this, abrupt kills fork the bee's fragments core.
     stop_grace_period: 40s
     environment:
-      # v0.7: explicit producer role. Disables /api/query and remote-core
-      # replication; keeps extractor + local Hypercore + embedder.
       - HIVE_MODE=bee
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8080
-      - HIVE_EMBEDDER_PORT=7700
       - HIVE_DATA_DIR=/hive/data
-      # URL we advertise to peers so they can reach us inside the docker
-      # network. Without this, peers receive `http://127.0.0.1:8080` (the
-      # default) and can't connect → no coreKey exchange → no native
-      # Hypercore replication → fragments don't propagate.
+      # Advertised to peers via PeerMeta so they reach us in the docker network.
       - HIVE_API_URL=http://bee-1:8080
       - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-30000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-9}
@@ -146,27 +106,17 @@ services:
       - "8080:8080"
     volumes:
       - bee1-data:/hive/data
-    # No depends_on since v0.6.4.2: ollama is opt-in (profile). When you run
-    # with `--profile ollama` the container becomes a peer service but is
-    # not a hard dependency — bees fall back to whatever LLM_PROVIDER says.
 
-  # ── Optional second BEE ──────────────────────────────────────────────────────
-  # ⚠️  NOT RECOMMENDED until v0.7. Today each bee carries a Python embedder +
-  #     HNSW + sentence-transformers model (~700 MB resident). On a 4 GB VPS
-  #     running the full stack (qdrant + aggregator + caddy + ollama-init),
-  #     adding bee-2 has been empirically observed to OOM-kill the box.
-  #
-  #     v0.7 will split roles into `bee` (producer, ~150 MB) and `queen`
-  #     (consumer, ~600 MB). Then 2-4 bees fit comfortably on a 4 GB VPS.
-  #
-  #     If you really want to try bee-2 on v0.6.x today, you need a 8 GB+ VPS:
-  #         docker compose --profile bee-2 up -d
+  # ── Optional second BEE ──────────────────────────────────────────────────
+  # In v0.8 the per-bee memory budget is ~900 MB (Node + e5-base ONNX int8),
+  # so two bees fit comfortably on a 4 GB VPS — but bee-2 still stays opt-in
+  # to keep the default low. Enable with `docker compose --profile bee-2 up -d`.
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
     profiles: ["bee-2"]
     restart: unless-stopped
-    stop_grace_period: 40s   # v0.7.7.12 — clean Hypercore flush on stop
+    stop_grace_period: 40s
     environment:
       - HIVE_MODE=bee
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
@@ -174,10 +124,8 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash-lite}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8081
-      - HIVE_EMBEDDER_PORT=7701
       - HIVE_DATA_DIR=/hive/data
       - HIVE_API_URL=http://bee-2:8081
-      - HIVE_PEER=http://bee-1:8080
       - BEE_TOPIC_DOMAIN=${BEE2_TOPIC_DOMAIN:-current_events}
       - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-30000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-9}
@@ -190,65 +138,46 @@ services:
       bee-1:
         condition: service_started
 
-  # ── Queen — indexes all BEE fragments into Qdrant ────────────────────────────
-  # v0.7: renamed from `aggregator` (bee metaphor consistency — bees forage,
-  # queens organise). The volume name `aggregator-data` is preserved so
-  # existing operators upgrading from v0.6 don't lose their Hypercore replicas
-  # on `docker compose pull && docker compose up -d`. The volume will rename
-  # to `queen-data` in v0.8 with a migration note.
+  # ── Queen — replicates bee Hypercores, indexes into in-process LanceDB ─────
   queen:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-queen
     restart: unless-stopped
-    stop_grace_period: 40s   # v0.7.7.12 — clean Hypercore flush on stop
+    stop_grace_period: 40s
     command: ["bash", "queen.sh"]
     networks:
       default:
         aliases:
-          # Backward-compat DNS alias so internal references like
-          # `http://aggregator:8090` (caddy in older deployments, external
-          # dashboards, capybarahome) keep resolving until v0.8 cleanup.
+          # Backward-compat DNS for external consumers that still reference
+          # `http://aggregator:8090` (older capybarahome widget builds, dashboards).
           - aggregator
     environment:
-      # Queen uses a fast cloud LLM for query synthesis (public-facing, latency matters).
-      # Set AGGREGATOR_LLM_PROVIDER + AGGREGATOR_LLM_API_KEY in .env for the queen only.
-      # (Variable names kept for backward-compat with existing .env files; v0.8
-      # will introduce QUEEN_LLM_* as the canonical names and deprecate the old ones.)
-      # Groq free tier recommended (console.groq.com) — <2s responses vs 20s with Ollama.
-      - LLM_PROVIDER=${AGGREGATOR_LLM_PROVIDER:-groq}
-      - LLM_API_KEY=${AGGREGATOR_LLM_API_KEY:-}
-      - LLM_MODEL=${AGGREGATOR_LLM_MODEL:-}
+      # The queen synthesises public-facing answers, so it wants a fast LLM.
+      # Variable names use QUEEN_LLM_* in v0.8; AGGREGATOR_LLM_* still works as
+      # a fallback so existing .env files keep functioning.
+      - LLM_PROVIDER=${QUEEN_LLM_PROVIDER:-${AGGREGATOR_LLM_PROVIDER:-groq}}
+      - LLM_API_KEY=${QUEEN_LLM_API_KEY:-${AGGREGATOR_LLM_API_KEY:-}}
+      - LLM_MODEL=${QUEEN_LLM_MODEL:-${AGGREGATOR_LLM_MODEL:-}}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_MODE=queen
       - HIVE_PORT=8090
-      - HIVE_EMBEDDER_PORT=7790
       - HIVE_DATA_DIR=/hive/data
       - HIVE_API_URL=http://queen:8090
-      - QDRANT_URL=http://qdrant:6333
-      - EMBEDDER_BACKEND=qdrant
-      - HIVE_PEER=http://bee-1:8080
+      # Dashboard proxy: external /api/crawl widgets ask the queen, the queen
+      # forwards to the bee that actually owns the forager state.
+      - HIVE_DASHBOARD_BEE_URL=${HIVE_DASHBOARD_BEE_URL:-http://bee-1:8080}
     ports:
       - "8090:8090"
     volumes:
-      - aggregator-data:/hive/data
+      - queen-data:/hive/data
     depends_on:
-      qdrant:
-        condition: service_healthy   # v0.6.4.4: wait until Qdrant is actually ready
       bee-1:
         condition: service_started
 
-  # ── DEPRECATED: aggregator alias service ─────────────────────────────────────
-  # Removed in v0.7.0.4. The canonical service is now `queen` above, with a
-  # network alias `aggregator` that keeps DNS resolution working for any
-  # external consumer (capybarahome /hive widget, custom dashboards) that
-  # still references `http://aggregator:8090`. If you had `docker compose up
-  # aggregator` in scripts, switch to `docker compose up queen`.
-
 volumes:
-  qdrant-data:
   bee1-data:
   bee2-data:
-  aggregator-data:   # v0.7: kept name for zero-loss migration; renames to queen-data in v0.8
+  queen-data:        # v0.8 — renamed from aggregator-data. See V0.8-MIGRATION.md §10 for the one-time `docker volume` recipe.
   caddy-data:
   caddy-config:
   ollama-data:

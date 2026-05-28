@@ -3,6 +3,45 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.0 — Unified migration: all-Node, producer-side vectorization
+
+One coordinated breaking change (single hard reset). Full plan and cutover
+runbook: [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
+
+**Architecture**
+- **Producer-side vectorization.** Bees now embed each chunk themselves and
+  sign the vector *inline* in the Hypercore fragment. The queen no longer
+  embeds passages — it copies the bee's pre-computed, signed vectors straight
+  into its index. A queen's per-fragment cost is now an upsert, not a
+  transformer forward pass, so it scales to many bees.
+- **All-Node stack.** The Python `sentence-transformers` embedder and the
+  Qdrant container are gone. Every node embeds in-process with
+  `intfloat/multilingual-e5-base` (ONNX int8) via `@huggingface/transformers`;
+  the queen stores vectors in an embedded **LanceDB** (in-process, no service).
+- **New embedding model:** `all-MiniLM-L6-v2` (384-d, English-centric) →
+  `multilingual-e5-base` (768-d). Fixes the cross-lingual gap (ES query vs EN
+  corpus) and improves retrieval precision.
+- **Fragment schema v2.** Source-agnostic, signed over text + metadata +
+  vector. `doi`/`arxiv_id` collapse into a generic `identifiers` map; the
+  vector is base64(Float16Array) inline; `content_hash` (whitespace-normalised,
+  no lowercase) enables corroboration across bees.
+- **Deterministic layout chunking** (`chunker_version`) so two bees produce
+  identical chunks → identical `content_hash` → corroboration.
+
+**Retrieval**
+- Recalibrated gate: `RELEVANT_SCORE` 0.45 (MiniLM) → **0.82** (e5 cosines
+  compress to ~0.70–0.91). Same logic (score AND majority-keyword,
+  word-boundary, punctuation-stripped) + the LLM grounded-verdict backstop.
+
+**Ops**
+- `docker-compose.yml`: dropped `qdrant`; queen volume renamed
+  `aggregator-data` → `queen-data` (one-time `docker volume` recipe in the
+  migration doc). `hive.sh`/`queen.sh`/`start.sh` are single Node processes
+  now (no embedder bring-up). Dockerfile is `node:22-slim` (Float16Array needs
+  Node 22+) and pre-caches the ONNX model at build.
+- Requires **fresh cores** at cutover — the Hypercore fragment format changed.
+  Old v0.7 text-only data is re-crawled (young network, data re-crawlable).
+
 ---
 
 ## [0.7.7.12] — 2026-05-27 — *Graceful shutdown: stop forking the Hypercore on container stop*

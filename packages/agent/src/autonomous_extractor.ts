@@ -1,28 +1,32 @@
-import { KnowledgeStore, loadOrCreateIdentity, buildEmbedderPayload } from '@hive/core';
-import type { BeeManifest, DeclaredSource, Fragment } from '@hive/core';
+// HIVE v0.8 — autonomous extractor (bee-side).
+//
+// For each verbatim source unit the agent receives, this loop:
+//   1. Runs the deterministic v0.8 chunker over the text (one Section).
+//   2. Embeds each chunk with the network-standard e5-base ONNX model.
+//   3. Builds + signs the v0.8 fragment via @hive/core (vector inline).
+//   4. Appends to the local Hyperbee.
+// The queen reads those fragments via Hyperswarm/Hypercore replication and
+// upserts the (already vectorized) payload into its LanceDB. There is no
+// HTTP embedder anymore.
+import {
+  KnowledgeStore, loadOrCreateIdentity,
+  buildSignedFragmentV08, DEFAULT_TTL,
+  type FragmentV08, type FragmentV08Input, type NodeIdentity,
+  type BeeManifest, type DeclaredSource,
+} from '@hive/core';
+import { chunkDocument, embedPassage, encodeVector, warmup as warmupEmbedder } from '@hive/embeddings-node';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BudgetController, BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
+import { BudgetController, type BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
 import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
 import { arxivSource } from './forager/arxiv_source.js';
 import { rssSource } from './forager/rss_source.js';
 import { CommonCrawlSource } from './forager/common_crawl_source.js';
+import type { VerbatimFragment } from './forager/source.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
-const EMBEDDER_URL = process.env.EMBEDDER_URL ?? 'http://127.0.0.1:7700';
-
-// HIVE forager — a bee that goes out to bring knowledge back to the colmena.
-//
-// In v0.6.1 we removed the LLM from this loop entirely. The previous design
-// asked the LLM (qwen2.5:1.5b in our deployment) to orchestrate "look at the
-// queue, fetch the next title, repeat". Empirically it would call
-// wikipedia_search and then narrate "Please proceed with the next cycle"
-// instead of actually fetching, or pass arrays where wikipedia_fetch wanted
-// a string. The crawl flow is purely mechanical — drain queue → fetch →
-// enqueue links — so we now run it as straight code. The LLM is reserved for
-// /api/query synthesis (a different code path in the aggregator).
 
 export type { BudgetConfig } from './budget_controller.js';
 
@@ -32,181 +36,195 @@ export interface ExtractionResult {
   budget: ReturnType<BudgetController['summary']>;
 }
 
+// ── Per-source metadata helpers ─────────────────────────────────────────────
+// VerbatimFragment is intentionally source-agnostic; the v0.8 schema needs
+// source_type + lang + identifiers, so we derive them from the adapter id +
+// the per-fragment hints (arxiv_id, doi). One place that knows the mapping.
+
+function sourceTypeFor(adapterId: string): string {
+  if (adapterId.startsWith('wikipedia')) return 'wikipedia';
+  if (adapterId === 'arxiv') return 'arxiv';
+  if (adapterId === 'rss') return 'rss';
+  if (adapterId.startsWith('common-crawl')) return 'commoncrawl';
+  return 'custom';
+}
+
+function langFor(adapterId: string): string {
+  const m = adapterId.match(/-([a-z]{2})$/);
+  if (m) return m[1]!;
+  if (adapterId === 'arxiv') return 'en';
+  return 'en';
+}
+
+function ttlSecondsFor(sourceType: string): number {
+  return DEFAULT_TTL[sourceType] ?? 3 * 24 * 3600;
+}
+
+function identifiersFor(vf: VerbatimFragment): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  if (vf.doi) out.doi = vf.doi;
+  if (vf.arxiv_id) out.arxiv = vf.arxiv_id;
+  return Object.keys(out).length ? out : undefined;
+}
+
+// ── Verbatim → v0.8 fragments (chunk → embed → sign → save) ──────────────────
+// The single place where v0.8 fragments are produced. Returns the count of
+// chunks indexed (each chunk = one signed FragmentV08 in the Hypercore).
+async function buildAndSaveV08(
+  vf: VerbatimFragment,
+  adapterId: string,
+  store: KnowledgeStore,
+  identity: NodeIdentity,
+  partition: string | undefined,
+  onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
+): Promise<number> {
+  const sourceType = sourceTypeFor(adapterId);
+  const lang = langFor(adapterId);
+  const ttlSec = ttlSecondsFor(sourceType);
+  const retrievedAt = new Date().toISOString();
+
+  // The v0.8 chunker treats vf.text as one section. For short sections it
+  // emits a single chunk; for long ones, multiple — same content_hash on
+  // matching input across all bees that run the same CHUNKER_VERSION.
+  const sections = [{ heading_path: vf.title ? [vf.title] : [], text: vf.text }];
+  const chunks = chunkDocument(sections);
+  if (chunks.length === 0) return 0;
+
+  let saved = 0;
+  for (const ch of chunks) {
+    const chunkId = chunks.length > 1 ? `${vf.id}_c${ch.chunk_index}` : vf.id;
+    const vec = await embedPassage(ch.text);
+    const vecB64 = encodeVector(vec);
+    const input: FragmentV08Input = {
+      id: chunkId,
+      node_id: identity.nodeId,
+      node_pubkey: identity.publicKeyHex,
+      text: ch.text,
+      lang,
+      title: vf.title,
+      source: adapterId,
+      source_type: sourceType,
+      url: vf.source,                       // VerbatimFragment.source carries the URL
+      identifiers: identifiersFor(vf),
+      retrieved_at: retrievedAt,
+      section_path: ch.section_path,
+      chunk_index: ch.chunk_index,
+      chunk_count: ch.chunk_count,
+      extracted_at: new Date().toISOString(),
+      ttl_seconds: ttlSec,
+      partition,
+      confidence: vf.confidence,
+    };
+    const signed = buildSignedFragmentV08(input, vecB64, identity);
+    await store.save(signed);
+    saved++;
+    onIndexed?.({ id: signed.id, title: signed.title, source: signed.source });
+  }
+  return saved;
+}
+
+// Cross-cycle freshness check: does an unchanged-content fresh fragment for
+// this verbatim unit already live in our Hypercore? If so, skip the (costly)
+// embed pass entirely. Checks vf.id and the first-chunk id since the agent
+// may have chunked the section last time.
+async function isFresh(
+  store: KnowledgeStore,
+  vf: VerbatimFragment,
+  ttlSec: number,
+): Promise<boolean> {
+  const candidates = [vf.id, `${vf.id}_c0`];
+  for (const id of candidates) {
+    const existing = await store.get(id).catch(() => null);
+    if (existing) {
+      const ageMs = Date.now() - new Date(existing.extracted_at).getTime();
+      if (ageMs < ttlSec * 1000) return true;
+    }
+  }
+  return false;
+}
+
 export async function runAutonomousExtraction(
   objective: string,
   budgetConfig: Partial<BudgetConfig> = {},
   existingStore?: KnowledgeStore,
-  embedderUrlOverride?: string,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
-  // onLLMHealth kept in signature for backwards-compat with old callers
-  // (api_server.ts passes it). We always report "ok" since this path no
-  // longer touches the LLM.
+  // Kept in the signature for backwards-compat with api_server.ts callers;
+  // v0.8 has no LLM in the extractor loop, so we always report ok.
   onLLMHealth?: (ok: boolean) => void,
 ): Promise<ExtractionResult> {
   onLLMHealth?.(true);
 
-  const effectiveEmbedderUrl = embedderUrlOverride ?? EMBEDDER_URL;
   const budget = new BudgetController({ ...DEFAULT_BUDGET, ...budgetConfig });
 
-  // Use the provided store (no lock conflict) or open a new one for CLI use
   let store: KnowledgeStore;
   let ownStore = false;
+  let identity: NodeIdentity;
   if (existingStore) {
     store = existingStore;
+    // No public identity getter on the store — reconstitute from the same
+    // identity dir the api_server used. The api_server has already loaded it
+    // so this is a cached read.
+    identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
   } else {
-    const identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
+    identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
     store = new KnowledgeStore(DATA_DIR, identity);
     await store.ready();
     ownStore = true;
   }
 
+  // Warm the e5 ONNX model once per cycle. After the first cycle the pipeline
+  // stays loaded so subsequent calls are no-ops.
+  await warmupEmbedder();
+
   let fragmentsIndexed = 0;
   let finalSummary = '';
 
-  // v0.7.2: in-cycle title dedup used to live in tools_registry's
-  // _seenTitles Set, cleared at the top of each cycle. With sources
-  // now adapter-isolated (each is stateless), in-cycle dedup is
-  // handled at the CrawlQueue level for Wikipedia and is unnecessary
-  // for arXiv/RSS (rarely repeated titles within a single cycle).
-
-  // ── Manifest-driven source selection (v0.7.5) ───────────────────────────────
-  // Read the BEE's own manifest from Hypercore to learn which sources it has
-  // declared. Fallback: no manifest → [{id:'wikipedia-en', policy:'drift-ok'}]
-  // (v0.6 behaviour preserved). Queens (HAS_LOCAL_STORE=false) never publish a
-  // manifest so they stay on the fallback path, which is fine — they don't run
-  // extraction.
+  // ── Manifest-driven source selection (v0.7.5+) ───────────────────────────
   let manifest: BeeManifest | null = null;
-  try {
-    manifest = await store.getLocalManifest();
-  } catch { /* manifest not published yet — first boot, use defaults */ }
+  try { manifest = await store.getLocalManifest(); } catch { /* first boot */ }
 
   const declaredSources: DeclaredSource[] = manifest?.declared_sources?.length
     ? manifest.declared_sources
     : [{ id: 'wikipedia-en', policy: 'drift-ok' }];
 
-  const wikiDecl   = declaredSources.find(s => s.id === 'wikipedia-en');
-  const arxivDecl  = declaredSources.find(s => s.id === 'arxiv');
-  const rssDecl    = declaredSources.find(s => s.id === 'rss');
-  const ccDecl     = declaredSources.find(s => s.id === 'common-crawl' || s.id.startsWith('common-crawl-'));
+  const wikiDecl  = declaredSources.find(s => s.id === 'wikipedia-en');
+  const arxivDecl = declaredSources.find(s => s.id === 'arxiv');
+  const rssDecl   = declaredSources.find(s => s.id === 'rss');
+  const ccDecl    = declaredSources.find(s => s.id === 'common-crawl' || s.id.startsWith('common-crawl-'));
 
   console.log(`[manifest] Active sources: ${declaredSources.map(s => s.id).join(', ')} (from ${manifest ? 'published manifest' : 'defaults'})`);
 
-  // Build a scoped Common Crawl instance if declared (scope carries snapshot + domains)
   const ccSource = ccDecl ? new CommonCrawlSource({
     snapshot: (ccDecl.scope?.snapshot as string | undefined) ?? undefined,
     domains:  Array.isArray(ccDecl.scope?.domains) ? ccDecl.scope!.domains as string[] : [],
   }) : null;
 
-  // ── Persistent crawl queue (Wikipedia forager) ───────────────────────────────
-  // Loaded once per cycle. We pull a small batch off the head, hand those to
-  // the LLM as the cycle's work, and any new links wikipedia_fetch discovers
-  // get enqueued for future cycles. The queue dedupes against the visited set
-  // so we never re-process the same title.
   const crawlQueue = new CrawlQueue({ dataDir: DATA_DIR });
   await crawlQueue.load();
   const BATCH_PER_CYCLE = 5;
   const batchTitles = wikiDecl ? crawlQueue.dequeueBatch(BATCH_PER_CYCLE) : [];
-  const queueSummary = crawlQueue.summary();
 
-  // TTL by source type — how long before stale content should be superseded
-  const getFragmentTTL = (id: string): number => {
-    const h = 3_600_000;
-    if (id.startsWith('wiki_'))  return 7  * 24 * h;  // Wikipedia: stable, 7 days
-    if (id.startsWith('rss_'))   return 24 * h;         // News/RSS: 24 hours
-    if (id.match(/^\d{4}\.\d/)) return 30 * 24 * h;    // arXiv: immutable, 30 days
-    return 3 * 24 * h;                                   // Other web: 3 days
-  };
-
-  const indexInEmbedder = (frag: Fragment) => {
-    fetch(`${effectiveEmbedderUrl}/add`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: frag.id,
-        text: frag.text,
-        metadata: buildEmbedderPayload(frag),
-      }),
-      signal: AbortSignal.timeout(10_000),
-    }).catch(() => {});
-  };
-
-  type FragInput = { id: string; text: string; source: string; doi: string | null; confidence: number; title?: string };
-
-  const onFragment = async (frag: FragInput) => {
-    // arXiv IDs travel as a structured field so academic-source fragments
-    // can be filtered downstream without parsing the source URL each time.
-    const arxivId = frag.source?.match(/arXiv:(\S+)/i)?.[1];
-    const input: Parameters<typeof store.save>[0] = {
-      id: frag.id, text: frag.text, source: frag.source,
-      doi: frag.doi, confidence: frag.confidence, title: frag.title,
-      arxiv_id: arxivId,
-      extracted_at: new Date().toISOString(), node_id: store.nodeId,
-    };
-
-    // ── Cross-cycle dedup + TTL ──────────────────────────────────────────────
-    // Hypercore is the source of truth — check it before spending LLM budget.
-    const existing = await store.get(frag.id).catch(() => null);
-    if (existing) {
-      const ageMs = Date.now() - new Date(existing.extracted_at).getTime();
-      const ttlMs = getFragmentTTL(frag.id);
-
-      if (ageMs < ttlMs) {
-        // Fresh content — skip entirely, save tokens
-        console.log(`  [skip] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old, TTL ${ttlMs / 3_600_000}h)`);
-        return;
-      }
-
-      // Stale content — supersede in Hypercore and update embedder
-      console.log(`  [supersede] ${frag.id} (${Math.round(ageMs / 3_600_000)}h old)`);
-      try {
-        const newFrag = await store.supersede(frag.id, input);
-        indexInEmbedder(newFrag);
-        budget.recordFragments(1);
-        fragmentsIndexed++;
-        onIndexed?.({ id: newFrag.id, title: newFrag.title, source: newFrag.source });
-      } catch (e: any) {
-        console.warn(`[store] Supersede failed for ${frag.id}: ${e.message}`);
-      }
+  const onVerbatim = async (vf: VerbatimFragment, adapterId: string, partition?: string) => {
+    const sourceType = sourceTypeFor(adapterId);
+    if (await isFresh(store, vf, ttlSecondsFor(sourceType))) {
+      console.log(`  [skip-fresh] ${vf.id}`);
       return;
     }
-
-    // ── New fragment ─────────────────────────────────────────────────────────
-    // We save to Hypercore first so the embedder payload carries the canonical
-    // hash + signature. If Hypercore write fails (timeout, session closed) we
-    // skip the embedder entirely — a fragment that isn't in the signed log
-    // shouldn't appear as if it were.
     try {
-      const saved = await store.save(input);
-      indexInEmbedder(saved);
-      budget.recordFragments(1);
-      fragmentsIndexed++;
-      console.log(`  [+] Indexed: ${saved.id} | ${saved.source} | conf:${saved.confidence}`);
-      onIndexed?.({ id: saved.id, title: saved.title, source: saved.source });
+      const n = await buildAndSaveV08(vf, adapterId, store, identity, partition, onIndexed);
+      budget.recordFragments(n);
+      fragmentsIndexed += n;
+      if (n > 0) console.log(`  [+] Indexed: ${vf.id} → ${n} chunk${n === 1 ? '' : 's'}`);
     } catch (e: any) {
-      console.warn(`[store] Hypercore save failed for ${frag.id} — skipping embedder: ${e.message}`);
+      console.warn(`[v0.8] Build/save failed for ${vf.id}: ${e?.message ?? e}`);
     }
   };
 
-  // Crawler callback: tools (mainly wikipedia_fetch) feed discovered titles here.
-  const onCrawlEnqueue = (titles: string[]) => {
-    const added = crawlQueue.enqueueMany(titles);
-    if (added > 0) console.log(`  [queue] +${added} new titles (size now ${crawlQueue.size()})`);
-  };
-
-  // ── Direct-mode crawler (NO LLM) ────────────────────────────────────────────
-  // v0.7.5: sources are now driven by the BEE manifest (declared_sources).
-  // Sources not declared in the manifest are skipped; fallback (no manifest)
-  // runs Wikipedia-only, preserving v0.6 behaviour.
-  console.log(`\n🤖 Autonomous extractor starting (direct, no LLM)`);
-  console.log(`   Budget: ${budget['cfg'].maxTokens} tokens | ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min`);
+  console.log(`\n🤖 Autonomous extractor starting (v0.8 — chunk → embed → sign → append)`);
+  console.log(`   Budget: ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min`);
 
   // ── Wikipedia (BFS crawler) ──────────────────────────────────────────────
   if (wikiDecl) {
-    // v0.7.6 — seed query priority:
-    //   1. wikiDecl.partition (the narrowest claim) — e.g. "Category:Pharmacology"
-    //   2. wikiDecl.scope.category_tree                — e.g. "Category:Medicine"
-    //   3. quoted topic from the objective string
-    //   4. first 60 chars of the objective as fallback
     const partLabel = wikiDecl.partition ?? null;
     const partAsTopic = partLabel ? partLabel.replace(/^Category:/i, '') : null;
     const scopeCat = typeof wikiDecl.scope?.category_tree === 'string'
@@ -228,7 +246,6 @@ export async function runAutonomousExtraction(
         console.warn(`   [wiki] Seed search failed: ${e.message ?? e}`);
       }
       batchTitles.push(...crawlQueue.dequeueBatch(BATCH_PER_CYCLE));
-      // BFS frontier stuck — bootstrap re-fetch to discover new links
       if (batchTitles.length === 0 && seedTitles.length > 0) {
         const bootstrap = seedTitles[0]!;
         console.log(`   [wiki] All seed titles visited — bootstrap re-fetch of "${bootstrap}"`);
@@ -248,12 +265,7 @@ export async function runAutonomousExtraction(
       try {
         const url = wikipediaSource.urlFromTitle(title);
         const result = await wikipediaSource.fetch(url);
-        for (const frag of result.fragments) await onFragment(frag);
-        // v0.7.6 — under policy=exclusive + partition, drop outbound links
-        // that fall outside the claimed partition. WikipediaSource's
-        // isInPartition is a coarse pre-filter (alphabetical check; category
-        // membership defers to the seed-time API query elsewhere) — good
-        // enough to keep the queue focused without an API call per link.
+        for (const vf of result.fragments) await onVerbatim(vf, wikipediaSource.id, wikiDecl.partition);
         let outboundUrls = result.outboundLinks;
         if (wikiDecl.policy === 'exclusive' && wikiDecl.partition) {
           const before = outboundUrls.length;
@@ -266,7 +278,8 @@ export async function runAutonomousExtraction(
         const outboundTitles = outboundUrls
           .map((u) => wikipediaSource.titleFromUrl(u))
           .filter((t): t is string => t !== null);
-        if (outboundTitles.length > 0) onCrawlEnqueue(outboundTitles);
+        const added = crawlQueue.enqueueMany(outboundTitles);
+        if (added > 0) console.log(`  [queue] +${added} new titles (size now ${crawlQueue.size()})`);
         crawlQueue.markVisited(title);
         console.log(`  [wiki] "${title}" → ${result.fragments.length} sections, ${outboundTitles.length} links`);
       } catch (e: any) {
@@ -276,15 +289,9 @@ export async function runAutonomousExtraction(
   }
 
   // ── arXiv ────────────────────────────────────────────────────────────────
-  // Runs when 'arxiv' is declared in the manifest (v0.7.5+), OR as an
-  // aux heuristic when NOT manifest-driven and objective looks like science.
   const manifestDrivenArxiv = !!arxivDecl;
   const heuristicArxiv = !manifest && /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective);
   if ((manifestDrivenArxiv || heuristicArxiv) && !budget.exhausted().yes) {
-    // v0.7.6 — query priority:
-    //   1. arxivDecl.partition (e.g. "cs.LG") — most specific
-    //   2. arxivDecl.scope.categories joined as a query string
-    //   3. quoted topic from the objective
     const arxivQuery = arxivDecl?.partition
       ? arxivDecl.partition
       : (Array.isArray(arxivDecl?.scope?.categories) && (arxivDecl!.scope!.categories as string[]).length > 0)
@@ -299,7 +306,7 @@ export async function runAutonomousExtraction(
         if (budget.exhausted().yes) break;
         try {
           const result = await arxivSource.fetch(u);
-          for (const frag of result.fragments) await onFragment(frag);
+          for (const vf of result.fragments) await onVerbatim(vf, arxivSource.id, arxivDecl?.partition);
           indexed += result.fragments.length;
         } catch (perPaper: any) {
           console.warn(`  [arxiv] per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
@@ -312,11 +319,9 @@ export async function runAutonomousExtraction(
   }
 
   // ── RSS ──────────────────────────────────────────────────────────────────
-  // Runs when 'rss' is declared, OR as aux heuristic for news objectives.
   const manifestDrivenRss = !!rssDecl;
   const heuristicRss = !manifest && /current[\s_-]?events|news|today|breaking|headline|politics|election/i.test(objective);
   if ((manifestDrivenRss || heuristicRss) && !budget.exhausted().yes) {
-    // Manifest scope.feeds takes priority; fallback to env var or BBC world
     const declaredFeeds = Array.isArray(rssDecl?.scope?.feeds) ? rssDecl!.scope!.feeds as string[] : [];
     const envFeeds = (process.env.HIVE_AUX_RSS_FEEDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
     const defaultFeeds = ['https://feeds.bbci.co.uk/news/world/rss.xml'];
@@ -325,7 +330,7 @@ export async function runAutonomousExtraction(
     console.log(`\n  [rss] fetch("${feed}")`);
     try {
       const result = await rssSource.fetch(feed);
-      for (const frag of result.fragments) await onFragment(frag);
+      for (const vf of result.fragments) await onVerbatim(vf, rssSource.id, rssDecl?.partition);
       console.log(`  [rss] indexed ${result.fragments.length} items`);
     } catch (e: any) {
       console.warn(`  [rss] failed: ${e.message ?? e}`);
@@ -333,9 +338,6 @@ export async function runAutonomousExtraction(
   }
 
   // ── Common Crawl ─────────────────────────────────────────────────────────
-  // Only runs when explicitly declared in the manifest — no heuristic fallback.
-  // Requires scope.domains (or HIVE_CC_DOMAINS env var) to be non-empty;
-  // without a domain target, seed() would query the entire CC snapshot.
   if (ccSource && !budget.exhausted().yes) {
     const domains = (ccDecl?.scope?.domains as string[] | undefined) ?? [];
     const snapshot = (ccDecl?.scope?.snapshot as string | undefined) ?? 'env/default';
@@ -348,7 +350,7 @@ export async function runAutonomousExtraction(
         if (budget.exhausted().yes) break;
         try {
           const result = await ccSource.fetch(u);
-          for (const frag of result.fragments) await onFragment(frag);
+          for (const vf of result.fragments) await onVerbatim(vf, ccSource.id, ccDecl?.partition);
           indexed += result.fragments.length;
         } catch (perPage: any) {
           console.warn(`  [cc] per-page failed ${u}: ${perPage.message ?? perPage}`);
@@ -370,7 +372,7 @@ export async function runAutonomousExtraction(
   return { fragmentsIndexed, summary: finalSummary, budget: budget.summary() };
 }
 
-// ── CLI entry ─────────────────────────────────────────────────────────────────
+// ── CLI entry ────────────────────────────────────────────────────────────────
 if (import.meta.url === `file://${process.argv[1]}`) {
   const objective = process.env.HIVE_OBJECTIVE ?? 'Find recent papers about retrieval augmented generation and knowledge graphs';
   const maxFragments = Number(process.env.HIVE_MAX_FRAGMENTS ?? 30);

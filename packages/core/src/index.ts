@@ -1,6 +1,6 @@
-export * from './interfaces.js';
 export * from './node_identity.js';
 export { KnowledgeStore } from './knowledge_store.js';
+export type { QueryFilter } from './knowledge_store.js';
 export { HiveP2PNode } from './p2p_node.js';
 export { ClaimRegistry } from './claim_registry.js';
 export { PeerRegistry } from './peer_registry.js';
@@ -18,4 +18,4 @@ export { contentHash, normalizeForHash } from './content_hash.js';
 export {
   EMBEDDING_MODEL, EMBEDDING_DIM, SCHEMA_VERSION, CHUNKER_VERSION, DEFAULT_TTL,
 } from './schema_v08.js';
-export type { FragmentV08, FragmentV08Input, FragmentStatus as FragmentStatusV08 } from './schema_v08.js';
+export type { FragmentV08, FragmentV08Input, FragmentStatus } from './schema_v08.js';

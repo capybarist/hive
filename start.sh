@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# HIVE — launch any number of BEEs from bees/*.env configs
+# HIVE v0.8 — launch any number of BEEs from bees/*.env configs.
+#
+# v0.8 has no Python embedder, so this script just brings up one node process
+# per bee config. Each bee carries its own in-process e5-base ONNX embedder.
+#
 # Usage:
 #   bash start.sh                  — start all BEEs in bees/
 #   bash start.sh bee-1 bee-2      — start specific BEEs
@@ -14,14 +18,13 @@ run() { echo -e "${Y}→${N} $1"; }
 err() { echo -e "${R}✗${N} $1"; }
 alive() { curl -s --max-time 1 "$1" 2>/dev/null | grep -q '"ok"\|"status"'; }
 
-# ── Handle --clean flag ───────────────────────────────────────────────────────
+# ── Handle --clean flag ─────────────────────────────────────────────────────
 CLEAN=0
 ARGS=()
 for arg in "$@"; do
   [ "$arg" = "--clean" ] && CLEAN=1 || ARGS+=("$arg")
 done
 
-# ── Which BEEs to start ───────────────────────────────────────────────────────
 if [ ${#ARGS[@]} -gt 0 ]; then
   CONFIGS=()
   for name in "${ARGS[@]}"; do
@@ -37,13 +40,12 @@ fi
 [ ${#CONFIGS[@]} -eq 0 ] && { err "No BEE configs found in bees/. Create bees/*.env files."; exit 1; }
 
 echo ""
-echo "  🐝  HIVE — launching ${#CONFIGS[@]} BEE(s)$([ $CLEAN -eq 1 ] && echo ' [CLEAN]')"
+echo "  🐝  HIVE v0.8 — launching ${#CONFIGS[@]} BEE(s)$([ $CLEAN -eq 1 ] && echo ' [CLEAN]')"
 echo "────────────────────────────────────────────"
 
 if [ $CLEAN -eq 1 ]; then
-  run "Wiping all BEE runtime data (HNSW, Hypercore, identity)..."
-  # Stop any running processes first
-  for port in 7700 7701 7702 7703 8080 8081 8082 8083; do
+  run "Wiping all BEE runtime data (LanceDB, Hypercore, identity)..."
+  for port in 8080 8081 8082 8083 8090; do
     pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1)
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
   done
@@ -58,41 +60,25 @@ if [ $CLEAN -eq 1 ]; then
   echo ""
 fi
 
-# ── Launch each BEE ──────────────────────────────────────────────────────────
+# ── Launch each BEE ─────────────────────────────────────────────────────────
 for cfg in "${CONFIGS[@]}"; do
-  # Load config vars
-  unset BEE_NAME BEE_PORT BEE_EMBEDDER_PORT BEE_DATA_DIR BEE_PEER
+  unset BEE_NAME BEE_PORT BEE_DATA_DIR BEE_PEER
   unset HIVE_OBJECTIVE HIVE_EXTRACT_MAX_FRAGMENTS HIVE_EXTRACT_INTERVAL_MS
   # shellcheck source=/dev/null
   set -a; source "$cfg"; set +a
 
   name="${BEE_NAME:-$(basename "$cfg" .env)}"
   port="${BEE_PORT:-8080}"
-  emb_port="${BEE_EMBEDDER_PORT:-7700}"
   data_dir="${BEE_DATA_DIR:-../../data}"
   abs_data="$(cd packages/api && realpath "$data_dir" 2>/dev/null || echo "$data_dir")"
 
   echo ""
-  run "BEE: $name  (API :$port  embedder :$emb_port)"
+  run "BEE: $name  (API :$port)"
   echo "     data: $abs_data"
   [ -n "$HIVE_OBJECTIVE" ] && echo "     objective: ${HIVE_OBJECTIVE:0:70}..."
 
-  # Create data directories
-  mkdir -p "$abs_data/identity" "$abs_data/vectors" "$abs_data/corestore" "$abs_data/cache"
+  mkdir -p "$abs_data/identity" "$abs_data/corestore" "$abs_data/lancedb"
 
-  # ── Embedder (skipped in bee mode — HAS_LOCAL_EMBED=false) ─────────────────
-  if [ "${HIVE_MODE:-}" = "bee" ]; then
-    ok "Embedder skipped (HIVE_MODE=bee)"
-  elif alive "http://127.0.0.1:$emb_port/health"; then
-    ok "Embedder :$emb_port already running"
-  else
-    run "Starting embedder :$emb_port ..."
-    HIVE_VECTORS_DIR="$abs_data/vectors" HIVE_EMBEDDER_PORT="$emb_port" \
-      nohup python3 packages/embeddings/api_server.py \
-      > "/tmp/hive_emb_${name}.log" 2>&1 &
-  fi
-
-  # ── API server ───────────────────────────────────────────────────────────────
   if alive "http://127.0.0.1:$port/api/status"; then
     ok "API :$port already running"
   else
@@ -101,7 +87,6 @@ for cfg in "${CONFIGS[@]}"; do
     # and pick the same ones (race condition).
     if [ -n "$BEE_PEER" ]; then
       run "Waiting for peer $BEE_PEER to register its topic claims..."
-      # Wait until the peer is responsive, then extra 12s for claims to settle
       for i in $(seq 1 20); do
         alive "$BEE_PEER/api/status" && break
         sleep 1
@@ -111,15 +96,11 @@ for cfg in "${CONFIGS[@]}"; do
     fi
 
     run "Starting API :$port ..."
-    tmp_env=$(mktemp /tmp/hive_bee_XXXXXX)  # no suffix — macOS mktemp requires Xs at end
-    # Append .env then bee config — echo ensures a newline between them even if
-    # .env lacks a trailing newline (otherwise the first bee var merges with the last
-    # .env line, corrupting multi-line values like LLM_API_KEY).
+    tmp_env=$(mktemp /tmp/hive_bee_XXXXXX)
     [ -f .env ] && { cat .env; echo; } >> "$tmp_env"
     { cat "$cfg"; echo; } >> "$tmp_env"
     printf '\nHIVE_PORT=%s\nHIVE_DATA_DIR=%s\n' "$port" "$abs_data" >> "$tmp_env"
     [ -n "$BEE_PEER" ] && printf 'HIVE_PEER=%s\n' "$BEE_PEER" >> "$tmp_env"
-    [ -n "$EMBEDDER_URL" ] || printf 'EMBEDDER_URL=http://127.0.0.1:%s\n' "$emb_port" >> "$tmp_env"
 
     # Unset LLM vars so --env-file is the sole source of truth (node --env-file
     # does not override variables already present in the inherited environment).
@@ -129,32 +110,16 @@ for cfg in "${CONFIGS[@]}"; do
   fi
 done
 
-# ── Wait for all embedders ────────────────────────────────────────────────────
 echo ""
-run "Waiting for embedders to load model..."
-for cfg in "${CONFIGS[@]}"; do
-  unset HIVE_MODE
-  source "$cfg" 2>/dev/null
-  [ "${HIVE_MODE:-}" = "bee" ] && continue   # bee mode has no embedder
-  port="${BEE_EMBEDDER_PORT:-7700}"
-  for i in $(seq 1 45); do
-    alive "http://127.0.0.1:$port/health" && break
-    echo -n "."; sleep 2
-  done
-done
-echo ""
-
-# ── Wait for all APIs ─────────────────────────────────────────────────────────
 for cfg in "${CONFIGS[@]}"; do
   source "$cfg" 2>/dev/null
   port="${BEE_PORT:-8080}"
-  for i in $(seq 1 20); do
+  for i in $(seq 1 30); do
     alive "http://127.0.0.1:$port/api/status" && break
     sleep 1
   done
 done
 
-# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════"
 SPACE="${CODESPACE_NAME:-}"
@@ -164,8 +129,8 @@ for cfg in "${CONFIGS[@]}"; do
   port="${BEE_PORT:-8080}"
   STATUS=$(curl -s --max-time 3 "http://127.0.0.1:$port/api/status" 2>/dev/null)
   if echo "$STATUS" | grep -q '"ok"'; then
-    node=$(echo "$STATUS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('nodeId','?')[:20])" 2>/dev/null)
-    idx=$(echo "$STATUS"  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('indexed','?'))" 2>/dev/null)
+    node=$(echo "$STATUS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log((JSON.parse(s).nodeId||'?').slice(0,20))}catch{console.log('?')}})" 2>/dev/null)
+    idx=$(echo "$STATUS"  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).indexed||'?')}catch{console.log('?')}})" 2>/dev/null)
     ok "$name :$port  →  $node  |  $idx vectors"
     if [ -n "$SPACE" ]; then
       echo "     UI → https://${SPACE}-${port}.app.github.dev"
@@ -178,5 +143,5 @@ for cfg in "${CONFIGS[@]}"; do
 done
 echo "════════════════════════════════════════════"
 echo ""
-echo "Logs: /tmp/hive_api_{name}.log  /tmp/hive_emb_{name}.log"
+echo "Logs: /tmp/hive_api_{name}.log"
 echo ""

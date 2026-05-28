@@ -3,9 +3,13 @@
   "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "HIVE v0.8 — all-Node embedder (multilingual-e5-base, ONNX int8) via transformers.js",
+  "description": "HIVE v0.8 — all-Node embedder (multilingual-e5-base, ONNX int8) + LanceDB index + retrieval gate",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@hive/core": "file:../core",
+    "@hive/core": "*",
     "@huggingface/transformers": "^3.3.0",
     "@lancedb/lancedb": "^0.12.0",
     "apache-arrow": "^17.0.0"
@@ -15,6 +19,7 @@
     "typescript": "^5.6.0"
   },
   "scripts": {
-    "test": "tsx src/test.ts"
+    "test": "tsx src/test.ts",
+    "test:phase4": "tsx src/test_phase4.ts"
   }
 }
