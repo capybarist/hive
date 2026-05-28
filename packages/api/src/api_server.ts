@@ -205,6 +205,22 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
 
 await p2pNode.start();
 
+// v0.8 — peering self-heal. When a node is isolated (peerCount=0) for more than
+// a minute, refresh the Hyperswarm discovery so the announce/lookup round-trips
+// the DHT again. Without this, the initial holepunch after a deploy occasionally
+// misses on the Hetzner box (two containers behind the same NAT) and the
+// operator has to docker-restart the queen to recover; see CLAUDE.md "discovery
+// glitch". Only matters when a node expects peers — pure-bee in this single-box
+// setup still wants the queen to find it, and the queen always wants peers.
+setInterval(() => {
+  if (p2pNode.peerCount === 0) {
+    console.log('[p2p] peerCount=0 — refreshing Hyperswarm discovery');
+    p2pNode.rejoin().catch((err) =>
+      console.warn(`[p2p] rejoin failed: ${err?.message ?? err}`),
+    );
+  }
+}, 60_000).unref();
+
 // Hive mode: local bee writes also need to flow into the local queen index.
 // (Pure bees and pure queens skip this — bee mode has no queenIndex, queen
 // mode has no local writes.)

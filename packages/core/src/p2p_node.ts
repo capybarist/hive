@@ -54,6 +54,12 @@ const metaEncoding = {
 export class HiveP2PNode extends EventEmitter {
   private swarm: Hyperswarm;
   private _peers = new Map<string, PeerInfo>();
+  // v0.8 — captured so we can refresh the announce/lookup when the node is
+  // isolated (peerCount=0). Hairpin-NAT holepunches between two containers on
+  // the same Hetzner box have always been flaky; in v0.8 the heavy embedding
+  // on the producer can make the initial holepunch miss after a deploy. A
+  // periodic refresh recovers without an operator-driven restart.
+  private discovery: any = null;
 
   constructor(
     private store: Corestore,
@@ -66,8 +72,16 @@ export class HiveP2PNode extends EventEmitter {
   get peers(): PeerInfo[] { return [...this._peers.values()]; }
   get peerCount(): number { return this._peers.size; }
 
+  /** Re-announce + re-lookup on the topic. Safe to call repeatedly — Hyperswarm
+   *  treats the topic as already-joined and just refreshes the DHT entries. */
+  async rejoin(): Promise<void> {
+    if (!this.discovery) return;
+    try { await this.discovery.refresh({ server: true, client: true }); }
+    catch { /* refresh may throw on tear-down; nothing to do */ }
+  }
+
   async start(): Promise<void> {
-    this.swarm.join(HIVE_TOPIC, { server: true, client: true });
+    this.discovery = this.swarm.join(HIVE_TOPIC, { server: true, client: true });
 
     this.swarm.on('connection', (socket: any, peerInfo: any) => {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);

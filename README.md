@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🐝 HIVE
+<img src="docs/assets/HiveLogo.png" alt="HIVE" width="280" />
 
 ### Wikipedia for machines — a decentralized, verifiable knowledge base built for LLMs.
 
@@ -36,65 +36,96 @@ serverless**:
 
 ## How it works
 
-Two kinds of node. **BEEs** produce knowledge; **QUEENs** consume it.
+Two kinds of node — **BEEs** produce knowledge, **QUEENs** consume it. The
+key v0.8 insight: **bees embed, queens don't.** Each bee chunks, embeds and
+signs its own vectors; the queen just verifies the signature and stores the
+already-computed vector. A queen's per-fragment cost is a database upsert —
+not a model forward pass — so one queen can aggregate hundreds of bees.
 
 ```mermaid
 flowchart LR
-    subgraph BEE["🐝 BEE · producer"]
-        X[crawl source] --> C[deterministic chunk]
-        C --> E[embed chunk<br/>e5-base ONNX]
-        E --> S[sign text + vector<br/>ed25519]
-        S --> H[(own Hypercore<br/>append-only)]
+    SRC([source<br/>wiki · arxiv · rss])
+    USER([client / your LLM])
+
+    subgraph BEE["🐝 BEE — producer"]
+        direction TB
+        BC[chunk] --> BE[embed<br/>e5-base ONNX]
+        BE --> BS[sign text + vector<br/>ed25519]
+        BS --> BH[(own Hypercore)]
     end
 
-    subgraph QUEEN["👑 QUEEN · consumer"]
-        R[replicate bee cores] --> V[verify signature]
-        V --> U[upsert vector<br/>into LanceDB]
-        U --> I[(vector index)]
-        Q[embed the query] --> ANN[ANN search + gate]
-        I --> ANN
-        ANN --> L[LLM synthesis<br/>+ grounded verdict]
+    subgraph QUEEN["👑 QUEEN — consumer"]
+        direction TB
+        QV[verify signature] --> QI[(LanceDB)]
+        QE[embed only the QUERY] --> QS[ANN search<br/>+ relevance gate<br/>+ LLM]
+        QI --> QS
     end
 
-    H -- "Hyperswarm / Hypercore<br/>P2P replication" --> R
-    USER([your LLM / app]) -- "POST /api/query" --> Q
-    L -- "answer + signed sources" --> USER
+    SRC --> BC
+    BH -. "P2P · vector lives inside<br/>the signed payload" .-> QV
+    USER -. "POST /api/query" .-> QE
+    QS -. "grounded answer<br/>+ signed sources" .-> USER
 ```
 
-The key idea: **bees embed, the queen does not.** Each bee computes and signs
-its own vectors; the queen just copies them into its index. A queen's
-per-fragment cost is a database upsert, not a model forward pass — so a single
-queen can aggregate **hundreds** of bees.
-
-```mermaid
-sequenceDiagram
-    participant W as Wikipedia / arXiv / RSS
-    participant B as 🐝 BEE
-    participant Q as 👑 QUEEN
-    participant U as Your app
-    W->>B: fetch verbatim
-    B->>B: chunk → embed → sign (vector inline)
-    B-->>Q: replicate signed fragment (P2P)
-    Q->>Q: verify ed25519 → upsert into LanceDB
-    U->>Q: "What is photosynthesis?"
-    Q->>Q: embed query → search → relevance gate → LLM
-    Q-->>U: grounded answer + signed source chips
-```
-
-→ Full mechanics in **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**.
+→ Full mechanics, schema, and configuration in **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**.
 
 ---
 
-## Use cases
+## What it's for
 
-| | Use case | How HIVE helps |
-|---|---|---|
-| 🔌 | **Drop-in RAG for your LLM app** | Point `/api/query` at the network and get grounded, cited answers without building a crawler + vector DB. |
-| 🏢 | **Private vertical knowledge base** | Run bees scoped to your domain (a category tree, a set of feeds, a corpus) and a private queen — your own verifiable RAG, on your hardware. |
-| 🤝 | **Shared knowledge commons** | Many operators run bees on different topics; everyone's queen sees the union. Contribute compute, consume the whole network. |
-| 🔎 | **Provenance you can audit** | Every answer traces to signed fragments with source URLs — defensible for compliance, research, journalism. |
-| 🌍 | **Cross-lingual retrieval** | Multilingual embeddings match a Spanish question to an English source (and vice-versa) out of the box. |
-| 🏠 | **Fully-local, no cloud** | Pair a queen with Ollama for a private agent that never sends a byte to a third party. |
+Distributed RAG — public and private, specialized and general, for local or
+cloud LLMs. Run your own knowledge base, or share it peer-to-peer with no server
+in the middle. **The same protocol composes into seven deployment patterns:**
+
+**01 · Public** — *Join the public swarm with one topic hash.*
+A queen joins the public HIVE by hashing a known string —
+`sha256("hive-network-v0.1")` — and calling `swarm.join(topic)`. Hyperswarm's
+DHT introduces it to every BEE on that topic; native Hypercore replication
+brings their signed fragments down with no central registry. Specialized public
+meshes are just a different string (`hive-medical-v0.1`, `hive-legal-v0.1`).
+
+**02 · Private** — *Run a private swarm for internal use.*
+Three knobs flip the network private: a random 32-byte topic (2²⁵⁶ space),
+Hypercore encryption keys (cores are ciphertext at rest and on the wire), and a
+pubkey allowlist. Internal BEEs index company wikis, tickets, repos, contracts;
+a queen serves `/api/query` — no traffic ever leaves the perimeter.
+
+**03 · B2B** — *Share private knowledge between companies.*
+Two orgs exchange three values out-of-band — swarm topic, encryption key, each
+side's queen pubkey for the allowlist. Both queens join the same private swarm
+and replicate only the BEEs the other party chose to expose. Each company keeps
+its own queen, its own LanceDB index, its own audit trail. Revocation is a key
+roll or an allowlist edit.
+
+**04 · Hybrid** — *One queen in many swarms.*
+A single queen joins as many topics as it has credentials for — public mesh, its
+own private swarm, every partner swarm — and replicates BEEs from all of them
+into one index. One query, one synthesis, sources from every swarm. Every
+fragment keeps its origin pubkey + signature, so provenance survives the merge.
+
+**05 · Extensibility** — *Custom connectors as ForagerSource plugins.*
+Wire in a legacy ERP, an in-house REST API, or a proprietary archive by
+implementing the `ForagerSource` interface (seed / fetch / normalize / owns),
+publishing it as an npm package, and adding its id to the BEE's manifest. No
+fork of HIVE core, no central registry — the connector lives in your repo.
+
+**06 · Local AI** — *Queen with a local LLM — full offline stack.*
+Point the queen's pluggable LLM client at Ollama and the entire stack runs
+on-prem — BEEs extracting + embedding, the queen indexing in LanceDB, synthesis
+local. Retrieval gives a small model grounded, signed context at query time, so
+it behaves like a much larger one on domain-bounded tasks. Zero cloud traffic.
+
+**07 · Training** — *Training corpus with cryptographic provenance.*
+BEEs store extraction verbatim — no LLM in the loop, no paraphrase. Every
+fragment carries source URL, scope, timestamp, and an ed25519 signature. Stream
+fragments straight off the queen's replicated Hypercores into a pre-training,
+SFT, or distillation pipeline; filter by source, scope, language, or signing
+BEE. Per-fragment, verifiable provenance — useful for licence propagation and
+dataset audit.
+
+> 🔭 **Coming:** first-class **MCP server** + **Claude Skills / OpenClaw**
+> connectors so an agent can use a HIVE queen as a native tool. Not shipped yet
+> — tracked on the roadmap.
 
 ---
 
