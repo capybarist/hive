@@ -5,6 +5,7 @@
   "type": "module",
   "description": "HIVE v0.8 — all-Node embedder (multilingual-e5-base, ONNX int8) via transformers.js",
   "dependencies": {
-    "@huggingface/transformers": "^3.3.0"
+    "@huggingface/transformers": "^3.3.0",
+    "@lancedb/lancedb": "^0.12.0"
   }
 }
