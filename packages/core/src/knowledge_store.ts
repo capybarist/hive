@@ -59,6 +59,11 @@ export class KnowledgeStore {
   private cursorDir: string;
   private activeWatchers: Set<string> = new Set();
   private cursorByNode: Map<string, number> = new Map();
+  // v0.8.4 — fast in-memory count of locally-signed fragments. Surfaced via
+  // /api/status so bee dashboards stop reading 0 (queen.indexed is the LanceDB
+  // count, a different number that is always 0 on a producer). Initialised
+  // from the Hyperbee at ready() and bumped on every successful save().
+  private _localCount = 0;
 
   constructor(dataDir: string, identity: NodeIdentity) {
     this.identity = identity;
@@ -85,6 +90,15 @@ export class KnowledgeStore {
       this.bee = new Hyperbee(this.core, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await this.bee.ready();
       await mkdir(this.cursorDir, { recursive: true });
+      // Initial count of locally-signed fragments. Hyperbee doesn't expose a
+      // cheap count(); the read-stream over the `frag:` prefix is bounded by
+      // the local Hypercore size (no peer traffic) so it's fast on bee-scale
+      // stores and runs once at startup.
+      try {
+        let n = 0;
+        for await (const _ of this.bee.createReadStream({ gt: 'frag:', lt: 'frag:\xff' })) n++;
+        this._localCount = n;
+      } catch { /* count stays 0 — non-fatal */ }
       this._ready = true;
     })();
 
@@ -131,14 +145,21 @@ export class KnowledgeStore {
     await this.ready();
     return this.enqueue(async () => {
       await this.ensureOpen();
+      // Detect existing-id overwrites so the counter stays accurate when the
+      // agent re-saves a fragment that already lived in the Hyperbee.
+      const wasNew = !(await this.bee.get(K.frag(frag.id)));
       const b = this.bee.batch();
       // batch.put() is async in Hyperbee v2 — must be awaited or puts are lost.
       await b.put(K.frag(frag.id), frag);
       await b.put(K.src(frag.source, frag.id), frag.id);
       await b.put(K.dat(frag.extracted_at.slice(0, 10), frag.id), frag.id);
       await this.withTimeout(b.flush(), 8_000, 'save flush');
+      if (wasNew) this._localCount++;
     });
   }
+
+  /** Fast count of locally-signed fragments (no peer traffic). v0.8.4+. */
+  get localFragmentCount(): number { return this._localCount; }
 
   async get(id: string): Promise<FragmentV08 | null> {
     await this.ready();

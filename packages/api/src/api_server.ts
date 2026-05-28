@@ -397,6 +397,10 @@ app.get('/api/status', async () => {
     nodeIdShort: identity.nodeId.slice(0, 20),
     embedder_online: true,                   // in-process; either we booted or we didn't
     indexed,
+    // v0.8.4 — bee/hive nodes also report how many fragments they've signed
+    // locally (the Hypercore size). Distinct from `indexed` (LanceDB count on
+    // the queen) so a bee dashboard can show a meaningful number.
+    local_fragments: HAS_LOCAL_STORE ? knowledgeStore.localFragmentCount : 0,
     model: queenIndex ? EMBEDDING_MODEL : null,
     backend: queenIndex ? 'lancedb' : null,
     schema_version: SCHEMA_VERSION,
@@ -412,17 +416,38 @@ app.get('/api/status', async () => {
 });
 
 // ── GET /api/crawl — forager state (bee/hive own queue files; queen proxies) ─
+// v0.8.4 — queen now fans out across every URL in HIVE_DASHBOARD_BEE_URLS
+// (comma-separated). Result: aggregate queue/visited counts plus a per-bee
+// breakdown so external dashboards can render multi-bee deployments. The
+// legacy single-URL HIVE_DASHBOARD_BEE_URL still works (treated as one URL).
 app.get('/api/crawl', async () => {
   if (HAS_DASHBOARD_PROXY) {
-    const beeUrl = process.env.HIVE_DASHBOARD_BEE_URL ?? 'http://bee-1:8080';
-    try {
-      const res = await fetch(`${beeUrl}/api/crawl`, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) return { queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], source: beeUrl, hint: `bee returned ${res.status}` };
-      const data = await res.json() as object;
-      return { ...data, source_bee: beeUrl };
-    } catch (e: any) {
-      return { queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], source: beeUrl, error: e?.message ?? 'bee unreachable' };
-    }
+    const raw = process.env.HIVE_DASHBOARD_BEE_URLS
+      ?? process.env.HIVE_DASHBOARD_BEE_URL
+      ?? 'http://bee-1:8080';
+    const beeUrls = raw.split(',').map(s => s.trim()).filter(Boolean);
+    const perBee = await Promise.all(beeUrls.map(async (url) => {
+      try {
+        const res = await fetch(`${url}/api/crawl`, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) return { url, queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], error: `HTTP ${res.status}` };
+        const data = await res.json() as { queue_size?: number; visited_size?: number; next_in_queue?: string[]; recent_visited?: string[] };
+        return {
+          url,
+          queue_size: data.queue_size ?? 0,
+          visited_size: data.visited_size ?? 0,
+          next_in_queue: data.next_in_queue ?? [],
+          recent_visited: data.recent_visited ?? [],
+        };
+      } catch (e: any) {
+        return { url, queue_size: 0, visited_size: 0, next_in_queue: [], recent_visited: [], error: e?.message ?? 'bee unreachable' };
+      }
+    }));
+    const queue_size = perBee.reduce((s, b) => s + b.queue_size, 0);
+    const visited_size = perBee.reduce((s, b) => s + b.visited_size, 0);
+    // Interleave queues + recents so the dashboard sees fresh items from every bee.
+    const next_in_queue = perBee.flatMap(b => b.next_in_queue.slice(0, 5)).slice(0, 10);
+    const recent_visited = perBee.flatMap(b => b.recent_visited.slice(0, 5)).slice(0, 10);
+    return { queue_size, visited_size, next_in_queue, recent_visited, bees: perBee };
   }
 
   const { promises: fsP } = await import('node:fs');
@@ -466,12 +491,43 @@ app.get('/api/directory', async () => {
   return { bees: entries, updated_at: new Date().toISOString() };
 });
 
-// ── GET /api/stats — aggregate summary ─────────────────────────────────────
+// ── GET /api/stats — aggregate summary (top widgets read this) ─────────────
+// Field names match what the capybarahome /hive page expects so the stat trio
+// (fragments / bees / topics) actually populates. `topics` here = number of
+// distinct (source_id[:partition]) units declared across local + remote
+// BeeManifests — i.e. the coverage breadth of the network the queen sees.
 app.get('/api/stats', async () => {
   const indexed = queenIndex ? await queenIndex.count() : 0;
   const peers = p2pNode.peerCount;
+
+  // Collect declared sources across every manifest the queen knows about.
+  const topicSet = new Set<string>();
+  let activeBees = HAS_LOCAL_STORE ? 1 : 0;
+  if (HAS_LOCAL_STORE) {
+    try {
+      const local = await knowledgeStore.getLocalManifest();
+      for (const s of local?.declared_sources ?? []) {
+        topicSet.add(s.partition ? `${s.id}:${s.partition}` : s.id);
+      }
+    } catch { /* first boot */ }
+  }
+  for (const [, manifest] of knowledgeStore.getRemoteManifests()) {
+    activeBees++;
+    for (const s of manifest.declared_sources ?? []) {
+      topicSet.add(s.partition ? `${s.id}:${s.partition}` : s.id);
+    }
+  }
+  // If we haven't received any manifest yet, fall back to peer count.
+  if (activeBees === 0) activeBees = peers;
+
   return {
     mode: HIVE_MODE,
+    version: HIVE_VERSION,
+    // Public surface the dashboards read.
+    fragments: indexed,
+    bees: activeBees,
+    topics: topicSet.size,
+    // Legacy fields kept for backward compat.
     indexed,
     peers,
     model: queenIndex ? EMBEDDING_MODEL : null,
