@@ -46,11 +46,16 @@ the obligation to update the docs.
 
 ## Post-demo state — 2026-05-26 evening
 
-Demo is done. Production is at v0.7.6.4 (cursor persistence +
-watchRemoteCore dedup) after the v0.7.6.3 embedder-timeout patch
-proved insufficient: the queen kept getting OOM-killed every 30–60
-min during catch-up replay. See CHANGELOG for the full root-cause
-analysis.
+Demo is done. Production is at v0.7.7.12 (graceful shutdown to prevent
+Hypercore forks; see CHANGELOG). The v0.7.7.x line stabilized
+retrieval gating, the LLM grounded-verdict badge, and a fork-recovery.
+
+> **NEXT MAJOR: v0.8 unified migration** — all-Node stack (drop Python +
+> Qdrant), `multilingual-e5-base` (ONNX int8) embeddings, **producer-side
+> vectorization** (bees embed; vector signed inline in the Hypercore;
+> thin queen), LanceDB, deterministic chunking, new Fragment schema. One
+> coordinated hard reset. Full plan: [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
+> The v0.7.8/.9 items below are folded into it.
 
 ### Open items
 - **v0.7.7** — Retrieval gating (raise `RELEVANT_SCORE` 0.30→0.45 in
