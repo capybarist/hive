@@ -6,10 +6,17 @@
 
 FROM node:22-slim
 
-# curl for the docker HEALTHCHECK + ca-certificates so the ONNX model fetch
-# from huggingface.co works at build/runtime. No Python, no apt-y heavy lifting.
+# Build toolchain for native node addons. The Holepunch stack (rocksdb-native,
+# sodium-native, used by hypercore/corestore) compiles via node-gyp at install
+# time when a prebuilt binary isn't available — that needs python3 + make + g++.
+# This is BUILD-TIME ONLY; the v0.8 runtime is still all-Node (no Python embedder).
+# curl powers the docker HEALTHCHECK; ca-certificates lets the e5 ONNX model fetch
+# from huggingface.co during the warmup step.
+# DO NOT add --no-install-recommends here: it breaks the rocksdb-native prebuild
+# resolution (hit this in v0.7 and again at the v0.8 cutover — MODULE_NOT_FOUND
+# on /prebuilds/linux-x64/rocksdb-native.node at runtime).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y python3 python-is-python3 build-essential curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /hive
