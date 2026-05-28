@@ -6,6 +6,14 @@
   "description": "HIVE v0.8 — all-Node embedder (multilingual-e5-base, ONNX int8) via transformers.js",
   "dependencies": {
     "@huggingface/transformers": "^3.3.0",
-    "@lancedb/lancedb": "^0.12.0"
+    "@lancedb/lancedb": "^0.12.0",
+    "apache-arrow": "^17.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "test": "tsx src/test.ts"
   }
 }
