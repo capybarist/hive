@@ -107,14 +107,14 @@ services:
     volumes:
       - bee1-data:/hive/data
 
-  # ── Optional second BEE ──────────────────────────────────────────────────
+  # ── Second BEE — arXiv specialist (manifest-driven, intentionally different
+  #     from bee-1's Wikipedia scope to exercise multi-bee coordination) ────
   # In v0.8 the per-bee memory budget is ~900 MB (Node + e5-base ONNX int8),
-  # so two bees fit comfortably on a 4 GB VPS — but bee-2 still stays opt-in
-  # to keep the default low. Enable with `docker compose --profile bee-2 up -d`.
+  # so two bees fit comfortably on the 4 GB box. Override any BEE2_* env to
+  # change shape without editing this file.
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
-    profiles: ["bee-2"]
     restart: unless-stopped
     stop_grace_period: 40s
     environment:
@@ -126,10 +126,16 @@ services:
       - HIVE_PORT=8081
       - HIVE_DATA_DIR=/hive/data
       - HIVE_API_URL=http://bee-2:8081
-      - BEE_TOPIC_DOMAIN=${BEE2_TOPIC_DOMAIN:-current_events}
-      - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-30000}
-      - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-9}
-      - HIVE_EXTRACT_BUDGET_MINUTES=${HIVE_EXTRACT_BUDGET_MINUTES:-20}
+      # ── Manifest knobs — bee-2 is an arXiv specialist on ML papers ──
+      - HIVE_SOURCES=${BEE2_SOURCES:-arxiv}
+      - HIVE_POLICY=${BEE2_POLICY:-exclusive}
+      - HIVE_SCOPE=${BEE2_SCOPE:-{"categories":["cs.LG","cs.AI","cs.CL"]}}
+      - HIVE_LANGUAGES=${BEE2_LANGUAGES:-en}
+      - HIVE_BEE_REPLICATE=${BEE2_REPLICATE:-none}
+      - HIVE_OBJECTIVE=${BEE2_OBJECTIVE:-machine learning research}
+      - HIVE_EXTRACT_INTERVAL_MS=${BEE2_INTERVAL_MS:-60000}
+      - HIVE_EXTRACT_MAX_FRAGMENTS=${BEE2_MAX_FRAGS:-6}
+      - HIVE_EXTRACT_BUDGET_MINUTES=${BEE2_BUDGET_MIN:-15}
     ports:
       - "8081:8081"
     volumes:
