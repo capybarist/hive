@@ -292,15 +292,18 @@ export async function runAutonomousExtraction(
   const manifestDrivenArxiv = !!arxivDecl;
   const heuristicArxiv = !manifest && /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective);
   if ((manifestDrivenArxiv || heuristicArxiv) && !budget.exhausted().yes) {
+    // arXiv categories belong in the *filter* path (see arxiv_source.seed),
+    // not in the query — joining them into a string ("cs.LG cs.AI") returns
+    // zero papers because no abstract contains that phrase. Always use the
+    // objective (or partition / quoted topic) as the topic query and pass the
+    // scope through so the adapter can build a category filter from it.
     const arxivQuery = arxivDecl?.partition
       ? arxivDecl.partition
-      : (Array.isArray(arxivDecl?.scope?.categories) && (arxivDecl!.scope!.categories as string[]).length > 0)
-        ? (arxivDecl!.scope!.categories as string[]).join(' ')
-        : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+      : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
     if (arxivDecl?.partition) console.log(`  [arxiv] Partition claimed: ${arxivDecl.partition}`);
-    console.log(`\n  [arxiv] seed+fetch("${arxivQuery}")`);
+    console.log(`\n  [arxiv] seed+fetch("${arxivQuery}") scope=${JSON.stringify(arxivDecl?.scope ?? {})}`);
     try {
-      const urls = await arxivSource.seed({ query: arxivQuery, limit: 5 });
+      const urls = await arxivSource.seed({ query: arxivQuery, limit: 5, scope: arxivDecl?.scope });
       let indexed = 0;
       for (const u of urls) {
         if (budget.exhausted().yes) break;

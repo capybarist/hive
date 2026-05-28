@@ -57,6 +57,14 @@ export interface VerbatimFragment {
 export interface SeedOptions {
   query: string;
   limit?: number;
+  /**
+   * Source-specific scope hints, copied verbatim from the bee's manifest
+   * `DeclaredSource.scope`. Lets the adapter narrow the search at seed time
+   * (arXiv: `scope.categories` as a category filter; Common Crawl: `domains` /
+   * `snapshot`; RSS: `feeds`). Optional — adapters that don't recognise any
+   * keys ignore it.
+   */
+  scope?: Record<string, unknown>;
 }
 
 /**

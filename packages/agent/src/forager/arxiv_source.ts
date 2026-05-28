@@ -146,7 +146,14 @@ export class ArxivSource implements ForagerSource {
   }
 
   async seed(opts: SeedOptions): Promise<string[]> {
-    const papers = await fetchPapers(opts.query, opts.limit ?? 5);
+    // arXiv categories live in metadata (cs.LG, cs.AI, …) — they're a *filter*,
+    // not a search query. When the manifest declares `scope.categories` we
+    // pass them through as filter so the search is narrowed without losing the
+    // topic query. Without it fetchPapers falls back to its broad default.
+    const cats = Array.isArray(opts.scope?.categories)
+      ? (opts.scope!.categories as string[])
+      : undefined;
+    const papers = await fetchPapers(opts.query, opts.limit ?? 5, cats);
     return papers
       .filter((p) => !!p.arxiv_id)
       .map((p) => this.urlFromArxivId(p.arxiv_id));
