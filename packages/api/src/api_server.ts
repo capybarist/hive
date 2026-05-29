@@ -17,14 +17,21 @@ import { runAutonomousExtraction } from '@hive/agent';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
 
-// Build/version label for /api/status and the UI badge. Falls back to 'unknown'
-// silently if package.json is unreachable (e.g. bundled deployments).
-let HIVE_VERSION = 'unknown';
-try {
-  const pkgPath = resolve(__dirname, '../../../package.json');
-  const pkgJson = JSON.parse(await (await import('node:fs/promises')).readFile(pkgPath, 'utf8'));
-  HIVE_VERSION = String(pkgJson.version ?? 'unknown');
-} catch { /* fall back to 'unknown' */ }
+// Build/version label for /api/status and the UI badge.
+// __HIVE_VERSION__ is replaced at bundle time by esbuild's `define` (the
+// published @capybaralabs/hive package can't reach the monorepo package.json
+// at ../../../). In the monorepo (tsx) the define is absent, so `typeof`
+// returns "undefined" (no ReferenceError) and we fall back to reading the
+// root package.json from disk.
+declare const __HIVE_VERSION__: string;
+let HIVE_VERSION = typeof __HIVE_VERSION__ !== 'undefined' ? __HIVE_VERSION__ : 'unknown';
+if (HIVE_VERSION === 'unknown') {
+  try {
+    const pkgPath = resolve(__dirname, '../../../package.json');
+    const pkgJson = JSON.parse(await (await import('node:fs/promises')).readFile(pkgPath, 'utf8'));
+    HIVE_VERSION = String(pkgJson.version ?? 'unknown');
+  } catch { /* fall back to 'unknown' */ }
+}
 
 const PORT = Number(process.env.HIVE_PORT ?? 8080);
 // ── HIVE_MODE — bee | queen | hive ─────────────────────────────────────────

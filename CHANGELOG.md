@@ -3,6 +3,33 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.15 — Fix the @capybaralabs/hive npm package (per-package bundles)
+
+`@capybaralabs/hive@0.1.0` crashed on `npx` at `KnowledgeStore.ready()` with
+`File descriptor could not be locked`. Root cause: esbuild bundling the whole
+api_server into one ESM file double-loaded the native Holepunch storage stack
+(corestore → device-file → fd-lock), so two openers raced for the same
+device-file lock. Confirmed bundle-specific — the monorepo via tsx (separate
+modules) opens corestore exactly once and starts cleanly.
+
+Fix: the runtime build now emits **per-package bundles** instead of one
+mega-bundle — `dist/core/index.js`, `dist/embeddings-node/index.js`,
+`dist/agent/index.js`, plus `dist/server.js` and `dist/cli.js` — linked by
+relative imports, with every npm dep (incl. the whole native stack) external.
+This mirrors the monorepo's module structure, so corestore loads once. Verified
+end-to-end: install the packed tarball in a clean dir, run the bundled server →
+`fd-lock: 0`, `KnowledgeStore ready ✓`.
+
+Also: the version label is injected at build time via esbuild `define`
+(`__HIVE_VERSION__`) so the published package reports `v0.8.15` instead of
+`vunknown` (the old code read a monorepo-relative package.json that doesn't
+exist in the npm layout). The monorepo/tsx path still falls back to the file
+read.
+
+Ships as `@capybaralabs/hive@0.1.1`; `0.1.0` stays deprecated.
+
+---
+
 ## v0.8.14 — Launchers don't kill slow-loading nodes (fix bee-1 restart loop)
 
 Second restart-loop class, found right after the queen one. bee-1 (a
