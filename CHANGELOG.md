@@ -3,6 +3,37 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.12 — Auth gates only expensive/write endpoints; fix queen.sh restart loop
+
+Two coupled fixes for a production incident found 2026-05-29: the Hetzner
+queen was restarting every ~30s (RestartCount climbed past 40), which tore
+down its P2P peers on every cycle (peers stuck at 0) and made the public
+demo widget fail intermittently.
+
+**Root cause.** `queen.sh`'s internal readiness probe curls `/api/status`
+with no Authorization header. Once v0.8.7 turned on `HIVE_API_KEY`, that
+probe got a 401, so the launcher concluded "Queen failed to start", exited,
+and the container's restart policy bounced it — forever, every ~30s. The
+node itself was healthy the whole time (it answered `/api/query` fine with a
+token); only the launcher's auth-blind health check was wrong.
+
+**Fix 1 — narrow the auth surface.** Auth now gates only the endpoints that
+cost money or mutate state: `POST /api/query` (LLM spend), `POST /api/config`
+(provider/key), `POST /api/claims` (registry writes). Everything else —
+`/api/status`, `/api/stats`, `/api/directory`, `/api/fragments`, `/api/peers`,
+the static UI — is public, the way a health/metadata endpoint should be. This
+is the right model (protect compute + writes, not read-only metadata) and it
+independently fixes the probe: `/api/status` no longer needs a token.
+
+**Fix 2 — make queen.sh auth-aware anyway.** The launcher's `qcurl` helper
+adds the bearer token when `HIVE_API_KEY` is set, so even a future
+deployment that locks down a probed endpoint won't loop. Belt and braces.
+
+The UI still authenticates for the query box (the expensive path); the demo
+token continues to pre-fill it via `/api/public-bootstrap`.
+
+---
+
 ## v0.8.11 — Caddy + sslip.io for HTTPS on queen + bees without a domain
 
 Lets a HIVE operator serve queen and bees over valid HTTPS even when they

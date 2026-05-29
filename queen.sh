@@ -32,7 +32,20 @@ run() { echo -e "${Y}→${N} $1"; }
 err() { echo -e "${R}✗${N} $1"; exit 1; }
 info(){ echo -e "${C}ℹ${N} $1"; }
 
-alive() { curl -s --max-time 2 "$1" 2>/dev/null | grep -q '"ok"\|"status"\|"indexed"'; }
+# v0.8.12: the internal health probe must send the bearer token when the node
+# has HIVE_API_KEY auth enabled (v0.8.7+). Without this, /api/status returns
+# 401, the probe never sees "ok", and queen.sh wrongly declares "failed to
+# start" → exit → container restart loop every ~30s, which also tears down
+# every P2P peer connection on each cycle.
+HIVE_API_KEY="${HIVE_API_KEY:-}"
+qcurl() {
+  if [ -n "$HIVE_API_KEY" ]; then
+    curl -s --max-time 2 -H "Authorization: Bearer $HIVE_API_KEY" "$@" 2>/dev/null
+  else
+    curl -s --max-time 2 "$@" 2>/dev/null
+  fi
+}
+alive() { qcurl "$1" | grep -q '"ok"\|"status"\|"indexed"'; }
 
 PORT="${HIVE_PORT:-8090}"
 DATA_DIR="${HIVE_DATA_DIR:-$HOME/.hive-queen}"
@@ -91,7 +104,7 @@ EOF
   done
 fi
 
-STATUS=$(curl -s "http://127.0.0.1:$PORT/api/status" 2>/dev/null)
+STATUS=$(qcurl "http://127.0.0.1:$PORT/api/status")
 if echo "$STATUS" | grep -q '"ok"'; then
   NODE=$(echo "$STATUS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).nodeId||'?')}catch{console.log('?')}})" 2>/dev/null)
   IDX=$(echo  "$STATUS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).indexed||0)}catch{console.log(0)}})" 2>/dev/null)

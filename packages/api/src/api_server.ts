@@ -257,31 +257,39 @@ await app.register(cors, {
   credentials: false,
 });
 
-// API auth — bearer-token gate on every /api/* route. Off by default (dev mode);
-// set HIVE_API_KEY to enable. Static UI files (HTML/JS/CSS at /) stay public —
-// the UI is a client like any other and prompts the visitor for the token, then
-// sends it in the Authorization header. Decision recorded 2026-05-29: UI behaves
-// the same as a programmatic client; no special-case routes.
+// API auth — bearer-token gate. Off by default (dev mode); set HIVE_API_KEY
+// to enable. v0.8.12: only the EXPENSIVE / write endpoints are gated — the
+// thing actually worth protecting is the queen's LLM spend and its mutable
+// state, not read-only metadata. Everything else (status, stats, directory,
+// fragments, peers, the static UI) stays public, so health probes, dashboards,
+// and monitoring work without a token. This also fixes the queen.sh restart
+// loop: its internal /api/status probe no longer hits a 401.
+//
+// Protected (require Bearer when HIVE_API_KEY is set):
+//   POST /api/query   — runs the LLM (cost)
+//   POST /api/config  — mutates LLM provider/key
+//   POST /api/claims  — writes to the claims registry
 const HIVE_API_KEY = process.env.HIVE_API_KEY?.trim() || null;
 // Optional: an operator can publish a "demo token" that the UI auto-loads at
-// page open, so casual visitors don't see a prompt. The bootstrap endpoint is
-// always public (whitelisted in the auth hook). Leaving this unset means the
-// UI falls back to the manual prompt — the right choice for private deployments.
+// page open, so casual visitors don't see a prompt for the query box. Leaving
+// it unset means the UI falls back to the manual prompt on the first 401.
 const HIVE_PUBLIC_DEMO_TOKEN = process.env.HIVE_PUBLIC_DEMO_TOKEN?.trim() || null;
+const PROTECTED_PREFIXES = ['/api/query', '/api/config', '/api/claims'];
 
 if (HIVE_API_KEY) {
   const expected = `Bearer ${HIVE_API_KEY}`;
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.startsWith('/api/')) return;        // static UI / assets
     if (req.method === 'OPTIONS') return;            // CORS preflight
-    if (req.url.startsWith('/api/public-bootstrap')) return; // always public
+    const path = req.url.split('?')[0];
+    const isProtected = PROTECTED_PREFIXES.some(p => path === p || path.startsWith(p + '/'));
+    if (!isProtected) return;                        // public: status/stats/UI/etc.
     if (req.headers.authorization !== expected) {
       reply.code(401).send({ error: 'unauthorized', hint: 'Send Authorization: Bearer <HIVE_API_KEY>' });
     }
   });
-  console.log(`   API auth ✓ (Bearer token required on /api/*)`);
+  console.log(`   API auth ✓ (Bearer required on: ${PROTECTED_PREFIXES.join(', ')})`);
   if (HIVE_PUBLIC_DEMO_TOKEN) {
-    console.log(`   Public demo-token ✓ (UI auto-prefills via /api/public-bootstrap)`);
+    console.log(`   Public demo-token ✓ (UI auto-prefills the query box via /api/public-bootstrap)`);
   }
 } else {
   console.log(`   API auth ✗ (open — set HIVE_API_KEY to enable)`);
@@ -289,10 +297,10 @@ if (HIVE_API_KEY) {
 
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
-// Public bootstrap — what the UI needs BEFORE it can authenticate. Always
-// reachable (the auth hook whitelists this route). Returns the queen version
-// and, if the operator opted in, the demo token. A bot can read this too —
-// the demo token is a soft gate, not a hard security boundary. Rotate
+// Public bootstrap — what the UI needs BEFORE it can authenticate. Public by
+// default (not in PROTECTED_PREFIXES). Returns the queen version and, if the
+// operator opted in, the demo token for the query box. A bot can read this too
+// — the demo token is a soft gate, not a hard security boundary. Rotate
 // HIVE_API_KEY (and HIVE_PUBLIC_DEMO_TOKEN with it) to kick everyone off.
 app.get('/api/public-bootstrap', async () => ({
   version: HIVE_VERSION,
