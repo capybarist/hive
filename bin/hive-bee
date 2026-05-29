@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# npx hive-bee — run a HIVE BEE
-# Requires: Node.js 20+, Python 3.10+, GEMINI_API_KEY env var
+# npx hive-bee — convenience launcher for running a HIVE bee from the repo.
+#
+# v0.8: pure Node, no Python. The Python embedder + pip dependencies are gone;
+# everything runs in-process via @huggingface/transformers. The launcher's only
+# job today is: ensure node_modules is present, then hand off to hive.sh.
+#
+# Requirements:
+#   - Node.js 22+ (Float16Array used by the fp16 vector codec needs it)
+#   - LLM_API_KEY env var (or .env file in the repo root)
+#
+# This is the "local repo" launcher. The true `npm install -g @capybaralabs/hive`
+# path is on the roadmap as a separate publishable package (ROADMAP.md §1).
+# Until that ships, `git clone` + `npx hive-bee` is the path.
 
 set -e
+
+# Resolve to the repo root regardless of where the symlink chain landed.
 DIR="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 cd "$DIR"
 
-echo "🐝 HIVE BEE"
-echo "Installing Python dependencies..."
-pip3 install -q -r packages/embeddings/requirements.txt 2>/dev/null || pip install -q -r packages/embeddings/requirements.txt
-echo "Installing Node dependencies..."
-npm install --silent
-echo "Starting BEE..."
+if [ ! -d node_modules ]; then
+  echo "🐝 Installing Node dependencies (first run)..."
+  npm install --silent
+fi
+
 exec bash hive.sh "$@"

@@ -3,6 +3,21 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.9 — Fix `bin/hive-bee` regression
+
+The `npx hive-bee` convenience launcher had been broken since the v0.8
+all-Node migration: its first step was `pip install -r packages/embeddings/requirements.txt`,
+but that directory (the Python embedder) was deleted in v0.8. Anyone who
+followed the README's "run a bee with `npx hive-bee`" path got a hard pip
+error before Node even started. Rewritten for v0.8: install Node deps if
+missing, then `exec bash hive.sh`. No pip, no Python.
+
+This is the **local-repo** launcher (clone + `npx hive-bee` from the
+checkout). The `npm install -g @capybaralabs/hive` path is the larger
+follow-up tracked in ROADMAP.md §1 — work starting now.
+
+---
+
 ## v0.8.8 — Public demo token (`/api/public-bootstrap`)
 
 v0.8.7 turned auth on but left every visitor to the public Hetzner demo
