@@ -127,6 +127,10 @@ dataset audit.
 > connectors so an agent can use a HIVE queen as a native tool. Not shipped yet
 > — tracked on the roadmap.
 
+→ The full catalogue (the seven above plus client-integration, personal-memory,
+team-knowledge, codebase-context, journalism/OSINT and more) lives in
+**[docs/USE-CASES.md](./docs/USE-CASES.md)** — cite cases by stable ID.
+
 ---
 
 ## Quick start
