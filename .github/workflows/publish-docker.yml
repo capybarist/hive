@@ -148,20 +148,26 @@ jobs:
           '
 
       - name: Verify queen booted
-        # /api/public-bootstrap is always-public (whitelisted in the v0.8.7
-        # auth hook) — using it here means the verifier doesn't need a
-        # HIVE_API_KEY secret and works whether auth is on or off.
+        # /api/public-bootstrap is always public (not gated by the auth hook),
+        # so no HIVE_API_KEY secret is needed. v0.8.13 removed the direct
+        # :8090 host port — the queen is reachable only via Caddy HTTPS over
+        # sslip.io, so probe that. DEPLOY_HOST is the dotted IPv4; sslip.io
+        # wants it dashed.
         run: |
-          for i in 1 2 3 4 5 6; do
-            if curl -fsS --max-time 5 http://${{ secrets.DEPLOY_HOST }}:8090/api/public-bootstrap >/dev/null; then
-              echo "✅ Queen responding after deploy"
+          HOST_DASHED="${DEPLOY_HOST//./-}"
+          URL="https://queen.${HOST_DASHED}.sslip.io/api/public-bootstrap"
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -fsS --max-time 5 "$URL" >/dev/null; then
+              echo "✅ Queen responding at $URL"
               exit 0
             fi
-            echo "Waiting for queen ($i/6)..."
+            echo "Waiting for queen ($i/8)... ($URL)"
             sleep 10
           done
-          echo "❌ /api/public-bootstrap did not respond after deploy" >&2
+          echo "❌ queen did not respond at $URL after deploy" >&2
           exit 1
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
 
       - name: Summary
         if: always()

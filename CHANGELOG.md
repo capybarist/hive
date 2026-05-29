@@ -3,6 +3,28 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.13 — HTTPS-only: drop the direct :8090/:8080/:8081 host ports
+
+Now that queen + bees serve valid HTTPS via Caddy + sslip.io (v0.8.11), the
+plain-HTTP host port mappings are removed from docker-compose. The three
+services switch from `ports: ["<n>:<n>"]` to `expose: ["<n>"]` — they still
+listen inside the docker network (Caddy proxies to `queen:8090` / `bee-1:8080`
+/ `bee-2:8081`), but `http://<ip>:<port>` from outside is gone. Only Caddy's
+:80 (→ 308 redirect to HTTPS) and :443 are publicly exposed.
+
+Public access is now exclusively:
+  https://queen.${CADDY_HOST_IP}.sslip.io
+  https://bee1.${CADDY_HOST_IP}.sslip.io
+  https://bee2.${CADDY_HOST_IP}.sslip.io
+
+CI deploy-verify updated to probe the Caddy HTTPS URL (dash-ifies
+DEPLOY_HOST for sslip.io) instead of the removed :8090.
+
+**Operator note:** any consumer that pointed at `http://<ip>:8090` (e.g. a
+Vercel proxy's `HIVE_QUEEN_URL`) must switch to the HTTPS sslip.io URL.
+
+---
+
 ## v0.8.12 — Auth gates only expensive/write endpoints; fix queen.sh restart loop
 
 Two coupled fixes for a production incident found 2026-05-29: the Hetzner
