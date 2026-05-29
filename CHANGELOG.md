@@ -3,6 +3,36 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.8 — Public demo token (`/api/public-bootstrap`)
+
+v0.8.7 turned auth on but left every visitor to the public Hetzner demo
+seeing a `prompt()` for a token. That makes sense for private deployments
+but breaks the "open a tab and try HIVE" demo flow.
+
+This adds an opt-in escape hatch for that case: the operator publishes a
+demo token in a new `HIVE_PUBLIC_DEMO_TOKEN` env var, the queen exposes it
+via an always-public `GET /api/public-bootstrap`, and the UI fetches it at
+page load before any authenticated call. If the env is unset, the bootstrap
+returns `demoToken: null` and the UI falls back to the manual prompt — so
+private queens behave exactly as before.
+
+The bootstrap endpoint is **whitelisted in the auth hook**, so it works
+even when `HIVE_API_KEY` is set. The demo token it returns is, by design,
+fetchable by anyone — bots included. It is a soft gate, not a hard security
+boundary; the operator rotates `HIVE_API_KEY` (and the demo token with it)
+to kick everyone off when abuse appears. The "no payment method on groq"
+fact this design relies on keeps the worst case bounded.
+
+**Changes**
+- `api_server.ts`: read `HIVE_PUBLIC_DEMO_TOKEN`; auth hook whitelists
+  `/api/public-bootstrap`; new route returns `{version, demoToken}`.
+- `index.html`: `ensureBootstrap()` runs once on first `apiFetch()` and
+  pre-loads the token into `localStorage` before the request goes out.
+- `docker-compose.yml`: passes `HIVE_PUBLIC_DEMO_TOKEN` to the queen
+  service alongside `HIVE_API_KEY`.
+
+---
+
 ## v0.8.7 — Optional bearer-token auth on `/api/*`
 
 Lets an operator gate the queen's HTTP API behind a shared secret without

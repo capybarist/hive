@@ -263,21 +263,41 @@ await app.register(cors, {
 // sends it in the Authorization header. Decision recorded 2026-05-29: UI behaves
 // the same as a programmatic client; no special-case routes.
 const HIVE_API_KEY = process.env.HIVE_API_KEY?.trim() || null;
+// Optional: an operator can publish a "demo token" that the UI auto-loads at
+// page open, so casual visitors don't see a prompt. The bootstrap endpoint is
+// always public (whitelisted in the auth hook). Leaving this unset means the
+// UI falls back to the manual prompt — the right choice for private deployments.
+const HIVE_PUBLIC_DEMO_TOKEN = process.env.HIVE_PUBLIC_DEMO_TOKEN?.trim() || null;
+
 if (HIVE_API_KEY) {
   const expected = `Bearer ${HIVE_API_KEY}`;
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;        // static UI / assets
     if (req.method === 'OPTIONS') return;            // CORS preflight
+    if (req.url.startsWith('/api/public-bootstrap')) return; // always public
     if (req.headers.authorization !== expected) {
       reply.code(401).send({ error: 'unauthorized', hint: 'Send Authorization: Bearer <HIVE_API_KEY>' });
     }
   });
   console.log(`   API auth ✓ (Bearer token required on /api/*)`);
+  if (HIVE_PUBLIC_DEMO_TOKEN) {
+    console.log(`   Public demo-token ✓ (UI auto-prefills via /api/public-bootstrap)`);
+  }
 } else {
   console.log(`   API auth ✗ (open — set HIVE_API_KEY to enable)`);
 }
 
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
+
+// Public bootstrap — what the UI needs BEFORE it can authenticate. Always
+// reachable (the auth hook whitelists this route). Returns the queen version
+// and, if the operator opted in, the demo token. A bot can read this too —
+// the demo token is a soft gate, not a hard security boundary. Rotate
+// HIVE_API_KEY (and HIVE_PUBLIC_DEMO_TOKEN with it) to kick everyone off.
+app.get('/api/public-bootstrap', async () => ({
+  version: HIVE_VERSION,
+  demoToken: HIVE_PUBLIC_DEMO_TOKEN,
+}));
 
 // ── POST /api/query ────────────────────────────────────────────────────────
 // Queen/hive only. The queen embeds the QUESTION (the one place the queen

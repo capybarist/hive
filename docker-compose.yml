@@ -188,6 +188,10 @@ services:
       # set → every /api/* call needs `Authorization: Bearer ${HIVE_API_KEY}`.
       # Same key used by the Dockerfile healthcheck and the in-browser UI.
       - HIVE_API_KEY=${HIVE_API_KEY:-}
+      # Optional demo token published via /api/public-bootstrap (v0.8.8). When
+      # set, the UI auto-loads it at page open — casual visitors don't see the
+      # prompt. Use for public-facing demo queens; leave unset for private ones.
+      - HIVE_PUBLIC_DEMO_TOKEN=${HIVE_PUBLIC_DEMO_TOKEN:-}
     ports:
       - "8090:8090"
     volumes:

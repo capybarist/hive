@@ -747,7 +747,27 @@ function setHiveToken(t) {
   else localStorage.removeItem(HIVE_TOKEN_KEY);
 }
 
+// Bootstrap — for public-demo queens the operator can publish a demo token via
+// /api/public-bootstrap; we read it once per page load and store it before any
+// authenticated call goes out. Private queens leave the field null and the
+// prompt() path below handles things.
+let _bootstrapPromise = null;
+function ensureBootstrap() {
+  if (_bootstrapPromise) return _bootstrapPromise;
+  _bootstrapPromise = (async () => {
+    if (getHiveToken()) return;
+    try {
+      const r = await fetch(`${API}/api/public-bootstrap`);
+      if (!r.ok) return;
+      const boot = await r.json();
+      if (boot?.demoToken && !getHiveToken()) setHiveToken(boot.demoToken);
+    } catch { /* offline or older queen — fall through to prompt */ }
+  })();
+  return _bootstrapPromise;
+}
+
 async function apiFetch(input, init = {}) {
+  await ensureBootstrap();
   const token = getHiveToken();
   const headers = new Headers(init.headers || {});
   if (token) headers.set('Authorization', `Bearer ${token}`);
