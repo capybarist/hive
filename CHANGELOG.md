@@ -3,6 +3,31 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.14 — Launchers don't kill slow-loading nodes (fix bee-1 restart loop)
+
+Second restart-loop class, found right after the queen one. bee-1 (a
+long-lived Wikipedia bee with a 779 MB corestore) crash-looped: `hive.sh`
+waited only 30s for `/api/status` to answer, but opening that corestore
+takes longer than 30s, so the launcher hit its `err` path, exited, and
+killed the still-loading node — forever. The data was never corrupt: run
+in isolation with a longer timeout, the node reaches `KnowledgeStore ready
+✓` and starts crawling normally. bee-2 (76 MB) and the queen load under
+30s, which is why only bee-1 looped.
+
+Fixes (hive.sh + queen.sh):
+- Readiness wait bumped 30s → 120s.
+- **Critical:** if the wait elapses but the node *process is still alive*
+  (`kill -0`), the launcher now hands off to the keep-alive loop instead of
+  erroring out. A healthy-but-slow node is never killed again; the launcher
+  only fails when the node process has actually died.
+- Dockerfile HEALTHCHECK gains `--start-period=150s` so health failures
+  during the initial load don't flap the container to "unhealthy".
+
+No data wipe — bee-1's corestore is intact and will resume from where it
+left off.
+
+---
+
 ## v0.8.13 — HTTPS-only: drop the direct :8090/:8080/:8081 host ports
 
 Now that queen + bees serve valid HTTPS via Caddy + sslip.io (v0.8.11), the

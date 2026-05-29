@@ -115,7 +115,11 @@ EOF
       > "/tmp/hive_api.log" 2>&1 ) &
   NODE_PID=$!
 
-  for i in $(seq 1 30); do
+  # v0.8.14: wait up to 120s, not 30s. A large corestore (a long-lived
+  # Wikipedia bee can hit hundreds of MB) takes well over 30s to open, and the
+  # old 30s cap made the launcher give up and kill a perfectly healthy node
+  # mid-load → infinite restart loop (bee-1, 779 MB, 2026-05-29).
+  for i in $(seq 1 120); do
     alive "http://127.0.0.1:$PORT/api/status" && break
     sleep 1
   done
@@ -138,8 +142,14 @@ if echo "$STATUS" | grep -q '"ok"'; then
     echo "  UI → http://localhost:$PORT"
   fi
   echo "  Logs → /tmp/hive_api.log"
+elif kill -0 "${NODE_PID:-}" 2>/dev/null; then
+  # Not "ok" yet but the node process is ALIVE — it's still loading a big
+  # store. Never kill it here; hand off to the keep-alive loop and let the
+  # Docker healthcheck flip to healthy once ready. This is the critical
+  # difference from the old behavior that caused the restart loop.
+  info "Node still starting (large store) — handing off. Watch /tmp/hive_api.log"
 else
-  err "Node failed to start. Check /tmp/hive_api.log"
+  err "Node process exited during startup. Check /tmp/hive_api.log"
 fi
 echo ""
 

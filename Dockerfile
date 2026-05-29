@@ -51,7 +51,9 @@ EXPOSE 8080
 ENV HIVE_PORT=8080
 ENV HIVE_DATA_DIR=/hive/data/bee
 
-HEALTHCHECK --interval=30s --timeout=5s \
+# start-period=150s (v0.8.14): a large corestore can take >60s to open; don't
+# count health failures against the container while it's still loading.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=150s \
   CMD bash -c 'curl -f ${HIVE_API_KEY:+-H "Authorization: Bearer $HIVE_API_KEY"} http://localhost:${HIVE_PORT:-8080}/api/status' || exit 1
 
 CMD ["bash", "hive.sh"]

@@ -98,7 +98,10 @@ EOF
       > /tmp/hive_queen.log 2>&1 ) &
   NODE_PID=$!
 
-  for i in $(seq 1 30); do
+  # v0.8.14: 120s, not 30s — a queen replicating large bee cores can take
+  # well over 30s to open its corestore. The old cap killed a healthy
+  # still-loading node → restart loop. See hive.sh for the full rationale.
+  for i in $(seq 1 120); do
     alive "http://127.0.0.1:$PORT/api/status" && break
     sleep 1
   done
@@ -127,8 +130,12 @@ if echo "$STATUS" | grep -q '"ok"'; then
   echo ""
   info "Waiting for BEEs to connect via Hyperswarm..."
   echo ""
+elif kill -0 "${NODE_PID:-}" 2>/dev/null; then
+  # Still loading a large store — process alive, just slow. Hand off rather
+  # than kill (the restart-loop fix). Healthcheck flips to healthy once ready.
+  info "Queen still starting (large store) — handing off. Watch /tmp/hive_queen.log"
 else
-  err "Queen failed to start. Check /tmp/hive_queen.log"
+  err "Queen process exited during startup. Check /tmp/hive_queen.log"
 fi
 
 if [ -n "${NODE_PID:-}" ]; then
