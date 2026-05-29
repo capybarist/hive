@@ -231,6 +231,23 @@ if (IS_HIVE && queenIndex) {
   console.log(`   Local→QueenIndex watch started ✓`);
 }
 
+// Periodic LanceDB compaction. Each `upsertBatch` leaves a permanent MVCC
+// manifest version; without pruning, the store grows unbounded (see the
+// 2026-05-29 incident where 33 940 versions filled the Hetzner disk in <16 h).
+// Keeps a 1 h trailing window so an in-flight reader can't pull a version
+// out from under itself. .unref() so the timer doesn't pin shutdown.
+if (queenIndex) {
+  const intervalMs = Number(process.env.HIVE_OPTIMIZE_INTERVAL_MS ?? 30 * 60_000);
+  const keepMs = Number(process.env.HIVE_OPTIMIZE_KEEP_MS ?? 60 * 60_000);
+  setInterval(() => {
+    const t0 = Date.now();
+    queenIndex.optimize(keepMs)
+      .then(() => console.log(`[queen] LanceDB optimize done in ${((Date.now() - t0) / 1000).toFixed(1)}s`))
+      .catch(err => console.warn(`[queen] LanceDB optimize failed: ${err?.message ?? err}`));
+  }, intervalMs).unref();
+  console.log(`   LanceDB optimize loop ✓ (every ${(intervalMs / 60_000).toFixed(0)} min, keep ${(keepMs / 60_000).toFixed(0)} min)`);
+}
+
 // ── Fastify ─────────────────────────────────────────────────────────────────
 const app = Fastify({ logger: false });
 await app.register(cors, {

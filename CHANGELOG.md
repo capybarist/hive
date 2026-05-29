@@ -3,6 +3,33 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.6 — Periodic LanceDB optimize (compact + cleanup old versions)
+
+Root-cause fix for the 2026-05-29 disk-fill incident on the Hetzner production
+box. Each `upsertBatch` leaves a permanent MVCC manifest version in LanceDB;
+nothing was pruning them. In <16 h post-v0.8 deploy the queen accumulated
+33 940 manifest versions in `fragments.lance/_versions/`, filling the 75 GB
+disk to 100 % and triggering cascading `No space left on device` write
+failures (Caddy → 502, `docker exec` itself failed). After manual
+`table.optimize({ cleanupOlderThan: now })` the store dropped from **45 GB →
+540 MB** with **124 201 fragments preserved**.
+
+Without compaction, every HIVE queen will exhibit the same failure mode —
+this is on the critical path for self-hosted operators (a 50 GB VPS must be
+able to run a queen for years, not days).
+
+**Changes**
+- `VectorIndex.optimize(keepMs)` interface method; `LanceVectorIndex`
+  implements it via `table.optimize({ cleanupOlderThan })`. The keep-window
+  ensures an in-flight reader can't pull a version out from under itself.
+- Queen runs the optimize loop every 30 min with a 1 h trailing window.
+  Configurable: `HIVE_OPTIMIZE_INTERVAL_MS` (default 1 800 000),
+  `HIVE_OPTIMIZE_KEEP_MS` (default 3 600 000). Set interval to 0 to disable.
+- Search behavior unchanged. Optimize is concurrent-safe with reads
+  (MVCC); upserts may briefly serialize against the writer lock.
+
+---
+
 ## v0.8.0 — Unified migration: all-Node, producer-side vectorization
 
 One coordinated breaking change (single hard reset). Full plan and cutover

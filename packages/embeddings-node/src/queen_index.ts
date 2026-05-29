@@ -90,5 +90,6 @@ export class QueenIndex {
     return { dropped: this.dropped };
   }
   async count(): Promise<number> { return this.idx.count(); }
+  async optimize(keepMs: number): Promise<void> { return this.idx.optimize(keepMs); }
   async close(): Promise<void> { return this.idx.close(); }
 }

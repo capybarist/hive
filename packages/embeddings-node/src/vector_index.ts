@@ -44,5 +44,9 @@ export interface VectorIndex {
   has(id: string): boolean;
   count(): Promise<number>;
   countByNode(nodeIds: string[]): Promise<Record<string, number>>;
+  /** Compact small fragments and prune MVCC versions older than `keepMs`.
+   *  Without this, LanceDB grows unbounded — every `upsertBatch` leaves a
+   *  permanent manifest version. No-op when the backend has nothing to do. */
+  optimize(keepMs: number): Promise<void>;
   close(): Promise<void>;
 }

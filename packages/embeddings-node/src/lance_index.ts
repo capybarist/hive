@@ -80,6 +80,12 @@ export class LanceVectorIndex implements VectorIndex {
     return this.table ? this.table.countRows() : 0;
   }
 
+  async optimize(keepMs: number): Promise<void> {
+    if (!this.table) return;
+    const cleanupOlderThan = new Date(Date.now() - Math.max(0, keepMs));
+    await this.table.optimize({ cleanupOlderThan });
+  }
+
   async countByNode(nodeIds: string[]): Promise<Record<string, number>> {
     const out: Record<string, number> = {};
     if (!this.table) { for (const n of nodeIds) out[n] = 0; return out; }
