@@ -1,8 +1,46 @@
-# Used when running Caddy standalone (not via docker-compose).
-# docker-compose generates the reverse-proxy config dynamically from $DOMAIN.
+# HIVE — Caddy reverse proxy with automatic HTTPS via sslip.io.
 #
-# HTTP mode (no DOMAIN):  caddy run --config Caddyfile
-# HTTPS mode (with domain): set DOMAIN=hive.example.com before running
-{$DOMAIN::80} {
+# sslip.io is a free wildcard DNS service: any hostname matching
+# <a>-<b>-<c>-<d>.sslip.io resolves to a.b.c.d. Combined with Caddy's
+# Let's Encrypt integration, we get valid HTTPS certs for the queen and
+# bees with zero DNS setup of our own — provided the box's IPv4 is set
+# in CADDY_HOST_IP (env or .env) using dashes instead of dots.
+#
+# To run a queen on a different machine: set CADDY_HOST_IP to the dashed
+# IPv4 of that machine. Subdomains slot in automatically.
+#
+# To run with a real domain: replace the {$CADDY_HOST_IP} placeholders with
+# your own hostnames (e.g. queen.mycompany.com). Same auto-TLS, no other
+# changes.
+#
+# Public access points:
+#   https://queen.{$CADDY_HOST_IP}.sslip.io  → queen:8090
+#   https://bee1.{$CADDY_HOST_IP}.sslip.io   → bee-1:8080
+#   https://bee2.{$CADDY_HOST_IP}.sslip.io   → bee-2:8081
+#
+# Bare-IP HTTP requests (http://<ip>/) redirect to the HTTPS queen so old
+# bookmarks and dashboards keep working.
+
+{
+    email caddy@capybaralabs.tech
+}
+
+queen.{$CADDY_HOST_IP}.sslip.io {
     reverse_proxy queen:8090
+}
+
+bee1.{$CADDY_HOST_IP}.sslip.io {
+    reverse_proxy bee-1:8080
+}
+
+bee2.{$CADDY_HOST_IP}.sslip.io {
+    reverse_proxy bee-2:8081
+}
+
+# Bare-IP HTTP fallback: anyone hitting http://<ip>/ goes to the queen UI
+# over HTTPS. Caddy will not auto-issue a cert for a bare IP, so this
+# block only matches plaintext on :80 and serves a 308 to the canonical
+# https://queen.<ip>.sslip.io.
+http://:80 {
+    redir https://queen.{$CADDY_HOST_IP}.sslip.io{uri} 308
 }

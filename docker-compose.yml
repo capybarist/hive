@@ -28,19 +28,20 @@ services:
     image: caddy:2-alpine
     container_name: hive-caddy
     restart: unless-stopped
-    command: >
-      sh -c "if [ -n \"$$DOMAIN\" ]; then
-        exec caddy reverse-proxy --from $$DOMAIN --to queen:8090;
-      else
-        exec caddy reverse-proxy --from :80 --to queen:8090;
-      fi"
+    # v0.8.11: switched from `caddy reverse-proxy` CLI to a Caddyfile so we
+    # can serve queen + bees over auto-TLS via sslip.io subdomains. See
+    # ./Caddyfile for the host map. CADDY_HOST_IP is your public IPv4 with
+    # dashes instead of dots (e.g. 178-105-140-134); sslip.io resolves
+    # *.${CADDY_HOST_IP}.sslip.io to that IP, Let's Encrypt issues a cert
+    # per subdomain via HTTP-01. Leave unset to keep HTTP-only behavior.
     environment:
-      - DOMAIN=${DOMAIN:-}
+      - CADDY_HOST_IP=${CADDY_HOST_IP:-}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

@@ -3,6 +3,35 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.11 — Caddy + sslip.io for HTTPS on queen + bees without a domain
+
+Lets a HIVE operator serve queen and bees over valid HTTPS even when they
+do not control a DNS zone. Caddy switches from the inline
+`caddy reverse-proxy` CLI to a proper Caddyfile (mounted from the repo
+root). The Caddyfile declares three subdomains under sslip.io — a free
+wildcard DNS service that resolves `<ip-with-dashes>.sslip.io` to the
+matching IPv4 — and Caddy auto-fetches a Let's Encrypt cert for each via
+HTTP-01.
+
+Public access points (when `CADDY_HOST_IP` is set in `.env` to the dashed
+IPv4 of the host):
+
+  https://queen.${CADDY_HOST_IP}.sslip.io  → queen:8090
+  https://bee1.${CADDY_HOST_IP}.sslip.io   → bee-1:8080
+  https://bee2.${CADDY_HOST_IP}.sslip.io   → bee-2:8081
+
+Bare-IP HTTP requests get a 308 to the canonical HTTPS queen URL so old
+bookmarks and tooling keep working. Leaving `CADDY_HOST_IP` unset keeps
+the previous HTTP-only behavior (subdomain blocks just fail to match;
+the redirect still serves a 308 to a missing host, so set the var when
+you flip Caddy on).
+
+The Caddyfile is generic: swap `{$CADDY_HOST_IP}.sslip.io` for a real
+domain you control and you get the same auto-TLS without sslip.io as
+an intermediary.
+
+---
+
 ## v0.8.10 — Fix UI source-chip links pointing at the queen URL
 
 Reported 2026-05-29. Search-result source chips in the queen UI rendered
