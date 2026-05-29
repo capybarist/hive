@@ -138,8 +138,21 @@ team-knowledge, codebase-context, journalism/OSINT and more) lives in
 
 ## Quick start
 
-Pick what you want to do. Each is shown **with Docker** (nothing to install but
-Docker) and **from source** (Node 22+ — no Python, no external services in v0.8).
+The fastest path is the npm package — one command, interactive wizard, ready
+to use:
+
+```bash
+npx @capybaralabs/hive
+```
+
+First run walks you through role (queen / bee / hive), LLM provider + key, and
+public-or-private topic. Generates an `HIVE_API_KEY`, writes config to
+`~/.config/hive/.env`, and starts the node. Subsequent runs read the saved
+config and start directly.
+
+For more control, the rest of this section shows the **Docker** path (nothing
+to install but Docker) and the **from-source** path (Node 22+, clone the
+repo). Both stay supported.
 
 ### 🐝 Contribute — run a BEE
 The lightest thing you can run. No key, no LLM.
