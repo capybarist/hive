@@ -8,7 +8,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WizardResult } from './wizard.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// In bundled mode the esbuild banner provides __dirname. In dev mode (tsx),
+// derive it from import.meta.url under a unique name to avoid clashing with
+// the bundler-provided global.
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 export function runNode(cfg: WizardResult): void {
   const env: NodeJS.ProcessEnv = {
@@ -52,9 +55,9 @@ export function runNode(cfg: WizardResult): void {
 
 function resolveServerEntry(): string | null {
   const candidates = [
-    resolve(__dirname, 'server.js'),                            // bundled
-    resolve(__dirname, '../../api/src/api_server.ts'),          // monorepo dev
-    resolve(__dirname, '../../../packages/api/src/api_server.ts'),
+    resolve(HERE, 'server.js'),                            // bundled
+    resolve(HERE, '../../api/src/api_server.ts'),          // monorepo dev
+    resolve(HERE, '../../../packages/api/src/api_server.ts'),
   ];
   for (const c of candidates) {
     try {

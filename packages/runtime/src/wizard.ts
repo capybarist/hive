@@ -6,8 +6,7 @@
 
 import * as p from '@clack/prompts';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { randomBytes, generateKeyPairSync, createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { randomBytes, createHash } from 'node:crypto';
 import { configDir, dataDir, cacheDir, envFilePath } from './paths.js';
 
 export interface WizardResult {
@@ -20,7 +19,6 @@ export interface WizardResult {
   hiveApiKey: string;
   dataDir: string;
   cacheDir: string;
-  identityPubkeyHex: string;
 }
 
 const PUBLIC_TOPICS = [
@@ -126,17 +124,13 @@ export async function runWizard(): Promise<WizardResult> {
   }
 
   const s = p.spinner();
-  s.start('Generating identity and provisioning directories');
+  s.start('Provisioning directories and generating auth token');
 
-  // ed25519 identity (the bee/queen pubkey)
-  const { publicKey } = generateKeyPairSync('ed25519');
-  const pubkeyDer = publicKey.export({ format: 'der', type: 'spki' });
-  const identityPubkeyHex = pubkeyDer.toString('hex');
-
-  // Generated auth token — what the API requires for /api/*
+  // Generated auth token — what the API requires for /api/*. The ed25519
+  // node identity is created by the server on first start in HIVE_DATA_DIR
+  // (loadOrCreateIdentity), so we don't generate it here.
   const hiveApiKey = hex(16);
 
-  // Make directories
   const dir = dataDir();
   const cache = cacheDir();
   const cfg = configDir();
@@ -144,7 +138,7 @@ export async function runWizard(): Promise<WizardResult> {
   mkdirSync(cache, { recursive: true });
   mkdirSync(cfg, { recursive: true });
 
-  s.stop('Generated identity and directories');
+  s.stop('Directories ready, auth token generated');
 
   // Write .env
   const lines: string[] = [
@@ -185,7 +179,6 @@ export async function runWizard(): Promise<WizardResult> {
     hiveApiKey,
     dataDir: dir,
     cacheDir: cache,
-    identityPubkeyHex,
   };
 }
 
@@ -206,7 +199,6 @@ function loadExisting(): WizardResult {
     hiveApiKey: env.HIVE_API_KEY ?? '',
     dataDir: env.HIVE_DATA_DIR ?? dataDir(),
     cacheDir: cacheDir(),
-    identityPubkeyHex: '',
   };
 }
 

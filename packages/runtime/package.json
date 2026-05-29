@@ -20,7 +20,19 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@clack/prompts": "^0.7.0"
+    "@clack/prompts": "^0.7.0",
+    "@fastify/cors": "^9",
+    "@fastify/static": "^7",
+    "@huggingface/transformers": "^3.3.0",
+    "@lancedb/lancedb": "^0.12.0",
+    "apache-arrow": "^17.0.0",
+    "compact-encoding": "^2.19.2",
+    "corestore": "^7",
+    "fast-xml-parser": "^4.3.0",
+    "fastify": "^4",
+    "hyperbee": "^2",
+    "hypercore": "^11",
+    "hyperswarm": "^4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

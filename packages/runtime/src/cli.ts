@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // `hive` CLI entry. Subcommands:
 //   hive               → first-run wizard if not configured, otherwise run saved config
 //   hive run [role]    → arrange to run a specific role (queen | bee | hive)
