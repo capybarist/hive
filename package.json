@@ -17,7 +17,8 @@
     "packages/core",
     "packages/agent",
     "packages/api",
-    "packages/embeddings-node"
+    "packages/embeddings-node",
+    "packages/runtime"
   ],
   "scripts": {
     "start": "bash hive.sh",

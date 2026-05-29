@@ -28,6 +28,10 @@ COPY packages/core/package.json packages/core/
 COPY packages/agent/package.json packages/agent/
 COPY packages/api/package.json packages/api/
 COPY packages/embeddings-node/package.json packages/embeddings-node/
+# packages/runtime is the publishable npm CLI (@capybaralabs/hive). The Docker
+# image doesn't run it (it runs hive.sh directly), but the workspace listing
+# requires the manifest to be present or `npm install` errors out.
+COPY packages/runtime/package.json packages/runtime/
 RUN npm install
 
 # ── Source ──────────────────────────────────────────────────────────────────

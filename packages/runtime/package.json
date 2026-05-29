@@ -1,0 +1,45 @@
+{
+  "name": "@capybaralabs/hive",
+  "version": "0.1.0",
+  "description": "HIVE — decentralized verifiable knowledge base for LLMs. Run a queen, a bee, or both, with a one-command install. Wraps the @hive monorepo as a publishable npm CLI.",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "bin": {
+    "hive": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsx scripts/build.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/capybarist/hive",
+    "directory": "packages/runtime"
+  },
+  "keywords": [
+    "hive",
+    "rag",
+    "knowledge-base",
+    "p2p",
+    "hypercore",
+    "llm",
+    "vector-search"
+  ]
+}
