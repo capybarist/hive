@@ -1335,8 +1335,12 @@ function renderConversationTurn(question, data) {
   // against the original Wikipedia/arXiv page.
   const sourceChips = relevant.slice(0, 4).map(f => {
     const isLocal = f.node_id === MY_NODE_ID;
-    const url = f.source ?? '#';
-    const label = (f.title ? f.title.slice(0, 42) : (f.source ?? '').slice(0, 42));
+    // v0.8.10 fix: link to the actual source URL, not the source-type identifier.
+    // `f.source` is the source label ("wikipedia-en", "rss"); `f.url` is the
+    // verbatim source URL (https://en.wikipedia.org/...). Using `f.source` here
+    // made safeUrl fall through to '#', which navigates to the queen's own URL.
+    const url = f.url ?? '#';
+    const label = (f.title ? f.title.slice(0, 42) : (f.url ?? '').slice(0, 42));
     return `<a class="conv-source-chip ${isLocal?'local':''}" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" title="${url}">${sourceIcon(f.source ?? '')} ${label}</a>`;
   }).join('');
 

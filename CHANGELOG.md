@@ -3,6 +3,24 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.10 — Fix UI source-chip links pointing at the queen URL
+
+Reported 2026-05-29. Search-result source chips in the queen UI rendered
+their `href` from `f.source` (the source-type label like `wikipedia-en` or
+`rss`) instead of `f.url` (the verbatim source URL). `safeUrl()` rejects
+anything that doesn't start with `http(s)://` and returns `#`, which makes
+the browser navigate to the page's own origin — so users clicking the
+citation chip landed back on the queen instead of the original Wikipedia /
+arXiv / RSS page.
+
+One-line fix: `const url = f.url ?? '#';` (was `f.source`). Hover tooltip
+also now shows the verbatim source URL.
+
+Confirmed the Hypercore fragment already carries `url` correctly — this
+was a pure rendering bug, no schema or data-layer issue.
+
+---
+
 ## v0.8.9 — Fix `bin/hive-bee` regression
 
 The `npx hive-bee` convenience launcher had been broken since the v0.8
