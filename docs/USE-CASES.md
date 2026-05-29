@@ -417,8 +417,12 @@ Skill-capable contexts that don't support MCP.
 code — telling the model to prefer signed, dated HIVE fragments over open-web
 guesses when applicable, and to admit absence rather than fabricate.
 
-**Status.** 🔴 Drafting after [14](#14--mcp-server) ships. Mirror-published
-to a separate repo for easy `~/.claude/skills/` install.
+**Status.** 🟢 Shipped 2026-05-29 — lives at [`skills/hive-research/`](../skills/hive-research/)
+in this repo. Install with `cp -r skills/hive-research ~/.claude/skills/` and
+reload your Claude client; the Skill becomes dormant when no queen is reachable
+and active when MCP is configured or an `HIVE_QUEEN_URL` is in conversation
+context. Uses the MCP server ([14](#14--mcp-server)) as its preferred call
+path but falls back to direct HTTP so it also works in Claude.ai web.
 
 `SKILL.md` · `behavioural guidance` · `HTTP-direct` · `MCP-independent`
 

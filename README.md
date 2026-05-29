@@ -123,9 +123,12 @@ SFT, or distillation pipeline; filter by source, scope, language, or signing
 BEE. Per-fragment, verifiable provenance — useful for licence propagation and
 dataset audit.
 
-> 🔭 **Coming:** first-class **MCP server** + **Claude Skills / OpenClaw**
-> connectors so an agent can use a HIVE queen as a native tool. Not shipped yet
-> — tracked on the roadmap.
+**LLM client integrations** *(case 14–16)* — `@capybaralabs/hive-mcp` ships
+the MCP server for Claude Desktop, Claude Code, Cursor, Continue, Goose,
+[OpenClaw](https://openclaw.io/) (and the rest of the MCP ecosystem). For
+behavioural guidance — when Claude should reach for HIVE vs WebSearch, how to
+read scores, how to cite — install the [hive-research Claude Skill](./skills/hive-research/)
+on top.
 
 → The full catalogue (the seven above plus client-integration, personal-memory,
 team-knowledge, codebase-context, journalism/OSINT and more) lives in
