@@ -722,6 +722,51 @@
 
 <script>
 const API = '';
+
+// ── HIVE API auth ─────────────────────────────────────────────────────────────
+// Bearer-token gate matching the queen's HIVE_API_KEY env var. If the queen has
+// auth enabled, every /api/* call needs the token in the Authorization header.
+// Token sources (in priority order): ?hive_token=… URL param (one-click demo
+// link), localStorage, prompt() on first 401. The UI is just another client —
+// the queen does not treat it specially.
+const HIVE_TOKEN_KEY = 'hive_api_token';
+
+(() => {
+  const u = new URL(window.location.href);
+  const t = u.searchParams.get('hive_token');
+  if (t) {
+    localStorage.setItem(HIVE_TOKEN_KEY, t);
+    u.searchParams.delete('hive_token');
+    window.history.replaceState({}, '', u.toString());
+  }
+})();
+
+function getHiveToken() { return localStorage.getItem(HIVE_TOKEN_KEY); }
+function setHiveToken(t) {
+  if (t) localStorage.setItem(HIVE_TOKEN_KEY, t);
+  else localStorage.removeItem(HIVE_TOKEN_KEY);
+}
+
+async function apiFetch(input, init = {}) {
+  const token = getHiveToken();
+  const headers = new Headers(init.headers || {});
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(input, { ...init, headers });
+  if (res.status !== 401) return res;
+
+  // Auth failed — prompt for token and retry once.
+  const entered = window.prompt(
+    'This HIVE queen requires an API token.\n\n' +
+    'Paste it below (or ask the queen operator for one).\n' +
+    'It will be saved to your browser for next time.'
+  );
+  if (!entered) return res;
+  setHiveToken(entered.trim());
+  const headers2 = new Headers(init.headers || {});
+  headers2.set('Authorization', `Bearer ${entered.trim()}`);
+  return fetch(input, { ...init, headers: headers2 });
+}
+
 let MY_NODE_ID = '';
 // v0.7.2.3: cache the latest /api/status payload so loadNetwork() can
 // surface the same peer count + indexed total that the topbar shows.
@@ -783,7 +828,7 @@ async function saveConfig() {
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving…';
   try {
-    const res = await fetch(`${API}/api/config`, {
+    const res = await apiFetch(`${API}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, apiKey, ...(model ? { model } : {}) }),
@@ -811,7 +856,7 @@ document.getElementById('cfg-key').addEventListener('keydown', e => { if (e.key 
 // ── Status ────────────────────────────────────────────────────────────────────
 async function checkStatus() {
   try {
-    const d = await fetch(`${API}/api/status`).then(r => r.json());
+    const d = await apiFetch(`${API}/api/status`).then(r => r.json());
     MY_NODE_ID = d.nodeId ?? '';
     LATEST_STATUS = d;
 
@@ -899,7 +944,7 @@ async function checkStatus() {
 // ── Activity feed ─────────────────────────────────────────────────────────────
 async function loadActivity() {
   try {
-    const d = await fetch(`${API}/api/activity`).then(r => r.json());
+    const d = await apiFetch(`${API}/api/activity`).then(r => r.json());
 
     const ind = document.getElementById('extracting-indicator');
     ind.innerHTML = d.extracting
@@ -984,7 +1029,7 @@ async function loadCrawl() {
   const visitedEl = document.getElementById('bee-stat-visited');
   if (!queueEl || !visitedEl) return;
   try {
-    const d = await fetch(`${API}/api/crawl`).then(r => r.json());
+    const d = await apiFetch(`${API}/api/crawl`).then(r => r.json());
     queueEl.textContent = (d.queue_size ?? 0).toLocaleString();
     visitedEl.textContent = (d.visited_size ?? 0).toLocaleString();
 
@@ -1019,7 +1064,7 @@ async function loadManifest() {
   const metaEl    = document.getElementById('bee-manifest-meta');
   if (!sourcesEl) return;
   try {
-    const d = await fetch(`${API}/api/directory`).then(r => r.json());
+    const d = await apiFetch(`${API}/api/directory`).then(r => r.json());
     const self = (d.bees ?? []).find(b => b.is_self) ?? (d.bees ?? [])[0];
     if (!self) {
       sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">No manifest yet</span>';
@@ -1047,8 +1092,8 @@ async function loadManifest() {
 async function loadNetwork() {
   try {
     const [topicsData, stateData] = await Promise.all([
-      fetch(`${API}/api/topics`).then(r => r.json()),
-      fetch(`${API}/api/state`).then(r => r.json()).catch(() => ({})),
+      apiFetch(`${API}/api/topics`).then(r => r.json()),
+      apiFetch(`${API}/api/state`).then(r => r.json()).catch(() => ({})),
     ]);
     const panel = document.getElementById('network-panel');
     const nodes = (topicsData.nodes ?? []);
@@ -1307,7 +1352,7 @@ async function runQuery() {
   conv.scrollTop = conv.scrollHeight;
 
   try {
-    const res = await fetch(`${API}/api/query`, {
+    const res = await apiFetch(`${API}/api/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

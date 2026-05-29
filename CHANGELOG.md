@@ -3,6 +3,47 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.8.7 — Optional bearer-token auth on `/api/*`
+
+Lets an operator gate the queen's HTTP API behind a shared secret without
+giving up the open-access mode that's been the default since v0.7. Off by
+default; set the `HIVE_API_KEY` env var to enable.
+
+The trigger is the public Hetzner demo queen: anyone with the URL can hit
+`/api/query`, which spends LLM tokens on the operator's account. With a token
+set, only requests that send `Authorization: Bearer <HIVE_API_KEY>` go through;
+everything else returns `401`. Static UI assets (`/`, JS, CSS) remain public —
+the in-browser UI is just another client and authenticates the same way as a
+programmatic caller. Decision recorded 2026-05-29: no UI bypass, no special-case
+routes.
+
+**Behavior**
+- Unset → API fully open (existing dev/local-stack behavior is preserved).
+- Set → every `/api/*` route requires the bearer token. UI files (HTML/JS/CSS)
+  still serve unauthenticated.
+- A Fastify `onRequest` hook checks the header before route handlers run.
+  CORS preflight (`OPTIONS`) is allowed through so browsers can still complete
+  the actual request.
+
+**UI changes** (`packages/ui/index.html`)
+- New `apiFetch()` wrapper injects `Authorization: Bearer <token>` on every
+  call; replaces the 8 bare `fetch()` calls to `/api/*`.
+- Token sources, in priority order: `?hive_token=...` URL query string
+  (one-click demo link — auto-saved and stripped from the URL),
+  `localStorage`, then `window.prompt()` on the first `401`. The prompt fires
+  once, the entered value is persisted, and the request retries.
+
+**Ops**
+- `docker-compose.yml` passes `HIVE_API_KEY` through to the queen service.
+- The Dockerfile healthcheck sends the header when the env var is set
+  (`${HIVE_API_KEY:+-H "Authorization: Bearer $HIVE_API_KEY"}`) so the
+  container's own health probe survives auth being turned on.
+- Multi-tenant tokens (`HIVE_API_KEYS=k1:alice,k2:bob,...`) and audit logging
+  are planned for v0.9.x — single-token is enough for the immediate "stop
+  randoms burning my LLM credits" use case.
+
+---
+
 ## v0.8.6 — Periodic LanceDB optimize (compact + cleanup old versions)
 
 Root-cause fix for the 2026-05-29 disk-fill incident on the Hetzner production

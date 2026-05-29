@@ -256,6 +256,27 @@ await app.register(cors, {
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: false,
 });
+
+// API auth — bearer-token gate on every /api/* route. Off by default (dev mode);
+// set HIVE_API_KEY to enable. Static UI files (HTML/JS/CSS at /) stay public —
+// the UI is a client like any other and prompts the visitor for the token, then
+// sends it in the Authorization header. Decision recorded 2026-05-29: UI behaves
+// the same as a programmatic client; no special-case routes.
+const HIVE_API_KEY = process.env.HIVE_API_KEY?.trim() || null;
+if (HIVE_API_KEY) {
+  const expected = `Bearer ${HIVE_API_KEY}`;
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/')) return;        // static UI / assets
+    if (req.method === 'OPTIONS') return;            // CORS preflight
+    if (req.headers.authorization !== expected) {
+      reply.code(401).send({ error: 'unauthorized', hint: 'Send Authorization: Bearer <HIVE_API_KEY>' });
+    }
+  });
+  console.log(`   API auth ✓ (Bearer token required on /api/*)`);
+} else {
+  console.log(`   API auth ✗ (open — set HIVE_API_KEY to enable)`);
+}
+
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 
 // ── POST /api/query ────────────────────────────────────────────────────────
