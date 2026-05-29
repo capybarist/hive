@@ -361,22 +361,42 @@ output format from the MCP server ([14](#14--mcp-server)) and example queens
 Goose, OpenClaw, …) wants to use a HIVE queen as a native tool — without the
 app developer having to know anything about Hypercore, ed25519, or LanceDB.
 
-**How it works.** A standalone npm package `@capybarist/hive-mcp` exposes the
-queen's API as MCP tools (`hive_query`, `hive_search`, `hive_list_sources`)
-and resources (`hive://fragment/{id}`, `hive://manifest`, `hive://stats`).
-Stdio transport first (universal), SSE later. The package is **slim** — it's
-a thin HTTP client to a queen URL, not the whole HIVE stack — so a consumer
-who only wants to *use* a HIVE doesn't need to install the full Hypercore
-toolchain.
+**How it works.** A standalone npm package `@capybaralabs/hive-mcp` exposes the
+queen's API as MCP tools (`hive_query` for retrieval, `hive_list_sources` for
+discovery) — resources (`hive://fragment/{id}`, `hive://manifest`,
+`hive://stats`) are tracked for a follow-up. Stdio transport first
+(universal), SSE later. The package is **slim** — it's a thin HTTP client to a
+queen URL, not the whole HIVE stack — so a consumer who only wants to *use* a
+HIVE doesn't need to install the full Hypercore toolchain.
+
+**No LLM synthesis in the MCP path.** `hive_query` returns raw fragments;
+the host LLM (Claude / Cursor / etc.) synthesises. The queen's `/api/query`
+still supports `use_llm: true` for the queen's own UI, non-MCP integrations,
+and [case 06](#06--local-ai--fully-offline-stack) — but routing fragments
+through a weaker queen-side LLM only to be re-read by a stronger host LLM is
+redundant and loses fidelity. Decision recorded 2026-05-29.
 
 **Why HIVE.** Eliminates the integration cost for every host that already
 speaks MCP. One MCP server, every MCP-aware client gets HIVE for free
 (including [16 OpenClaw](#16--openclaw--agent-ecosystems)).
 
+**Single-queen by design — no client-side federation.** Each MCP server
+instance points at exactly one queen. Multi-source composition is handled
+*queen-side* by [case 04 · Hybrid multi-swarm queen](#04--hybrid-multi-swarm-queen):
+the operator's queen joins as many topics as it has credentials for
+(public mesh, private corporate swarm, personal-data swarm, …), Hypercore
+replication brings everything into one local LanceDB, and the queen serves
+a single `/api/query`. The MCP layer must not duplicate this — it would
+break privacy boundaries (the client would see what the queen is
+authorised to see, but cross-queen LLM synthesis would leak fragments
+between queens that are intentionally isolated by topic / encryption key).
+A user who wants to consult *someone else's* queen without replicating
+just points the MCP server at that queen's URL.
+
 **Status.** 🔴 First package in the v0.9 productisation push. See
 [ROADMAP.md §4](./ROADMAP.md#4-mcp--agents-integration-the-productization).
 
-`@capybarist/hive-mcp` · `stdio + SSE` · `slim client` · `universal LLM host`
+`@capybaralabs/hive-mcp` · `stdio + SSE` · `slim client` · `universal LLM host`
 
 ---
 
@@ -411,7 +431,7 @@ gateway) wants HIVE to appear in their tool palette alongside the other
 500+ community MCP servers.
 
 **How it works.** No HIVE-specific code. OpenClaw's `mcporter` discovers the
-`@capybarist/hive-mcp` package ([14](#14--mcp-server)) from npm, the user
+`@capybaralabs/hive-mcp` package ([14](#14--mcp-server)) from npm, the user
 configures the queen URL, the tool is live. We additionally publish a
 recommended OpenClaw skill bundle (configuration + prompt hints) for
 out-of-the-box behaviour.
