@@ -1,15 +1,21 @@
-// Bootstrap (formerly "wizard"). Replaced interactive CLI prompts with
-// sensible defaults — configuration is done via the Settings panel in
-// the web UI (http://localhost:8080).
+// Bootstrap (formerly "wizard"). The only interactive question is the node
+// ROLE (bee/queen/hive) — that's the one thing the web Settings panel can't
+// change later, because it determines the whole process shape (a bee has no
+// query UI, a queen has no extractor). Everything else — sources, topic, LLM,
+// auth key — is configured in the browser after the node starts.
 //
-// Keeps the WizardResult interface so runner.ts needs no changes.
+// Non-interactive contexts (docker, CI, piped stdin) never see the prompt:
+// they pass HIVE_MODE via env or `hive run <role>`, and we default to `hive`.
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { createInterface } from 'node:readline/promises';
 import { configDir, dataDir, cacheDir, envFilePath } from './paths.js';
 
+export type Role = 'queen' | 'bee' | 'hive';
+
 export interface WizardResult {
-  role: 'queen' | 'bee' | 'hive';
+  role: Role;
   llmProvider: string;
   llmApiKey: string;
   topicMode: 'public' | 'private';
@@ -28,7 +34,39 @@ function alreadyConfigured(): boolean {
   return existsSync(envFilePath());
 }
 
-export async function runWizard(): Promise<WizardResult> {
+function normalizeRole(s: string | undefined): Role | null {
+  const v = (s ?? '').trim().toLowerCase();
+  if (v === '1' || v === 'bee') return 'bee';
+  if (v === '2' || v === 'queen') return 'queen';
+  if (v === '3' || v === 'hive') return 'hive';
+  return null;
+}
+
+async function promptRole(): Promise<Role> {
+  console.log(`
+🐝  HIVE — choose a role for this node:
+
+  1) bee    — producer: extracts & signs knowledge into Hypercore. No LLM key.
+  2) queen  — consumer: answers queries with an LLM, replicates & indexes bees.
+  3) hive   — both in one process (single-machine quickstart).
+
+Everything else (sources, topic, LLM provider, auth key) is configured in the
+web UI once the node is up — open http://localhost:8080 and follow Settings.
+`);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const ans = await rl.question('Role [1/2/3 or bee/queen/hive] (default: hive): ');
+    return normalizeRole(ans) ?? 'hive';
+  } catch {
+    // Ctrl+D / closed stdin / aborted → take the default rather than crash.
+    console.log('\n(no selection — defaulting to hive)');
+    return 'hive';
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runWizard(roleArg?: string): Promise<WizardResult> {
   const dir   = dataDir();
   const cache = cacheDir();
   const cfg   = configDir();
@@ -38,15 +76,22 @@ export async function runWizard(): Promise<WizardResult> {
 
   if (alreadyConfigured()) return loadExisting();
 
-  // First run — write a minimal .env with generated auth key.
-  // Everything else (sources, LLM, topic) is configured via the web UI.
+  // First run — pick the role. Priority: explicit arg → HIVE_MODE env →
+  // interactive prompt (TTY only) → default `hive`.
+  let role: Role =
+    normalizeRole(roleArg) ??
+    normalizeRole(process.env.HIVE_MODE) ??
+    (process.stdin.isTTY ? await promptRole() : 'hive');
+
+  // Minimal .env: generated auth key + chosen role. Sources/topic/LLM are set
+  // in the web UI (the node won't extract or answer until configured there).
   const hiveApiKey = hex(16);
   const lines = [
     `# HIVE config — generated on first run ${new Date().toISOString()}`,
-    `# Configure sources, LLM provider, and topic via the Settings panel`,
-    `# in the web UI (http://localhost:8080).`,
+    `# Configure sources, topic, and LLM provider via the Settings panel in the`,
+    `# web UI (http://localhost:8080).`,
     ``,
-    `HIVE_MODE=hive`,
+    `HIVE_MODE=${role}`,
     `HIVE_DATA_DIR=${dir}`,
     `HIVE_API_KEY=${hiveApiKey}`,
     `HIVE_PUBLIC_DEMO_TOKEN=${hiveApiKey}`,
@@ -55,21 +100,18 @@ export async function runWizard(): Promise<WizardResult> {
 
   console.log(`
 ╔══════════════════════════════════════════════════════════╗
-║  🐝  HIVE — first run                                   ║
+║  🐝  HIVE — ${role.toUpperCase().padEnd(45)}║
 ╠══════════════════════════════════════════════════════════╣
-║  Config written to: ${envFilePath().padEnd(36)} ║
+║  Config: ${envFilePath().padEnd(48)}║
+║  Auth:   ${hiveApiKey.padEnd(48)}║
 ║                                                          ║
-║  Auth token: ${hiveApiKey.padEnd(43)}║
-║                                                          ║
-║  Open http://localhost:8080 to configure:                ║
-║    · Knowledge sources (Wikipedia, arXiv, RSS…)          ║
-║    · Network topic (public or private)                   ║
-║    · LLM provider (for queen/hive query mode)            ║
+║  → Open http://localhost:8080 and finish setup in        ║
+║    Settings: sources, topic${role === 'bee' ? '.' : ', and LLM provider.'}${' '.repeat(role === 'bee' ? 21 : 8)}║
 ╚══════════════════════════════════════════════════════════╝
 `);
 
   return {
-    role: 'hive',
+    role,
     llmProvider: '',
     llmApiKey: '',
     topicMode: 'public',
@@ -88,7 +130,7 @@ function loadExisting(): WizardResult {
     if (m) env[m[1]] = m[2];
   }
   return {
-    role: (env.HIVE_MODE as WizardResult['role']) ?? 'hive',
+    role: normalizeRole(env.HIVE_MODE) ?? 'hive',
     llmProvider: env.LLM_PROVIDER ?? '',
     llmApiKey: env.LLM_API_KEY ?? '',
     topicMode: env.HIVE_TOPIC_HEX ? 'private' : 'public',

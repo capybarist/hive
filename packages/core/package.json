@@ -1,6 +1,6 @@
 {
   "name": "@hive/core",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "HIVE P2P knowledge store — Hypercore + Hyperbee + Autobase",
   "type": "module",
   "main": "./src/index.ts",

@@ -145,13 +145,22 @@ browser:
 npx @capybaralabs/hive
 ```
 
-First run generates an `HIVE_API_KEY`, writes a default config to
-`~/.config/hive/.env`, and starts the node. Then **open
-`http://localhost:8080` and the Settings panel guides you through the rest** —
-declare your knowledge sources, pick a public or private topic, and (for query
-nodes) set your LLM provider + key. The node won't extract or answer until you
-save: hit **Save & restart** and it comes up configured. Subsequent runs read
-the saved config and start directly.
+First run asks **one question — the role** (`bee` / `queen` / `hive`), since
+that's the only thing the web UI can't change later. Skip the prompt by naming
+the role directly:
+
+```bash
+npx @capybaralabs/hive bee      # producer, no LLM key
+npx @capybaralabs/hive queen    # query node (LLM)
+npx @capybaralabs/hive hive     # both in one process (default)
+```
+
+It then generates an `HIVE_API_KEY`, writes config to `~/.config/hive/.env`,
+and starts. **Open `http://localhost:8080` and the Settings panel guides you
+through the rest** — declare your knowledge sources, pick a public or private
+topic, and (for query nodes) set your LLM provider + key. The node won't extract
+or answer until you save: hit **Save & restart** and it comes up configured.
+Subsequent runs read the saved config and start directly.
 
 > Headless/CI deploy with no browser? Set `HIVE_AUTOSTART=1` (the bundled
 > `docker-compose.yml` already does) so the node extracts on boot using its
