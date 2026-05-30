@@ -100,6 +100,9 @@ for cfg in "${CONFIGS[@]}"; do
     [ -f .env ] && { cat .env; echo; } >> "$tmp_env"
     { cat "$cfg"; echo; } >> "$tmp_env"
     printf '\nHIVE_PORT=%s\nHIVE_DATA_DIR=%s\n' "$port" "$abs_data" >> "$tmp_env"
+    # v0.9: dev bees are pre-configured via bees/*.env — extract on boot. (The
+    # npm/web first-run path leaves HIVE_AUTOSTART unset so the UI forces setup.)
+    printf 'HIVE_AUTOSTART=1\n' >> "$tmp_env"
     [ -n "$BEE_PEER" ] && printf 'HIVE_PEER=%s\n' "$BEE_PEER" >> "$tmp_env"
 
     # Unset LLM vars so --env-file is the sole source of truth (node --env-file

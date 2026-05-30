@@ -138,17 +138,24 @@ team-knowledge, codebase-context, journalism/OSINT and more) lives in
 
 ## Quick start
 
-The fastest path is the npm package — one command, interactive wizard, ready
-to use:
+The fastest path is the npm package — one command, then configure in the
+browser:
 
 ```bash
 npx @capybaralabs/hive
 ```
 
-First run walks you through role (queen / bee / hive), LLM provider + key, and
-public-or-private topic. Generates an `HIVE_API_KEY`, writes config to
-`~/.config/hive/.env`, and starts the node. Subsequent runs read the saved
-config and start directly.
+First run generates an `HIVE_API_KEY`, writes a default config to
+`~/.config/hive/.env`, and starts the node. Then **open
+`http://localhost:8080` and the Settings panel guides you through the rest** —
+declare your knowledge sources, pick a public or private topic, and (for query
+nodes) set your LLM provider + key. The node won't extract or answer until you
+save: hit **Save & restart** and it comes up configured. Subsequent runs read
+the saved config and start directly.
+
+> Headless/CI deploy with no browser? Set `HIVE_AUTOSTART=1` (the bundled
+> `docker-compose.yml` already does) so the node extracts on boot using its
+> env-var config instead of waiting for the web setup.
 
 For more control, the rest of this section shows the **Docker** path (nothing
 to install but Docker) and the **from-source** path (Node 22+, clone the

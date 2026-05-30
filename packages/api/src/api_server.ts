@@ -81,6 +81,22 @@ try {
   }
 } catch { /* fall back to env vars */ }
 
+// v0.9 — "Has the operator expressed intent about what to extract?" A truly
+// fresh node (npm first run, nothing configured) must NOT start crawling a
+// default scope: it waits until the operator picks sources/topic in the web
+// Settings panel. We treat the node as configured when EITHER:
+//   · the Settings UI wrote a manifest-override.json (web path), OR
+//   · env vars declare sources/objective/scope (docker-compose / start.sh), OR
+//   · HIVE_AUTOSTART=1 is set explicitly (escape hatch for headless deploys).
+// Docker/compose deployments set HIVE_AUTOSTART=1 so they keep extracting; the
+// npm/web path leaves it unset, so the UI forces the operator to Settings first.
+const OPERATOR_CONFIGURED =
+  manifestOverride !== null ||
+  !!process.env.HIVE_SOURCES?.trim() ||
+  !!process.env.HIVE_OBJECTIVE?.trim() ||
+  !!process.env.HIVE_SCOPE?.trim() ||
+  process.env.HIVE_AUTOSTART === '1';
+
 // Topics config — which Hyperswarm topics this node joins. Bees: one topic (public or private).
 // Queens: public + any private topics added via Settings.
 const TOPICS_CONFIG_PATH = join(DATA_DIR, 'topics-config.json');
@@ -109,13 +125,24 @@ function buildTopics(): Buffer[] {
     }
     return topics;
   }
-  // Bee/hive producer
+  // Bee/hive producer.
+  // Private bee: ONLY its secret topic — never the commons. This is the only
+  // genuine privacy boundary Hypercore gives us (replication is all-or-nothing
+  // and core keys are auto-shared on connect, so topic membership IS the access
+  // control). A private bee that also joined the commons would be readable by
+  // everyone.
   if (topicsConfig.mode === 'private' && topicsConfig.topic_hex) {
     const buf = topicFromHex(topicsConfig.topic_hex);
     if (buf) return [buf];
   }
-  if (topicsConfig.topic_string) return [topicFromString(topicsConfig.topic_string)];
-  return [PUBLIC_TOPIC];
+  // Public bee: ALWAYS on the commons, plus its named topic as an additive
+  // tag. So a generalist queen (commons-only) discovers every public bee
+  // ("accessible by everyone"), while a specialist queen can subscribe to just
+  // the named topic (e.g. hive-medicine-v0.1) to scope what it replicates.
+  const topics: Buffer[] = [PUBLIC_TOPIC];
+  const name = topicsConfig.topic_string;
+  if (name && name !== 'hive-network-v0.1') topics.push(topicFromString(name));
+  return topics;
 }
 
 // Runtime overrides for LLM provider/key (UI-driven), persisted under the data
@@ -531,6 +558,10 @@ app.get('/api/status', async () => {
     llm_configured: isLLMConfigured(),
     llm_ok: llmHealthy,
     llm_provider: process.env.LLM_PROVIDER ?? 'gemini',
+    // v0.9 — UI uses these to (a) force first-run Settings before extraction and
+    // (b) warn when a queen subscribes to a private topic with an open query API.
+    auth_enabled: !!HIVE_API_KEY,
+    configured: OPERATOR_CONFIGURED,
     peers: p2pNode.peerCount,
     coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
     claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? null,
@@ -797,6 +828,14 @@ const runLoop = async () => {
 async function startExtractionIfReady() {
   if (!HAS_EXTRACTOR) return;
   if (extractionLoopRunning) return;
+  // v0.9 — never crawl a default scope on a fresh node. Wait until the operator
+  // configures sources via the web Settings panel (which writes
+  // manifest-override.json and restarts), or until an env/autostart signal says
+  // this is a headless deploy that should run unattended.
+  if (!OPERATOR_CONFIGURED) {
+    logEvent('start', 'Awaiting configuration — open the web UI → Settings to declare sources, then save & restart.');
+    return;
+  }
   if (IS_HIVE && !isLLMConfigured()) {
     logEvent('start', 'LLM not configured — queries will fail, but extraction proceeds.');
   }
@@ -861,6 +900,8 @@ app.get('/api/manifest', async () => {
     replication: current?.replication ?? (manifestOverride?.replication ?? 'all'),
     bee_id: identity.nodeId,
     has_local_store: HAS_LOCAL_STORE,
+    // v0.9 — false on a fresh node so the UI can force Settings before any crawl.
+    configured: OPERATOR_CONFIGURED,
   };
 });
 

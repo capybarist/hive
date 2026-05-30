@@ -466,6 +466,18 @@
       cursor: pointer; margin-bottom: 18px; transition: color .15s;
     }
     .settings-back-btn:hover { color: var(--text); }
+
+    /* v0.9 — first-run: force the operator through Settings. The node won't
+       extract or answer until configured, so we hide the Back button and show
+       a banner. Cleared once the server reports configured=true after restart. */
+    .setup-banner {
+      display: none; margin-bottom: 20px; padding: 12px 14px;
+      background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.35);
+      border-radius: 10px; color: #b45309; font-size: 13px; line-height: 1.5;
+    }
+    body.setup-required .setup-banner { display: block; }
+    body.setup-required .settings-back-btn { display: none; }
+    body.setup-required .settings-nav-btn { pointer-events: none; opacity: .5; }
     .settings-page-title { font-size: 20px; font-weight: 800; color: var(--text); margin-bottom: 28px; }
     .settings-section { margin-bottom: 32px; }
     .settings-section-title {
@@ -828,6 +840,9 @@
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
         Back
       </button>
+      <div class="setup-banner" id="setup-banner">
+        👋 <strong>Welcome — let's configure this node.</strong> It won't extract knowledge or answer queries until you declare your sources (and LLM, for query nodes) below and hit <strong>Save &amp; restart</strong>.
+      </div>
       <div class="settings-page-title">Settings</div>
 
       <!-- ── Topic section (all modes) ───────────────────────────────── -->
@@ -856,7 +871,7 @@
                 <option value="hive-finance-v0.1">Finance</option>
                 <option value="hive-devops-v0.1">DevOps</option>
               </datalist>
-              <div class="source-scope-hint" style="margin-top:5px">Type any name to create a new public topic. All bees using the same name will be discoverable together.</div>
+              <div class="source-scope-hint" style="margin-top:5px">Public bees are <strong>always discoverable on the general network</strong>. A named topic (e.g. hive-medicine-v0.1) is an extra label so a specialist queen can subscribe to just your domain. Type any name to create or join one.</div>
               <div id="topic-public-hex-preview" style="font-size:10px;color:var(--muted);font-family:monospace;margin-top:4px;word-break:break-all"></div>
             </div>
             <div id="topic-private-panel" class="hidden">
@@ -878,7 +893,7 @@
         <!-- QUEEN: list of subscribed topics -->
         <div id="topic-queen-panel" class="hide-on-bee">
           <div class="source-scope-hint" style="margin-bottom:12px">
-            Queens always subscribe to the <strong>general public swarm</strong>. Add private topic hexes to also replicate bees that aren't publicly announced.
+            This queen always replicates the <strong>general public network</strong> (every public bee). Add a <strong>private topic's hex</strong> here to also replicate a private bee that shared it with you out-of-band. ⚠️ Set an auth key below first — otherwise this queen's answers would expose that private knowledge to anyone.
           </div>
           <div id="queen-topics-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
           <div style="display:flex;gap:8px">
@@ -2049,6 +2064,21 @@ async function addQueenTopic() {
     hex = await topicHexFromString(raw); name = raw; isPublic = true;
   }
 
+  // Private topic + open query API = private knowledge leaks through /api/query.
+  // The P2P layer never re-serves the private core, but THIS queen's answers
+  // would. Force the operator to acknowledge before subscribing.
+  if (!isPublic && LATEST_STATUS && !LATEST_STATUS.auth_enabled) {
+    const proceed = confirm(
+      '⚠️ This queen has NO auth key set.\n\n' +
+      'It can replicate the private bee safely, but its /api/query endpoint is ' +
+      'OPEN — anyone could ask it questions and receive the private knowledge in ' +
+      'the answers.\n\n' +
+      'Recommended: set an auth key first (API auth key section below).\n\n' +
+      'Subscribe to this private topic anyway?'
+    );
+    if (!proceed) return;
+  }
+
   const list = document.getElementById('queen-topics-list');
   if (list.querySelector(`[data-hex="${hex}"]`)) {
     input.style.borderColor = 'var(--red)';
@@ -2217,6 +2247,9 @@ async function saveLLMSettings() {
     msgEl.textContent = '✓ LLM saved.'; msgEl.className = 'settings-msg ok';
     document.getElementById('s-llm-key').value = '';
     await checkStatus();
+    // Re-evaluate first-run gating: a pure queen is now configured; a hive node
+    // still needs sources, so this only lifts the lock when appropriate.
+    checkFirstRun(document.body.getAttribute('data-hive-mode') ?? 'bee');
   } catch (e) {
     msgEl.textContent = e.message; msgEl.className = 'settings-msg error';
   } finally {
@@ -2286,25 +2319,27 @@ async function loadAuthSettings() {
 // so they're guided to configure before extraction starts.
 const SETUP_DONE_KEY = 'hive_setup_done';
 
-async function checkFirstRun(mode) {
-  if (localStorage.getItem(SETUP_DONE_KEY)) return; // already set up
-  try {
-    if (mode === 'bee' || mode === 'hive') {
-      const d = await apiFetch(`${API}/api/manifest`).then(r => r.json());
-      if (d.has_local_store && !(d.declared_sources ?? []).length) {
-        openSettings();
-      }
-    } else if (mode === 'queen') {
-      if (LATEST_STATUS && !LATEST_STATUS.llm_configured) openSettings();
-    }
-  } catch { /* ignore */ }
+function checkFirstRun(mode) {
+  // The server is authoritative: /api/status.configured is false on a fresh
+  // node until sources are declared (bee/hive) — extraction is gated there too.
+  // For a pure queen, "configured" means an LLM is set. When setup is needed we
+  // force the operator into Settings (Back hidden, banner shown) so they can't
+  // wander off before the node can do anything.
+  const s = LATEST_STATUS ?? {};
+  let needsSetup = false;
+  if (mode === 'bee' || mode === 'hive') needsSetup = s.configured === false;
+  else if (mode === 'queen')            needsSetup = !s.llm_configured;
+
+  if (!needsSetup) { document.body.classList.remove('setup-required'); return; }
+  document.body.classList.add('setup-required');
+  openSettings();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await checkStatus();
   const mode = document.body.getAttribute('data-hive-mode') ?? 'bee';
-  await checkFirstRun(mode);
+  checkFirstRun(mode);
   await Promise.all([loadNetwork(), loadActivity(), loadCrawl(), loadManifest()]);
 }
 init();

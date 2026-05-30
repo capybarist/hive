@@ -98,6 +98,9 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8080
       - HIVE_DATA_DIR=/hive/data
+      # v0.9: headless deploy — extract on boot without waiting for web Settings.
+      # (The npm/web path leaves this unset so the UI forces first-run config.)
+      - HIVE_AUTOSTART=1
       # Advertised to peers via PeerMeta so they reach us in the docker network.
       - HIVE_API_URL=http://bee-1:8080
       - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-30000}
@@ -129,6 +132,7 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - HIVE_PORT=8081
       - HIVE_DATA_DIR=/hive/data
+      - HIVE_AUTOSTART=1
       - HIVE_API_URL=http://bee-2:8081
       # ── Manifest knobs — bee-2 is an RSS news specialist (BBC World) to
       # exercise multi-bee with a wholly different adapter, fragment shape,
@@ -184,6 +188,9 @@ services:
       - HIVE_MODE=queen
       - HIVE_PORT=8090
       - HIVE_DATA_DIR=/hive/data
+      # v0.9: queen has no extractor, but keep the flag so its UI never shows the
+      # first-run setup gate on a headless deploy.
+      - HIVE_AUTOSTART=1
       - HIVE_API_URL=http://queen:8090
       # Dashboard proxy: external /api/crawl widgets ask the queen, the queen
       # fans out to every bee URL in HIVE_DASHBOARD_BEE_URLS (comma-separated)
