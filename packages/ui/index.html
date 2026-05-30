@@ -439,6 +439,173 @@
     .bee-identity span { word-break: break-all; }
     .bee-identity .lbl { color: var(--muted); font-weight: 600; }
 
+    /* ── Settings panel ── */
+    .settings-nav-btn {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%; padding: 10px 16px; background: none; border: none;
+      color: var(--muted); font-size: 12px; font-family: inherit; cursor: pointer;
+      text-align: left; border-top: 1px solid var(--sidebar-border);
+      transition: color .15s, background .15s;
+    }
+    .settings-nav-btn:hover, .settings-nav-btn.active { color: var(--accent); background: var(--accent-glow); }
+    .settings-view {
+      display: none; flex-direction: column;
+      max-width: 680px; margin: 0 auto; width: 100%;
+      padding: 28px 24px 48px;
+    }
+    body.settings-open .settings-view { display: flex; }
+    body.settings-open .welcome, body.settings-open .bee-dashboard,
+    body.settings-open #results, body.settings-open #placeholder,
+    body.settings-open #bee-placeholder { display: none !important; }
+    body.settings-open .input-area { display: none !important; }
+    body.settings-open .conv-turn { display: none; }
+
+    .settings-back-btn {
+      display: inline-flex; align-items: center; gap: 6px; background: none; border: none;
+      padding: 0; color: var(--muted); font-size: 12px; font-family: inherit;
+      cursor: pointer; margin-bottom: 18px; transition: color .15s;
+    }
+    .settings-back-btn:hover { color: var(--text); }
+    .settings-page-title { font-size: 20px; font-weight: 800; color: var(--text); margin-bottom: 28px; }
+    .settings-section { margin-bottom: 32px; }
+    .settings-section-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.2px; color: var(--muted); margin-bottom: 14px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    }
+
+    .source-rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+    .source-row {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+    }
+    .source-row-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .source-adapter-select {
+      flex: 1; padding: 6px 10px; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--bg); color: var(--text);
+      font-size: 13px; font-family: inherit; cursor: pointer;
+    }
+    .source-adapter-select:focus { outline: none; border-color: var(--accent); }
+    .source-policy-select {
+      width: 120px; padding: 6px 8px; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--bg); color: var(--text);
+      font-size: 12px; font-family: inherit; cursor: pointer;
+    }
+    .source-policy-select:focus { outline: none; border-color: var(--accent); }
+    .source-remove-btn {
+      padding: 5px 9px; background: none; border: 1px solid var(--border);
+      border-radius: 7px; color: var(--muted); font-size: 11px; cursor: pointer;
+      transition: color .15s, border-color .15s; white-space: nowrap;
+    }
+    .source-remove-btn:hover { color: var(--red); border-color: var(--red); }
+    .source-scope-area { }
+    .source-scope-label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: var(--muted); margin-bottom: 5px; display: block;
+    }
+    .source-scope-input, .source-scope-textarea {
+      width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--bg); color: var(--text);
+      font-size: 13px; font-family: inherit;
+    }
+    .source-scope-input:focus, .source-scope-textarea:focus { outline: none; border-color: var(--accent); }
+    .source-scope-textarea { resize: vertical; min-height: 64px; }
+    .source-scope-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .source-partition-row {
+      display: flex; align-items: center; gap: 8px; margin-top: 10px;
+    }
+    .source-partition-label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: var(--muted); white-space: nowrap;
+    }
+    .source-partition-input {
+      flex: 1; padding: 6px 10px; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--bg); color: var(--text);
+      font-size: 12px; font-family: inherit;
+    }
+    .source-partition-input:focus { outline: none; border-color: var(--accent); }
+
+    .add-source-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; background: var(--surface); border: 1px dashed var(--border);
+      border-radius: 8px; color: var(--muted); font-size: 12px; font-family: inherit;
+      cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    .add-source-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .settings-field { margin-bottom: 14px; }
+    .settings-label {
+      display: block; font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: var(--muted); margin-bottom: 6px;
+    }
+    .settings-select {
+      width: 100%; max-width: 240px; padding: 8px 10px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--bg); color: var(--text);
+      font-size: 13px; font-family: inherit; cursor: pointer;
+    }
+    .settings-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+
+    .manifest-preview {
+      background: #0f172a; color: #94a3b8; border-radius: 10px;
+      padding: 14px 16px; font-family: 'SFMono-Regular', 'Consolas', monospace;
+      font-size: 11px; line-height: 1.7; overflow-x: auto; white-space: pre;
+      max-height: 300px; overflow-y: auto;
+    }
+    .manifest-preview .key { color: #7dd3fc; }
+    .manifest-preview .str { color: #86efac; }
+    .manifest-preview .num { color: #fda4af; }
+    .manifest-preview .bool { color: #f9a8d4; }
+
+    .settings-save-row {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .settings-save-btn {
+      padding: 10px 26px; background: var(--accent2); color: #fff; border: none;
+      border-radius: 9px; font-size: 13px; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: opacity .15s;
+    }
+    .settings-save-btn:hover { opacity: .85; }
+    .settings-save-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .settings-msg { font-size: 12px; line-height: 1.4; }
+    .settings-msg.ok { color: var(--green); }
+    .settings-msg.error { color: var(--red); }
+
+    .settings-queen-note {
+      font-size: 12px; color: var(--muted); background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+      line-height: 1.5;
+    }
+    .settings-llm-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 18px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 9px; color: var(--text); font-size: 13px; font-family: inherit;
+      cursor: pointer; transition: border-color .15s;
+    }
+    .settings-llm-link:hover { border-color: var(--accent); color: var(--accent); }
+
+    .topic-mode-btn {
+      padding: 7px 20px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--muted); font-size: 12px; font-family: inherit;
+      cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+    }
+    .topic-mode-btn.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+    .topic-mode-btn:not(.active):hover { border-color: var(--accent); color: var(--accent); }
+
+    .settings-help {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--muted);
+      font-size: 9px; color: var(--muted); cursor: help; margin-left: 4px;
+      font-weight: 700; text-transform: none; letter-spacing: 0; vertical-align: middle;
+    }
+
+    .settings-input {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--bg); color: var(--text);
+      font-size: 13px; font-family: inherit;
+    }
+    .settings-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    .settings-input[readonly] { background: var(--surface2); color: var(--muted); }
+
     /* ── Hamburger (mobile only) ── */
     .hamburger-btn {
       display: none; align-items: center; justify-content: center;
@@ -542,6 +709,13 @@
     </div>
 
   </div>
+
+  <button class="settings-nav-btn" id="settings-nav-btn" onclick="openSettings()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+    Settings
+  </button>
 </aside>
 
 <!-- ── Main ── -->
@@ -645,6 +819,174 @@
       <div class="bee-identity">
         <span><span class="lbl">node</span> <span id="bee-node-id">—</span></span>
         <span><span class="lbl">core</span> <span id="bee-core-key">—</span></span>
+      </div>
+    </div>
+
+    <!-- Settings view (v0.9) -->
+    <div class="settings-view" id="settings-view">
+      <button class="settings-back-btn" onclick="closeSettings()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+        Back
+      </button>
+      <div class="settings-page-title">Settings</div>
+
+      <!-- ── Topic section (all modes) ───────────────────────────────── -->
+      <div class="settings-section" id="settings-topic-section">
+        <div class="settings-section-title">Network topic</div>
+
+        <!-- BEE: public or private -->
+        <div id="topic-bee-panel" class="hide-on-queen">
+          <div class="settings-field">
+            <label class="settings-label">Visibility</label>
+            <div style="display:flex;gap:8px;margin-bottom:10px">
+              <button class="topic-mode-btn active" id="topic-btn-public" onclick="setTopicMode('public')">Public</button>
+              <button class="topic-mode-btn" id="topic-btn-private" onclick="setTopicMode('private')">Private</button>
+            </div>
+            <div id="topic-public-panel">
+              <input class="settings-input" id="topic-public-input" list="topic-public-datalist"
+                     value="hive-network-v0.1" autocomplete="off"
+                     placeholder="hive-network-v0.1" style="max-width:400px">
+              <datalist id="topic-public-datalist">
+                <option value="hive-network-v0.1">General knowledge (default)</option>
+                <option value="hive-medical-v0.1">Medical</option>
+                <option value="hive-legal-v0.1">Legal</option>
+                <option value="hive-science-v0.1">Science</option>
+                <option value="hive-python-v0.1">Python</option>
+                <option value="hive-rust-docs">Rust ecosystem</option>
+                <option value="hive-finance-v0.1">Finance</option>
+                <option value="hive-devops-v0.1">DevOps</option>
+              </datalist>
+              <div class="source-scope-hint" style="margin-top:5px">Type any name to create a new public topic. All bees using the same name will be discoverable together.</div>
+              <div id="topic-public-hex-preview" style="font-size:10px;color:var(--muted);font-family:monospace;margin-top:4px;word-break:break-all"></div>
+            </div>
+            <div id="topic-private-panel" class="hidden">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <input class="settings-input" id="topic-private-hex" type="text" readonly
+                       style="font-family:monospace;font-size:11px;max-width:none;flex:1"
+                       placeholder="Generate a private topic key…">
+                <button class="add-source-btn" onclick="generatePrivateTopic()" style="white-space:nowrap">Generate</button>
+                <button class="add-source-btn" id="topic-copy-btn" onclick="copyPrivateTopic()" style="white-space:nowrap">Copy</button>
+              </div>
+              <div class="source-scope-hint" style="line-height:1.6">
+                Only queens that have been given this hex can discover this bee.<br>
+                Share it out-of-band with the queen operator and have them paste it into their queen's Settings → Subscribed topics.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- QUEEN: list of subscribed topics -->
+        <div id="topic-queen-panel" class="hide-on-bee">
+          <div class="source-scope-hint" style="margin-bottom:12px">
+            Queens always subscribe to the <strong>general public swarm</strong>. Add private topic hexes to also replicate bees that aren't publicly announced.
+          </div>
+          <div id="queen-topics-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div style="display:flex;gap:8px">
+            <input class="settings-input" id="queen-topic-hex-input" type="text"
+                   style="font-family:monospace;font-size:11px;max-width:none;flex:1"
+                   placeholder="64-char hex o nombre (ej: hive-medical-v0.1)…">
+            <button class="add-source-btn" onclick="addQueenTopic()" style="white-space:nowrap">Add</button>
+          </div>
+          <div class="source-scope-hint" style="margin-top:6px">Paste a 64-char hex from a private bee, or type a public topic name (hex computed automatically).</div>
+        </div>
+
+        <div class="settings-save-row" style="margin-top:16px">
+          <button class="settings-save-btn" id="topic-save-btn" onclick="saveTopics()">Save topics</button>
+          <span class="settings-msg" id="topic-msg"></span>
+        </div>
+      </div>
+
+      <!-- ── Sources section (bee/hive only) ────────────────────────── -->
+      <div class="settings-section" id="settings-manifest-section">
+        <div class="settings-section-title">Declared sources</div>
+        <div class="source-rows" id="source-rows"></div>
+        <button class="add-source-btn" onclick="addSourceRow()">+ Add source</button>
+
+        <div class="settings-field" style="margin-top:20px">
+          <label class="settings-label" for="settings-replication">Peer replication
+            <span class="settings-help" title="none = this bee doesn't replicate other bees' cores (recommended for producers). all = replicate every peer found. neighbors = replicate peers with overlapping scope.">?</span>
+          </label>
+          <select class="settings-select" id="settings-replication">
+            <option value="none">none — producer only, don't replicate peers (recommended)</option>
+            <option value="neighbors">neighbors — peers with overlapping scope</option>
+            <option value="all">all — replicate every peer</option>
+          </select>
+        </div>
+
+        <div class="settings-section-title" style="margin-top:24px">Preview
+          <span style="font-weight:400;font-size:10px;color:var(--muted);text-transform:none;letter-spacing:0"> — editable JSON</span>
+        </div>
+        <textarea class="manifest-preview" id="manifest-preview" spellcheck="false"
+                  oninput="onPreviewEdit(this)" style="width:100%;min-height:180px;border:none;resize:vertical">{}</textarea>
+
+        <div class="settings-save-row" style="margin-top:16px">
+          <button class="settings-save-btn" id="settings-save-btn" onclick="saveManifest()">Save &amp; restart</button>
+          <span class="settings-msg" id="settings-msg"></span>
+        </div>
+        <p style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5">
+          Saves the manifest, publishes it to the network, and restarts the node so the extractor uses the new sources.
+        </p>
+      </div>
+
+      <!-- Queen note: no sources section -->
+      <div class="settings-queen-note hidden" id="settings-queen-note">
+        This node is a <strong>queen</strong> — it replicates and indexes bee fragments but does not produce them.
+        Source configuration only applies to bee and hive nodes.
+      </div>
+
+      <!-- ── LLM section (queen/hive) ────────────────────────────────── -->
+      <div class="settings-section hide-on-bee" id="settings-llm-section">
+        <div class="settings-section-title">LLM provider</div>
+        <div class="settings-field">
+          <label class="settings-label" for="s-llm-provider">Provider</label>
+          <select class="settings-select" id="s-llm-provider" onchange="onSLLMProviderChange()">
+            <option value="gemini">Gemini (Google)</option>
+            <option value="groq">Groq — free tier</option>
+            <option value="claude">Claude (Anthropic)</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">Ollama (local)</option>
+          </select>
+        </div>
+        <div class="settings-field" id="s-llm-key-field">
+          <label class="settings-label" for="s-llm-key">API key</label>
+          <input type="password" class="settings-input" id="s-llm-key"
+                 placeholder="Paste key here…" autocomplete="off" spellcheck="false" style="max-width:none">
+        </div>
+        <div class="settings-field hidden" id="s-llm-ollama-info">
+          <div style="font-size:12px;color:var(--green);background:rgba(5,150,105,.08);border:1px solid rgba(5,150,105,.25);border-radius:7px;padding:9px 11px;line-height:1.5">
+            No API key needed — uses your local Ollama instance.
+          </div>
+        </div>
+        <div class="settings-field">
+          <label class="settings-label" for="s-llm-model">Model <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+          <input type="text" class="settings-input" id="s-llm-model"
+                 placeholder="" autocomplete="off" style="max-width:none">
+        </div>
+        <div class="source-scope-hint" id="s-llm-hint" style="margin-bottom:12px"></div>
+        <div class="settings-save-row">
+          <button class="settings-save-btn" id="s-llm-save-btn" onclick="saveLLMSettings()">Save LLM</button>
+          <span class="settings-msg" id="s-llm-msg"></span>
+        </div>
+      </div>
+
+      <!-- ── Auth key section (queen/hive only) ───────────────────────── -->
+      <div class="settings-section hide-on-bee">
+        <div class="settings-section-title">API auth key</div>
+        <div class="settings-field">
+          <label class="settings-label">Current key</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="password" class="settings-input" id="s-auth-key-display" readonly
+                   style="max-width:none;flex:1;font-family:monospace;font-size:12px" placeholder="—">
+            <button class="add-source-btn" id="s-auth-reveal-btn" onclick="toggleAuthKeyReveal()" style="white-space:nowrap">Reveal</button>
+          </div>
+        </div>
+        <div class="settings-save-row">
+          <button class="settings-save-btn" id="s-auth-regen-btn" onclick="regenerateAuthKey()">Regenerate</button>
+          <span class="settings-msg" id="s-auth-msg"></span>
+        </div>
+        <p style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5">
+          Regenerating creates a new key — update it in localStorage or any clients using the old key.
+        </p>
       </div>
     </div>
 
@@ -1416,9 +1758,553 @@ document.getElementById('clear-btn').addEventListener('click', () => {
   document.getElementById('placeholder').classList.remove('hidden');
 });
 
+// ── Settings panel (v0.9) ────────────────────────────────────────────────────
+const ADAPTER_CONFIG = {
+  'wikipedia-en': {
+    label: 'Wikipedia (English)',
+    scopeField: 'category_tree',
+    scopeLabel: 'Category tree',
+    scopeHint: 'e.g. Category:Medicine — leave empty for a general crawl',
+    scopePlaceholder: 'Category:Medicine',
+    scopeType: 'text',
+    toScope: v => v.trim() ? { category_tree: v.trim() } : undefined,
+    fromScope: s => s?.category_tree ?? '',
+  },
+  'arxiv': {
+    label: 'arXiv',
+    scopeField: 'categories',
+    scopeLabel: 'Categories (comma-separated)',
+    scopeHint: 'e.g. cs.AI, stat.ML — leave empty for all arXiv',
+    scopePlaceholder: 'cs.AI, stat.ML',
+    scopeType: 'text',
+    toScope: v => { const cats = v.split(',').map(s => s.trim()).filter(Boolean); return cats.length ? { categories: cats } : undefined; },
+    fromScope: s => (s?.categories ?? []).join(', '),
+  },
+  'rss': {
+    label: 'RSS feeds',
+    scopeField: 'feeds',
+    scopeLabel: 'Feed URLs (one per line)',
+    scopeHint: 'Each line is one RSS/Atom feed URL',
+    scopePlaceholder: 'https://feeds.example.com/rss',
+    scopeType: 'textarea',
+    toScope: v => { const feeds = v.split('\n').map(s => s.trim()).filter(Boolean); return feeds.length ? { feeds } : undefined; },
+    fromScope: s => (s?.feeds ?? []).join('\n'),
+  },
+  'web': {
+    label: 'Generic web',
+    scopeField: 'domains',
+    scopeLabel: 'Domains (one per line, optional)',
+    scopeHint: 'Leave empty for unrestricted web crawl',
+    scopePlaceholder: 'pubmed.ncbi.nlm.nih.gov',
+    scopeType: 'textarea',
+    toScope: v => { const d = v.split('\n').map(s => s.trim()).filter(Boolean); return d.length ? { domains: d } : undefined; },
+    fromScope: s => (s?.domains ?? []).join('\n'),
+  },
+  'common-crawl': {
+    label: 'Common Crawl',
+    scopeField: 'domains',
+    scopeLabel: 'Domains (one per line, optional)',
+    scopeHint: 'Leave empty to sample the full Common Crawl index',
+    scopePlaceholder: 'example.com',
+    scopeType: 'textarea',
+    toScope: v => { const d = v.split('\n').map(s => s.trim()).filter(Boolean); return d.length ? { domains: d } : undefined; },
+    fromScope: s => (s?.domains ?? []).join('\n'),
+  },
+};
+
+let _settingsLoaded = false;
+
+function openSettings() {
+  document.body.classList.add('settings-open');
+  document.getElementById('settings-nav-btn').classList.add('active');
+  if (!_settingsLoaded) { _settingsLoaded = true; loadManifestSettings(); }
+  loadTopicsSettings();
+  loadAuthSettings();
+}
+
+function closeSettings() {
+  document.body.classList.remove('settings-open');
+  document.getElementById('settings-nav-btn').classList.remove('active');
+}
+
+async function loadManifestSettings() {
+  try {
+    const d = await apiFetch(`${API}/api/manifest`).then(r => r.json());
+    if (!d.has_local_store) {
+      document.getElementById('settings-manifest-section').classList.add('hidden');
+      document.getElementById('settings-queen-note').classList.remove('hidden');
+      return;
+    }
+    const rows = document.getElementById('source-rows');
+    rows.innerHTML = '';
+    for (const src of (d.declared_sources ?? [])) addSourceRow(src);
+    if (!d.declared_sources?.length) addSourceRow();
+    const repl = document.getElementById('settings-replication');
+    if (repl && d.replication) repl.value = d.replication;
+    updateManifestPreview();
+  } catch {
+    document.getElementById('settings-msg').textContent = 'Could not load current manifest';
+    document.getElementById('settings-msg').className = 'settings-msg error';
+  }
+}
+
+let _sourceRowId = 0;
+function addSourceRow(src) {
+  const id = ++_sourceRowId;
+  const adapterId = src?.id ?? 'wikipedia-en';
+  const cfg = ADAPTER_CONFIG[adapterId] ?? ADAPTER_CONFIG['wikipedia-en'];
+  const scopeVal = src?.scope ? cfg.fromScope(src.scope) : '';
+  const partition = src?.partition ?? '';
+  const policy = src?.policy ?? 'drift-ok';
+
+  const row = document.createElement('div');
+  row.className = 'source-row';
+  row.dataset.rowId = id;
+
+  const adapterOptions = Object.entries(ADAPTER_CONFIG).map(([val, c]) =>
+    `<option value="${val}"${val === adapterId ? ' selected' : ''}>${c.label}</option>`
+  ).join('');
+
+  row.innerHTML = `
+    <div class="source-row-header">
+      <select class="source-adapter-select" data-field="adapter" onchange="onAdapterChange(this)">
+        ${adapterOptions}
+      </select>
+      <button class="source-remove-btn" onclick="removeSourceRow(this)">Remove</button>
+    </div>
+    <div class="source-scope-area" data-field="scope-area">
+      ${buildScopeFieldHtml(adapterId, scopeVal)}
+    </div>
+    <div class="source-partition-row">
+      <span class="source-partition-label">Partition</span>
+      <input class="source-partition-input" type="text" data-field="partition"
+             placeholder="optional — e.g. Category:Pharmacology" value="${escHtml(partition)}">
+    </div>
+    <div class="source-partition-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+      <span class="source-partition-label">Policy</span>
+      <select class="source-policy-select" data-field="policy" style="width:auto;flex:none">
+        <option value="drift-ok"${policy === 'drift-ok' ? ' selected' : ''}>drift-ok</option>
+        <option value="exclusive"${policy === 'exclusive' ? ' selected' : ''}>exclusive</option>
+      </select>
+      <span class="settings-help" title="drift-ok: this bee may overlap with other bees on the same scope — useful for redundancy. exclusive: this bee claims the scope exclusively and drops outbound links outside its partition.">?</span>
+    </div>`;
+
+  document.getElementById('source-rows').appendChild(row);
+  row.querySelectorAll('select, input, textarea').forEach(el => el.addEventListener('input', updateManifestPreview));
+  updateManifestPreview();
+}
+
+function buildScopeFieldHtml(adapterId, value) {
+  const cfg = ADAPTER_CONFIG[adapterId] ?? ADAPTER_CONFIG['wikipedia-en'];
+  const escaped = escHtml(value ?? '');
+  if (cfg.scopeType === 'textarea') {
+    return `
+      <label class="source-scope-label">${cfg.scopeLabel}</label>
+      <textarea class="source-scope-textarea" data-field="scope-value"
+                placeholder="${escHtml(cfg.scopePlaceholder)}">${escaped}</textarea>
+      <div class="source-scope-hint">${cfg.scopeHint}</div>`;
+  }
+  return `
+    <label class="source-scope-label">${cfg.scopeLabel}</label>
+    <input class="source-scope-input" type="text" data-field="scope-value"
+           placeholder="${escHtml(cfg.scopePlaceholder)}" value="${escaped}">
+    <div class="source-scope-hint">${cfg.scopeHint}</div>`;
+}
+
+function onAdapterChange(select) {
+  const row = select.closest('.source-row');
+  const adapterId = select.value;
+  const scopeArea = row.querySelector('[data-field="scope-area"]');
+  scopeArea.innerHTML = buildScopeFieldHtml(adapterId, '');
+  scopeArea.querySelector('[data-field="scope-value"]')?.addEventListener('input', updateManifestPreview);
+  updateManifestPreview();
+}
+
+function removeSourceRow(btn) {
+  const row = btn.closest('.source-row');
+  row.remove();
+  updateManifestPreview();
+}
+
+function readSourceRows() {
+  const rows = document.querySelectorAll('.source-row');
+  return Array.from(rows).map(row => {
+    const adapter = row.querySelector('[data-field="adapter"]').value;
+    const policy = row.querySelector('[data-field="policy"]').value;
+    const scopeRaw = row.querySelector('[data-field="scope-value"]')?.value ?? '';
+    const partition = row.querySelector('[data-field="partition"]')?.value.trim();
+    const cfg = ADAPTER_CONFIG[adapter] ?? ADAPTER_CONFIG['wikipedia-en'];
+    const scope = cfg.toScope(scopeRaw);
+    const src = { id: adapter, policy };
+    if (scope) src.scope = scope;
+    if (partition) src.partition = partition;
+    return src;
+  });
+}
+
+function updateManifestPreview() {
+  const sources = readSourceRows();
+  const repl = document.getElementById('settings-replication')?.value ?? 'none';
+  const obj = { declared_sources: sources, replication: repl };
+  const el = document.getElementById('manifest-preview');
+  if (el) el.value = JSON.stringify(obj, null, 2);
+}
+
+async function saveManifest() {
+  const sources = readSourceRows();
+  const repl = document.getElementById('settings-replication')?.value ?? 'all';
+  const msgEl = document.getElementById('settings-msg');
+  const btn = document.getElementById('settings-save-btn');
+
+  if (!sources.length) {
+    msgEl.textContent = 'Add at least one source.';
+    msgEl.className = 'settings-msg error';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  msgEl.className = 'settings-msg';
+  msgEl.textContent = '';
+
+  try {
+    const res = await apiFetch(`${API}/api/manifest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ declared_sources: sources, replication: repl }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    _settingsLoaded = false;
+    localStorage.setItem(SETUP_DONE_KEY, '1');
+    // Now restart
+    btn.textContent = 'Restarting…';
+    msgEl.textContent = '✓ Manifest saved. Restarting node…';
+    msgEl.className = 'settings-msg ok';
+    await apiFetch(`${API}/api/restart`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).catch(() => {});
+    msgEl.textContent = '✓ Restarting — page will reload in 5s…';
+    setTimeout(() => window.location.reload(), 5000);
+  } catch (e) {
+    msgEl.textContent = e.message;
+    msgEl.className = 'settings-msg error';
+    btn.disabled = false;
+    btn.textContent = 'Save & restart';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Topic settings (v0.9) ─────────────────────────────────────────────────────
+
+async function topicHexFromString(s) {
+  const enc = new TextEncoder();
+  const buf = await crypto.subtle.digest('SHA-256', enc.encode(s));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function setTopicMode(mode) {
+  const btnPublic  = document.getElementById('topic-btn-public');
+  const btnPrivate = document.getElementById('topic-btn-private');
+  const panelPublic  = document.getElementById('topic-public-panel');
+  const panelPrivate = document.getElementById('topic-private-panel');
+  if (mode === 'public') {
+    btnPublic.classList.add('active');   btnPrivate.classList.remove('active');
+    panelPublic.classList.remove('hidden'); panelPrivate.classList.add('hidden');
+  } else {
+    btnPublic.classList.remove('active'); btnPrivate.classList.add('active');
+    panelPublic.classList.add('hidden');  panelPrivate.classList.remove('hidden');
+  }
+}
+
+function generatePrivateTopic() {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  const hex = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+  document.getElementById('topic-private-hex').value = hex;
+}
+
+async function copyPrivateTopic() {
+  const hex = document.getElementById('topic-private-hex').value;
+  if (!hex) return;
+  await navigator.clipboard.writeText(hex);
+  const btn = document.getElementById('topic-copy-btn');
+  const prev = btn.textContent;
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = prev, 2000);
+}
+
+async function addQueenTopic() {
+  const input = document.getElementById('queen-topic-hex-input');
+  const raw = input.value.trim();
+  if (!raw) return;
+
+  let hex, name, isPublic;
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+    hex = raw.toLowerCase(); name = hex.slice(0, 8) + '…'; isPublic = false;
+  } else {
+    hex = await topicHexFromString(raw); name = raw; isPublic = true;
+  }
+
+  const list = document.getElementById('queen-topics-list');
+  if (list.querySelector(`[data-hex="${hex}"]`)) {
+    input.style.borderColor = 'var(--red)';
+    setTimeout(() => input.style.borderColor = '', 2000);
+    return;
+  }
+
+  const item = document.createElement('div');
+  item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
+  item.dataset.hex = hex; item.dataset.name = name; item.dataset.isPublic = isPublic ? '1' : '0';
+  item.innerHTML = `
+    <span style="font-size:12px;color:var(--text);font-weight:600;white-space:nowrap">${escHtml(name)}</span>
+    ${isPublic ? '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--green);font-weight:700">PUBLIC</span>' : '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:var(--accent-glow);color:var(--accent);font-weight:700">PRIVATE</span>'}
+    <span style="font-family:monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${hex}</span>
+    <button class="source-remove-btn" onclick="this.closest('[data-hex]').remove()" style="padding:3px 7px">✕</button>`;
+  list.appendChild(item);
+  input.value = '';
+}
+
+async function loadTopicsSettings() {
+  try {
+    const d = await apiFetch(`${API}/api/topics-config`).then(r => r.json());
+    const mode = document.body.getAttribute('data-hive-mode');
+    if (mode !== 'queen') {
+      // Bee panel
+      const topicMode = d.mode ?? 'public';
+      setTopicMode(topicMode);
+      if (topicMode === 'private' && d.topic_hex) {
+        document.getElementById('topic-private-hex').value = d.topic_hex;
+      } else {
+        const topicStr = d.topic_string ?? 'hive-network-v0.1';
+        const inp = document.getElementById('topic-public-input');
+        if (inp) { inp.value = topicStr; updateTopicHexPreview(topicStr); }
+      }
+    } else {
+      // Queen panel
+      const list = document.getElementById('queen-topics-list');
+      list.innerHTML = '';
+      for (const t of (d.subscribed_topics ?? [])) {
+        const item = document.createElement('div');
+        item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
+        item.dataset.hex = t.hex; item.dataset.name = t.name ?? ''; item.dataset.isPublic = t.is_public ? '1' : '0';
+        const badge = t.is_public
+          ? '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--green);font-weight:700">PUBLIC</span>'
+          : '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:var(--accent-glow);color:var(--accent);font-weight:700">PRIVATE</span>';
+        item.innerHTML = `
+          <span style="font-size:12px;color:var(--text);font-weight:600;white-space:nowrap">${escHtml(t.name || t.hex.slice(0,8)+'…')}</span>
+          ${badge}
+          <span style="font-family:monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.hex}</span>
+          <button class="source-remove-btn" onclick="this.closest('[data-hex]').remove()" style="padding:3px 7px">✕</button>`;
+        list.appendChild(item);
+      }
+    }
+  } catch { /* silent */ }
+}
+
+async function saveTopics() {
+  const btn   = document.getElementById('topic-save-btn');
+  const msgEl = document.getElementById('topic-msg');
+  const mode  = document.body.getAttribute('data-hive-mode');
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msgEl.className = 'settings-msg'; msgEl.textContent = '';
+
+  try {
+    let payload;
+    if (mode !== 'queen') {
+      const isPrivate = document.getElementById('topic-btn-private').classList.contains('active');
+      if (isPrivate) {
+        const hex = document.getElementById('topic-private-hex').value.trim();
+        if (!hex) throw new Error('Generate a private topic key first.');
+        payload = { mode: 'private', topic_hex: hex };
+      } else {
+        const topicStr = (document.getElementById('topic-public-input')?.value ?? '').trim() || 'hive-network-v0.1';
+        payload = { mode: 'public', topic_string: topicStr };
+      }
+    } else {
+      const items = document.querySelectorAll('#queen-topics-list [data-hex]');
+      const subscribed_topics = Array.from(items).map(el => ({
+        hex: el.dataset.hex, name: el.dataset.name ?? '', is_public: el.dataset.isPublic === '1',
+      }));
+      payload = { subscribed_topics };
+    }
+
+    const res = await apiFetch(`${API}/api/topics-config`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    msgEl.textContent = '✓ Saved — restart node to apply.';
+    msgEl.className = 'settings-msg ok';
+  } catch (e) {
+    msgEl.textContent = e.message; msgEl.className = 'settings-msg error';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save topics';
+  }
+}
+
+async function updateTopicHexPreview(val) {
+  const preview = document.getElementById('topic-public-hex-preview');
+  if (!preview) return;
+  if (!val) { preview.textContent = ''; return; }
+  const hex = await topicHexFromString(val);
+  preview.textContent = `hex: ${hex}`;
+}
+
+// Wire live hex preview for bee public topic input
+(() => {
+  const inp = document.getElementById('topic-public-input');
+  if (inp) inp.addEventListener('input', e => updateTopicHexPreview(e.target.value.trim()));
+})();
+
+// ── Editable preview sync ─────────────────────────────────────────────────────
+function onPreviewEdit(textarea) {
+  try {
+    const obj = JSON.parse(textarea.value);
+    if (Array.isArray(obj.declared_sources)) {
+      const rows = document.getElementById('source-rows');
+      rows.innerHTML = ''; _sourceRowId = 0;
+      for (const src of obj.declared_sources) addSourceRow(src);
+    }
+    if (obj.replication) {
+      const sel = document.getElementById('settings-replication');
+      if (sel) sel.value = obj.replication;
+    }
+    textarea.style.borderColor = '';
+  } catch {
+    textarea.style.borderColor = 'var(--red)';
+  }
+}
+
+// ── LLM settings panel (v0.9) ─────────────────────────────────────────────────
+function onSLLMProviderChange() {
+  const p = document.getElementById('s-llm-provider').value;
+  const hint = document.getElementById('s-llm-hint');
+  if (hint) hint.textContent = PROVIDER_HINTS[p] ?? '';
+  const modelInp = document.getElementById('s-llm-model');
+  if (modelInp) modelInp.placeholder = PROVIDER_DEFAULTS[p] ?? '';
+  const isOllama = p === 'ollama';
+  document.getElementById('s-llm-key-field')?.classList.toggle('hidden', isOllama);
+  document.getElementById('s-llm-ollama-info')?.classList.toggle('hidden', !isOllama);
+}
+
+async function saveLLMSettings() {
+  const provider = document.getElementById('s-llm-provider').value;
+  const apiKey   = (document.getElementById('s-llm-key')?.value ?? '').trim();
+  const model    = (document.getElementById('s-llm-model')?.value ?? '').trim() || undefined;
+  const msgEl    = document.getElementById('s-llm-msg');
+  const btn      = document.getElementById('s-llm-save-btn');
+
+  if (!apiKey && provider !== 'ollama') {
+    msgEl.textContent = 'API key is required.'; msgEl.className = 'settings-msg error'; return;
+  }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msgEl.className = 'settings-msg'; msgEl.textContent = '';
+
+  try {
+    const res = await apiFetch(`${API}/api/config`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, apiKey, ...(model ? { model } : {}) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    localStorage.setItem(SETUP_DONE_KEY, '1');
+    msgEl.textContent = '✓ LLM saved.'; msgEl.className = 'settings-msg ok';
+    document.getElementById('s-llm-key').value = '';
+    await checkStatus();
+  } catch (e) {
+    msgEl.textContent = e.message; msgEl.className = 'settings-msg error';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save LLM';
+  }
+}
+
+// ── Auth key section (v0.9) ───────────────────────────────────────────────────
+function toggleAuthKeyReveal() {
+  const inp = document.getElementById('s-auth-key-display');
+  const btn = document.getElementById('s-auth-reveal-btn');
+  const isHidden = inp.type === 'password';
+  inp.type = isHidden ? 'text' : 'password';
+  btn.textContent = isHidden ? 'Hide' : 'Reveal';
+}
+
+async function regenerateAuthKey() {
+  const msgEl = document.getElementById('s-auth-msg');
+  const btn   = document.getElementById('s-auth-regen-btn');
+  if (!confirm('Regenerate auth key? The old key will stop working immediately.')) return;
+
+  btn.disabled = true; btn.textContent = 'Regenerando…';
+  msgEl.className = 'settings-msg'; msgEl.textContent = '';
+
+  try {
+    const res = await apiFetch(`${API}/api/auth-key`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    if (data.key) {
+      const inp = document.getElementById('s-auth-key-display');
+      inp.value = data.key; inp.type = 'text';
+      document.getElementById('s-auth-reveal-btn').textContent = 'Hide';
+      setHiveToken(data.key);
+    }
+    msgEl.textContent = '✓ New key generated. Token updated in browser.';
+    msgEl.className = 'settings-msg ok';
+  } catch (e) {
+    msgEl.textContent = e.message; msgEl.className = 'settings-msg error';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Regenerate';
+  }
+}
+
+async function loadAuthSettings() {
+  const d = LATEST_STATUS;
+  if (!d) return;
+  if (d.llm_configured) {
+    const sel = document.getElementById('s-llm-provider');
+    if (sel) { sel.value = d.llm_provider ?? 'gemini'; onSLLMProviderChange(); }
+  }
+  const keyDisplay = document.getElementById('s-auth-key-display');
+  if (keyDisplay) {
+    const token = getHiveToken();
+    keyDisplay.value = token ?? '';
+    keyDisplay.placeholder = token ? '' : 'No key set (API is open)';
+    keyDisplay.type = 'password';
+    const revealBtn = document.getElementById('s-auth-reveal-btn');
+    if (revealBtn) revealBtn.textContent = 'Reveal';
+  }
+}
+
+// ── First-run detection (v0.9) ────────────────────────────────────────────────
+// If this looks like a fresh node (bee with no sources, queen with no LLM),
+// and the operator hasn't dismissed the setup before, open settings immediately
+// so they're guided to configure before extraction starts.
+const SETUP_DONE_KEY = 'hive_setup_done';
+
+async function checkFirstRun(mode) {
+  if (localStorage.getItem(SETUP_DONE_KEY)) return; // already set up
+  try {
+    if (mode === 'bee' || mode === 'hive') {
+      const d = await apiFetch(`${API}/api/manifest`).then(r => r.json());
+      if (d.has_local_store && !(d.declared_sources ?? []).length) {
+        openSettings();
+      }
+    } else if (mode === 'queen') {
+      if (LATEST_STATUS && !LATEST_STATUS.llm_configured) openSettings();
+    }
+  } catch { /* ignore */ }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   await checkStatus();
+  const mode = document.body.getAttribute('data-hive-mode') ?? 'bee';
+  await checkFirstRun(mode);
   await Promise.all([loadNetwork(), loadActivity(), loadCrawl(), loadManifest()]);
 }
 init();

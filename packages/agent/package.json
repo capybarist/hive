@@ -1,10 +1,12 @@
 {
   "name": "@hive/agent",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "description": "HIVE knowledge extraction agent",
   "type": "module",
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "extract": "npx tsx src/autonomous_extractor.ts"
   },

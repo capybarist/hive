@@ -1,12 +1,11 @@
-// First-run wizard. Asks the operator the bare minimum it needs (role, LLM,
-// topic privacy), generates the rest (identity, auth key, sample manifest,
-// data dir), writes everything to the standard XDG locations, and hands off
-// to the runner. No edit of source files; the user can override anything via
-// env vars later.
+// Bootstrap (formerly "wizard"). Replaced interactive CLI prompts with
+// sensible defaults — configuration is done via the Settings panel in
+// the web UI (http://localhost:8080).
+//
+// Keeps the WizardResult interface so runner.ts needs no changes.
 
-import * as p from '@clack/prompts';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { configDir, dataDir, cacheDir, envFilePath } from './paths.js';
 
 export interface WizardResult {
@@ -21,21 +20,6 @@ export interface WizardResult {
   cacheDir: string;
 }
 
-const PUBLIC_TOPICS = [
-  { value: 'hive-network-v0.1',  label: 'hive-network-v0.1  · general / open' },
-  { value: 'hive-medical-v0.1',  label: 'hive-medical-v0.1  · medical knowledge' },
-  { value: 'hive-legal-v0.1',    label: 'hive-legal-v0.1    · legal texts' },
-  { value: 'hive-rust-docs',     label: 'hive-rust-docs     · Rust language + ecosystem' },
-];
-
-const LLM_PROVIDERS = [
-  { value: 'groq',   label: 'groq    · fast, free tier, no payment method required',  hint: 'aistudio.google.com → API key' },
-  { value: 'gemini', label: 'gemini  · Google free tier, generous limits' },
-  { value: 'claude', label: 'claude  · Anthropic, paid, highest quality' },
-  { value: 'openai', label: 'openai  · GPT-4o, paid' },
-  { value: 'ollama', label: 'ollama  · local LLM, no API key, slowest' },
-];
-
 function hex(bytes: number): string {
   return randomBytes(bytes).toString('hex');
 }
@@ -44,138 +28,52 @@ function alreadyConfigured(): boolean {
   return existsSync(envFilePath());
 }
 
-/** Generate a Hyperswarm-compatible 32-byte topic from any string. */
-function topicFromString(s: string): string {
-  return createHash('sha256').update(s).digest('hex');
-}
-
 export async function runWizard(): Promise<WizardResult> {
-  p.intro('🐝  HIVE first-run setup');
-
-  if (alreadyConfigured()) {
-    const reuse = await p.confirm({
-      message: `Found existing config at ${configDir()}. Reuse it?`,
-      initialValue: true,
-    });
-    if (reuse === true) {
-      return loadExisting();
-    }
-    if (p.isCancel(reuse)) {
-      p.cancel('Aborted.');
-      process.exit(0);
-    }
-  }
-
-  const role = await p.select({
-    message: 'What role should this node run?',
-    options: [
-      { value: 'hive',  label: 'hive   · both queen + bee in one process (single-machine quickstart)' },
-      { value: 'queen', label: 'queen  · query/synthesis only (replicates bees, runs the LLM)' },
-      { value: 'bee',   label: 'bee    · producer only (extracts + signs fragments, no LLM)' },
-    ],
-    initialValue: 'hive',
-  });
-  if (p.isCancel(role)) bail();
-
-  let llmProvider = '';
-  let llmApiKey = '';
-  if (role === 'queen' || role === 'hive') {
-    const provider = await p.select({
-      message: 'LLM provider for the queen?',
-      options: LLM_PROVIDERS,
-      initialValue: 'groq',
-    });
-    if (p.isCancel(provider)) bail();
-    llmProvider = provider as string;
-
-    if (llmProvider !== 'ollama') {
-      const key = await p.password({
-        message: `${llmProvider.toUpperCase()} API key (paste, will not echo):`,
-        validate: (v) => v && v.length > 8 ? undefined : 'Looks too short — paste the full key.',
-      });
-      if (p.isCancel(key)) bail();
-      llmApiKey = key as string;
-    }
-  }
-
-  const topicMode = await p.select({
-    message: 'Topic mode?',
-    options: [
-      { value: 'public',  label: 'public   · join a well-known swarm (anyone can replicate)' },
-      { value: 'private', label: 'private  · generate a fresh 32-byte topic (share out-of-band)' },
-    ],
-    initialValue: 'public',
-  });
-  if (p.isCancel(topicMode)) bail();
-
-  let publicTopic: string | undefined;
-  let privateTopicHex: string | undefined;
-  if (topicMode === 'public') {
-    const chosen = await p.select({
-      message: 'Which public swarm?',
-      options: PUBLIC_TOPICS,
-      initialValue: 'hive-network-v0.1',
-    });
-    if (p.isCancel(chosen)) bail();
-    publicTopic = chosen as string;
-  } else {
-    privateTopicHex = hex(32);
-    p.note(privateTopicHex, 'Your private topic (write this down — it is the only copy)');
-  }
-
-  const s = p.spinner();
-  s.start('Provisioning directories and generating auth token');
-
-  // Generated auth token — what the API requires for /api/*. The ed25519
-  // node identity is created by the server on first start in HIVE_DATA_DIR
-  // (loadOrCreateIdentity), so we don't generate it here.
-  const hiveApiKey = hex(16);
-
-  const dir = dataDir();
+  const dir   = dataDir();
   const cache = cacheDir();
-  const cfg = configDir();
-  mkdirSync(dir, { recursive: true });
+  const cfg   = configDir();
+  mkdirSync(dir,   { recursive: true });
   mkdirSync(cache, { recursive: true });
-  mkdirSync(cfg, { recursive: true });
+  mkdirSync(cfg,   { recursive: true });
 
-  s.stop('Directories ready, auth token generated');
+  if (alreadyConfigured()) return loadExisting();
 
-  // Write .env
-  const lines: string[] = [
-    `# HIVE config — written by the first-run wizard on ${new Date().toISOString()}`,
-    `# Override any of these manually; see USE-CASES.md for what each does.`,
+  // First run — write a minimal .env with generated auth key.
+  // Everything else (sources, LLM, topic) is configured via the web UI.
+  const hiveApiKey = hex(16);
+  const lines = [
+    `# HIVE config — generated on first run ${new Date().toISOString()}`,
+    `# Configure sources, LLM provider, and topic via the Settings panel`,
+    `# in the web UI (http://localhost:8080).`,
     ``,
-    `HIVE_MODE=${role}`,
+    `HIVE_MODE=hive`,
     `HIVE_DATA_DIR=${dir}`,
     `HIVE_API_KEY=${hiveApiKey}`,
     `HIVE_PUBLIC_DEMO_TOKEN=${hiveApiKey}`,
   ];
-  if (llmProvider) {
-    lines.push(`LLM_PROVIDER=${llmProvider}`);
-    if (llmApiKey) lines.push(`LLM_API_KEY=${llmApiKey}`);
-  }
-  if (publicTopic) lines.push(`HIVE_TOPIC=${publicTopic}`);
-  if (privateTopicHex) lines.push(`HIVE_TOPIC_HEX=${privateTopicHex}`);
   writeFileSync(envFilePath(), lines.join('\n') + '\n', { mode: 0o600 });
 
-  p.note(
-    `Auth token: ${hiveApiKey}\n` +
-    `Saved to:   ${envFilePath()}\n\n` +
-    `Anyone calling /api/* on this queen will need:\n` +
-    `   Authorization: Bearer ${hiveApiKey}\n\n` +
-    `Rotate later by editing ${envFilePath()} and restarting.`,
-    'Generated HIVE_API_KEY',
-  );
-
-  p.outro('✓ Configured. Starting node...');
+  console.log(`
+╔══════════════════════════════════════════════════════════╗
+║  🐝  HIVE — first run                                   ║
+╠══════════════════════════════════════════════════════════╣
+║  Config written to: ${envFilePath().padEnd(36)} ║
+║                                                          ║
+║  Auth token: ${hiveApiKey.padEnd(43)}║
+║                                                          ║
+║  Open http://localhost:8080 to configure:                ║
+║    · Knowledge sources (Wikipedia, arXiv, RSS…)          ║
+║    · Network topic (public or private)                   ║
+║    · LLM provider (for queen/hive query mode)            ║
+╚══════════════════════════════════════════════════════════╝
+`);
 
   return {
-    role: role as WizardResult['role'],
-    llmProvider,
-    llmApiKey,
-    topicMode: topicMode as 'public' | 'private',
-    publicTopic,
-    privateTopicHex,
+    role: 'hive',
+    llmProvider: '',
+    llmApiKey: '',
+    topicMode: 'public',
+    publicTopic: 'hive-network-v0.1',
     hiveApiKey,
     dataDir: dir,
     cacheDir: cache,
@@ -200,9 +98,4 @@ function loadExisting(): WizardResult {
     dataDir: env.HIVE_DATA_DIR ?? dataDir(),
     cacheDir: cacheDir(),
   };
-}
-
-function bail(): never {
-  p.cancel('Aborted.');
-  process.exit(0);
 }

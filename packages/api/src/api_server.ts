@@ -8,9 +8,10 @@ import {
   KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry,
   isLLMConfigured, validateLLMKey, buildDeclaredSources,
   EMBEDDING_MODEL, EMBEDDING_DIM, CHUNKER_VERSION, SCHEMA_VERSION,
+  PUBLIC_TOPIC, topicFromString, topicFromHex,
   type FragmentV08,
 } from '@hive/core';
-import type { PeerMeta, BeeManifest } from '@hive/core';
+import type { PeerMeta, BeeManifest, DeclaredSource } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
 import { runAutonomousExtraction } from '@hive/agent';
 
@@ -67,6 +68,55 @@ const HAS_DASHBOARD_PROXY     = IS_QUEEN;              // proxies /api/crawl to 
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');
 const INDEX_DIR = join(DATA_DIR, 'lancedb');
+
+// UI-driven manifest override — declared sources + replication set via Settings page.
+const MANIFEST_OVERRIDE_PATH = join(DATA_DIR, 'manifest-override.json');
+type ManifestOverride = { declared_sources: DeclaredSource[]; replication: 'none' | 'neighbors' | 'all' };
+let manifestOverride: ManifestOverride | null = null;
+try {
+  const fs = await import('node:fs');
+  if (fs.existsSync(MANIFEST_OVERRIDE_PATH)) {
+    manifestOverride = JSON.parse(fs.readFileSync(MANIFEST_OVERRIDE_PATH, 'utf8')) as ManifestOverride;
+    console.log(`[config] Loaded manifest override from ${MANIFEST_OVERRIDE_PATH}`);
+  }
+} catch { /* fall back to env vars */ }
+
+// Topics config — which Hyperswarm topics this node joins. Bees: one topic (public or private).
+// Queens: public + any private topics added via Settings.
+const TOPICS_CONFIG_PATH = join(DATA_DIR, 'topics-config.json');
+type TopicsConfig = {
+  mode: 'public' | 'private';          // bees only
+  topic_string?: string;               // public bee: e.g. "hive-network-v0.1"
+  topic_hex?: string;                  // private bee: 64-char hex
+  subscribed_topics?: Array<{ name: string; hex: string; is_public: boolean }>; // queens
+};
+let topicsConfig: TopicsConfig | null = null;
+try {
+  const fs = await import('node:fs');
+  if (fs.existsSync(TOPICS_CONFIG_PATH)) {
+    topicsConfig = JSON.parse(fs.readFileSync(TOPICS_CONFIG_PATH, 'utf8')) as TopicsConfig;
+    console.log(`[config] Loaded topics config from ${TOPICS_CONFIG_PATH}`);
+  }
+} catch { /* fall back to defaults */ }
+
+function buildTopics(): Buffer[] {
+  if (!topicsConfig) return [PUBLIC_TOPIC];
+  if (IS_QUEEN || IS_HIVE) {
+    const topics: Buffer[] = [PUBLIC_TOPIC]; // always join the general public swarm
+    for (const t of topicsConfig.subscribed_topics ?? []) {
+      const buf = topicFromHex(t.hex);
+      if (buf) topics.push(buf);
+    }
+    return topics;
+  }
+  // Bee/hive producer
+  if (topicsConfig.mode === 'private' && topicsConfig.topic_hex) {
+    const buf = topicFromHex(topicsConfig.topic_hex);
+    if (buf) return [buf];
+  }
+  if (topicsConfig.topic_string) return [topicFromString(topicsConfig.topic_string)];
+  return [PUBLIC_TOPIC];
+}
 
 // Runtime overrides for LLM provider/key (UI-driven), persisted under the data
 // volume so they survive container recreates.
@@ -138,9 +188,9 @@ await claimRegistry.ready();
 if (HAS_LOCAL_STORE) {
   const beeManifest: BeeManifest = {
     bee_id: identity.nodeId,
-    declared_sources: buildDeclaredSources(),
+    declared_sources: manifestOverride?.declared_sources ?? buildDeclaredSources(),
     declared_languages: (process.env.HIVE_LANGUAGES ?? 'en').split(',').map(s => s.trim()).filter(Boolean),
-    replication: (['none', 'neighbors', 'all'].includes(process.env.HIVE_BEE_REPLICATE ?? '')
+    replication: manifestOverride?.replication ?? (['none', 'neighbors', 'all'].includes(process.env.HIVE_BEE_REPLICATE ?? '')
       ? process.env.HIVE_BEE_REPLICATE as 'none' | 'neighbors' | 'all'
       : 'all'),
     version: HIVE_VERSION,
@@ -175,7 +225,7 @@ const localMeta: PeerMeta = {
   coreKey: knowledgeStore.coreKey.toString('hex'),
   claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? '',
 };
-const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localMeta);
+const p2pNode = new HiveP2PNode(knowledgeStore.corestore, localMeta, buildTopics());
 
 // ── peer-meta handler — register identity + spin up remote watcher ─────────
 // MUST be registered BEFORE p2pNode.start() so early peer events aren't lost.
@@ -281,7 +331,7 @@ const HIVE_API_KEY = process.env.HIVE_API_KEY?.trim() || null;
 // page open, so casual visitors don't see a prompt for the query box. Leaving
 // it unset means the UI falls back to the manual prompt on the first 401.
 const HIVE_PUBLIC_DEMO_TOKEN = process.env.HIVE_PUBLIC_DEMO_TOKEN?.trim() || null;
-const PROTECTED_PREFIXES = ['/api/query', '/api/config', '/api/claims'];
+const PROTECTED_PREFIXES = ['/api/query', '/api/config', '/api/claims', '/api/manifest', '/api/topics-config', '/api/restart', '/api/auth-key'];
 
 if (HIVE_API_KEY) {
   const expected = `Bearer ${HIVE_API_KEY}`;
@@ -801,6 +851,132 @@ app.post<{ Body: { provider: string; apiKey: string; model?: string } }>('/api/c
 
   await startExtractionIfReady();
   return { ok: true, provider };
+});
+
+// ── GET /api/manifest — current declared sources (for Settings UI) ──────────
+app.get('/api/manifest', async () => {
+  const current = await knowledgeStore.getLocalManifest();
+  return {
+    declared_sources: current?.declared_sources ?? (manifestOverride?.declared_sources ?? buildDeclaredSources()),
+    replication: current?.replication ?? (manifestOverride?.replication ?? 'all'),
+    bee_id: identity.nodeId,
+    has_local_store: HAS_LOCAL_STORE,
+  };
+});
+
+// ── POST /api/manifest — save declared sources from Settings UI ──────────────
+const VALID_ADAPTERS = ['wikipedia-en', 'arxiv', 'rss', 'web', 'common-crawl'];
+
+app.post<{ Body: { declared_sources: DeclaredSource[]; replication?: string } }>('/api/manifest', async (req, reply) => {
+  if (!HAS_LOCAL_STORE) return reply.code(400).send({ error: 'This node does not produce fragments (queen mode)' });
+
+  const { declared_sources, replication } = req.body ?? {};
+  if (!Array.isArray(declared_sources) || declared_sources.length === 0)
+    return reply.code(400).send({ error: 'declared_sources must be a non-empty array' });
+
+  for (const s of declared_sources) {
+    if (!VALID_ADAPTERS.includes(s.id))
+      return reply.code(400).send({ error: `Unknown adapter: "${s.id}". Valid: ${VALID_ADAPTERS.join(', ')}` });
+    if (!['drift-ok', 'exclusive'].includes(s.policy))
+      return reply.code(400).send({ error: `Invalid policy: "${s.policy}"` });
+  }
+
+  const repl: 'none' | 'neighbors' | 'all' = (['none', 'neighbors', 'all'].includes(replication ?? '')
+    ? replication as 'none' | 'neighbors' | 'all'
+    : 'all');
+
+  const newManifest: BeeManifest = {
+    bee_id: identity.nodeId,
+    declared_sources,
+    declared_languages: (process.env.HIVE_LANGUAGES ?? 'en').split(',').map(s => s.trim()).filter(Boolean),
+    replication: repl,
+    version: HIVE_VERSION,
+    published_at: new Date().toISOString(),
+    embedding_model: EMBEDDING_MODEL,
+    embedding_dim: EMBEDDING_DIM,
+    chunker_version: CHUNKER_VERSION,
+    schema_version: SCHEMA_VERSION,
+  };
+
+  const fs = await import('node:fs/promises');
+  const override: ManifestOverride = { declared_sources, replication: repl };
+  await fs.writeFile(MANIFEST_OVERRIDE_PATH, JSON.stringify(override, null, 2), 'utf8');
+  manifestOverride = override;
+
+  await knowledgeStore.publishManifest(newManifest);
+
+  const srcList = declared_sources.map(s => s.id).join(', ');
+  console.log(`[settings] Manifest updated: sources=${srcList} replication=${repl}`);
+
+  return { ok: true, manifest: newManifest };
+});
+
+// ── GET /api/topics-config — current topic configuration ──────────────────
+app.get('/api/topics-config', async () => ({
+  mode: topicsConfig?.mode ?? 'public',
+  topic_string: topicsConfig?.topic_string ?? 'hive-network-v0.1',
+  topic_hex: topicsConfig?.topic_hex ?? null,
+  subscribed_topics: topicsConfig?.subscribed_topics ?? [],
+  is_queen: IS_QUEEN,
+  is_bee: IS_BEE,
+}));
+
+// ── POST /api/topics-config — save topic configuration ────────────────────
+app.post<{ Body: TopicsConfig }>('/api/topics-config', async (req, reply) => {
+  const body = req.body ?? {};
+  const fs = await import('node:fs/promises');
+  const next: TopicsConfig = {};
+
+  if (IS_QUEEN || IS_HIVE) {
+    // Queen: save subscribed_topics list
+    next.subscribed_topics = (body.subscribed_topics ?? []).filter(t => {
+      const buf = topicFromHex(t.hex);
+      return buf !== null && typeof t.name === 'string';
+    });
+  } else {
+    // Bee: save single topic (public or private)
+    if (body.mode === 'private') {
+      if (!body.topic_hex || !topicFromHex(body.topic_hex))
+        return reply.code(400).send({ error: 'topic_hex must be a valid 64-char hex string' });
+      next.mode = 'private';
+      next.topic_hex = body.topic_hex;
+    } else {
+      next.mode = 'public';
+      next.topic_string = typeof body.topic_string === 'string' && body.topic_string.trim()
+        ? body.topic_string.trim()
+        : 'hive-network-v0.1';
+    }
+  }
+
+  await fs.writeFile(TOPICS_CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8');
+  topicsConfig = next;
+  console.log(`[settings] Topics config saved: ${JSON.stringify(next)}`);
+  return { ok: true, config: next };
+});
+
+// ── POST /api/restart — graceful restart for the node process ─────────────
+// Saves are picked up on next start. Docker/npm restarts the process.
+app.post('/api/restart', async (_req, reply) => {
+  reply.send({ ok: true, message: 'Restarting...' });
+  setTimeout(() => process.exit(0), 500);
+});
+
+// ── POST /api/auth-key — regenerate the HIVE_API_KEY ─────────────────────
+app.post<{ Body: { key?: string } }>('/api/auth-key', async (req, reply) => {
+  const { randomBytes } = await import('node:crypto');
+  const newKey = req.body?.key?.trim() || randomBytes(16).toString('hex');
+  if (newKey.length < 16) return reply.code(400).send({ error: 'key must be at least 16 characters' });
+
+  const fs = await import('node:fs/promises');
+  let content = '';
+  try { content = await fs.readFile(RUNTIME_ENV_PATH, 'utf8'); } catch { /* first write */ }
+  content = upsertEnvLine(content, 'HIVE_API_KEY', newKey);
+  content = upsertEnvLine(content, 'HIVE_PUBLIC_DEMO_TOKEN', newKey);
+  await fs.writeFile(RUNTIME_ENV_PATH, content, 'utf8');
+  await fs.chmod(RUNTIME_ENV_PATH, 0o600).catch(() => {});
+
+  console.log(`[settings] API key updated`);
+  return { ok: true, key: newKey };
 });
 
 // ── GET /api/state — full debug state ──────────────────────────────────────

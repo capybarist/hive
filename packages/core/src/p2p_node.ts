@@ -4,8 +4,20 @@ import Hyperswarm from 'hyperswarm';
 import c from 'compact-encoding';
 import type Corestore from 'corestore';
 
-// All HIVE BEEs discover each other using this fixed topic
-const HIVE_TOPIC = createHash('sha256').update('hive-network-v0.1').digest();
+/** Well-known public swarm: sha256("hive-network-v0.1"). Used as the default topic. */
+export const PUBLIC_TOPIC = createHash('sha256').update('hive-network-v0.1').digest();
+
+/** Derive a Hyperswarm topic from a human-readable string. */
+export function topicFromString(s: string) {
+  return createHash('sha256').update(s).digest();
+}
+
+/** Parse a 64-char hex topic string into a Buffer. Returns null on invalid input. */
+export function topicFromHex(hex: string) {
+  const clean = hex.trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(clean)) return null;
+  return Buffer.from(clean, 'hex');
+}
 
 export interface PeerInfo {
   peerId: string;
@@ -54,34 +66,43 @@ const metaEncoding = {
 export class HiveP2PNode extends EventEmitter {
   private swarm: Hyperswarm;
   private _peers = new Map<string, PeerInfo>();
-  // v0.8 — captured so we can refresh the announce/lookup when the node is
-  // isolated (peerCount=0). Hairpin-NAT holepunches between two containers on
-  // the same Hetzner box have always been flaky; in v0.8 the heavy embedding
-  // on the producer can make the initial holepunch miss after a deploy. A
-  // periodic refresh recovers without an operator-driven restart.
-  private discovery: any = null;
+  private discoveries: any[] = [];
+  private _topics: Buffer[];
 
   constructor(
     private store: Corestore,
     private localMeta: PeerMeta,
+    topics: Buffer[] = [PUBLIC_TOPIC],
   ) {
     super();
     this.swarm = new Hyperswarm();
+    this._topics = topics;
   }
 
   get peers(): PeerInfo[] { return [...this._peers.values()]; }
   get peerCount(): number { return this._peers.size; }
 
-  /** Re-announce + re-lookup on the topic. Safe to call repeatedly — Hyperswarm
-   *  treats the topic as already-joined and just refreshes the DHT entries. */
+  /** Re-announce + re-lookup on all joined topics. */
   async rejoin(): Promise<void> {
-    if (!this.discovery) return;
-    try { await this.discovery.refresh({ server: true, client: true }); }
-    catch { /* refresh may throw on tear-down; nothing to do */ }
+    for (const d of this.discoveries) {
+      try { await d.refresh({ server: true, client: true }); }
+      catch { /* refresh may throw on tear-down */ }
+    }
+  }
+
+  /** Join an additional topic at runtime (e.g. queen adding a private bee's topic). */
+  async addTopic(topic: Buffer): Promise<void> {
+    const d = this.swarm.join(topic, { server: true, client: true });
+    this.discoveries.push(d);
+    this._topics.push(topic);
+    await d.flushed().catch(() => {});
+    console.log(`[p2p] Joined additional topic: ${topic.toString('hex').slice(0, 16)}...`);
   }
 
   async start(): Promise<void> {
-    this.discovery = this.swarm.join(HIVE_TOPIC, { server: true, client: true });
+    for (const topic of this._topics) {
+      this.discoveries.push(this.swarm.join(topic, { server: true, client: true }));
+    }
 
     this.swarm.on('connection', (socket: any, peerInfo: any) => {
       const peerId = (peerInfo.publicKey as Buffer).toString('hex').slice(0, 16);
@@ -139,7 +160,7 @@ export class HiveP2PNode extends EventEmitter {
       this.swarm.flush(),
       new Promise(r => setTimeout(r, 10_000))
     ]);
-    console.log(`[p2p] Joined HIVE network — topic: ${HIVE_TOPIC.toString('hex').slice(0, 16)}...`);
+    console.log(`[p2p] Joined HIVE network — ${this._topics.length} topic(s): ${this._topics.map(t => t.toString('hex').slice(0, 12)).join(', ')}...`);
   }
 
   async stop(): Promise<void> {

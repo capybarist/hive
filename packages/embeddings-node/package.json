@@ -1,6 +1,6 @@
 {
   "name": "@hive/embeddings-node",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "HIVE v0.8 — all-Node embedder (multilingual-e5-base, ONNX int8) + LanceDB index + retrieval gate",
