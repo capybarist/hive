@@ -287,7 +287,21 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
   }
 });
 
-await p2pNode.start();
+// v0.9 — privacy gate on swarm join. A PRODUCER (bee/hive) that isn't yet
+// configured must not join ANY Hyperswarm topic: a fresh node defaults to the
+// public commons, and the moment it connects, it hands its fragments core key
+// to every commons peer over the meta channel. If that bee is later set
+// private, the key already leaked — and a node bridging commons + the private
+// topic can then serve the "private" core to commons peers. So we hold the
+// swarm off until the operator declares sources/topic in Settings (which writes
+// config and restarts). Pure queens are never gated: they own no fragments core
+// to leak and must join the commons to replicate public bees.
+const SWARM_GATED = HAS_LOCAL_STORE && !OPERATOR_CONFIGURED;
+if (SWARM_GATED) {
+  console.log('[p2p] Swarm join GATED — node not configured. It will join no topic (not even the public commons) until you declare sources/topic in the web Settings and save (which restarts the node).');
+} else {
+  await p2pNode.start();
+}
 
 // v0.8 — peering self-heal. When a node is isolated (peerCount=0) for more than
 // a minute, refresh the Hyperswarm discovery so the announce/lookup round-trips
@@ -296,14 +310,17 @@ await p2pNode.start();
 // operator has to docker-restart the queen to recover; see CLAUDE.md "discovery
 // glitch". Only matters when a node expects peers — pure-bee in this single-box
 // setup still wants the queen to find it, and the queen always wants peers.
-setInterval(() => {
-  if (p2pNode.peerCount === 0) {
-    console.log('[p2p] peerCount=0 — refreshing Hyperswarm discovery');
-    p2pNode.rejoin().catch((err) =>
-      console.warn(`[p2p] rejoin failed: ${err?.message ?? err}`),
-    );
-  }
-}, 60_000).unref();
+// Skipped entirely while the swarm is gated (nothing to refresh).
+if (!SWARM_GATED) {
+  setInterval(() => {
+    if (p2pNode.peerCount === 0) {
+      console.log('[p2p] peerCount=0 — refreshing Hyperswarm discovery');
+      p2pNode.rejoin().catch((err) =>
+        console.warn(`[p2p] rejoin failed: ${err?.message ?? err}`),
+      );
+    }
+  }, 60_000).unref();
+}
 
 // Hive mode: local bee writes also need to flow into the local queen index.
 // (Pure bees and pure queens skip this — bee mode has no queenIndex, queen
@@ -562,6 +579,9 @@ app.get('/api/status', async () => {
     // (b) warn when a queen subscribes to a private topic with an open query API.
     auth_enabled: !!HIVE_API_KEY,
     configured: OPERATOR_CONFIGURED,
+    // v0.9 — true when a producer is holding off all swarm joins until configured
+    // (privacy gate). Explains peers=0 on a fresh, not-yet-configured node.
+    swarm_gated: SWARM_GATED,
     peers: p2pNode.peerCount,
     coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
     claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? null,
