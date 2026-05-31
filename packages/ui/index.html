@@ -871,38 +871,57 @@
                 <option value="hive-finance-v0.1">Finance</option>
                 <option value="hive-devops-v0.1">DevOps</option>
               </datalist>
-              <div class="source-scope-hint" style="margin-top:5px">Public bees are <strong>always discoverable on the general network</strong>. A named topic (e.g. hive-medicine-v0.1) is an extra label so a specialist queen can subscribe to just your domain. Type any name to create or join one.</div>
+              <div class="source-scope-hint" style="margin-top:5px">A public bee feeds <strong>one topic</strong> — <strong>general</strong> by default, or a specialised one (e.g. <code>python</code>). It's listed in the public registry so queens can find and subscribe to it. Many bees (different sources) can feed the same topic. Type any name to create or join one.</div>
               <div id="topic-public-hex-preview" style="font-size:10px;color:var(--muted);font-family:monospace;margin-top:4px;word-break:break-all"></div>
             </div>
             <div id="topic-private-panel" class="hidden">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <input class="settings-input" id="topic-private-hex" type="text" readonly
+                <input class="settings-input" id="topic-private-hex" type="text"
                        style="font-family:monospace;font-size:11px;max-width:none;flex:1"
-                       placeholder="Generate a private topic key…">
+                       placeholder="Paste an existing 64-char hex to join, or Generate a new one">
                 <button class="add-source-btn" onclick="generatePrivateTopic()" style="white-space:nowrap">Generate</button>
                 <button class="add-source-btn" id="topic-copy-btn" onclick="copyPrivateTopic()" style="white-space:nowrap">Copy</button>
               </div>
               <div class="source-scope-hint" style="line-height:1.6">
-                Only queens that have been given this hex can discover this bee.<br>
-                Share it out-of-band with the queen operator and have them paste it into their queen's Settings → Subscribed topics.
+                A private topic is a shared secret. <strong>Multiple bees can feed the same hex</strong> (each with its own Hypercore); any queen given the hex replicates them all.
+                <strong>Generate</strong> a new one to start a private topic, or <strong>paste</strong> an existing hex to contribute to one. It never appears in the public registry — share it out-of-band.
               </div>
             </div>
           </div>
         </div>
 
-        <!-- QUEEN: list of subscribed topics -->
+        <!-- QUEEN: visibility + subscribed topics + registry browse -->
         <div id="topic-queen-panel" class="hide-on-bee">
-          <div class="source-scope-hint" style="margin-bottom:12px">
-            This queen always replicates the <strong>general public network</strong> (every public bee). Add a <strong>private topic's hex</strong> here to also replicate a private bee that shared it with you out-of-band. ⚠️ Set an auth key below first — otherwise this queen's answers would expose that private knowledge to anyone.
+          <!-- Visibility badge (PUBLIC xor PRIVATE) -->
+          <div id="queen-visibility-badge" style="margin-bottom:14px"></div>
+
+          <!-- Subscribed topics — what this queen replicates -->
+          <label class="settings-label">Subscribed topics</label>
+          <div class="source-scope-hint" style="margin-bottom:8px">
+            This queen always replicates the <strong>general</strong> public network. Add specialised public topics from the registry below, or paste a private topic's hex.
           </div>
-          <div id="queen-topics-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <div id="queen-topics-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px"></div>
+
+          <!-- Browse public topics from the registry -->
+          <label class="settings-label">Browse public topics
+            <span class="settings-help" title="Specialised public topics announced on the network by bees. Private topics never appear here.">?</span>
+          </label>
+          <div class="source-scope-hint" style="margin-bottom:8px">Specialised topics other bees are feeding right now. Click <strong>Subscribe</strong> to replicate one.</div>
+          <div id="registry-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px">
+            <div class="source-scope-hint">Loading…</div>
+          </div>
+
+          <!-- Add a private topic by hex -->
+          <label class="settings-label">Add a private topic</label>
           <div style="display:flex;gap:8px">
             <input class="settings-input" id="queen-topic-hex-input" type="text"
                    style="font-family:monospace;font-size:11px;max-width:none;flex:1"
-                   placeholder="64-char hex o nombre (ej: hive-medical-v0.1)…">
+                   placeholder="Paste a 64-char private topic hex…">
             <button class="add-source-btn" onclick="addQueenTopic()" style="white-space:nowrap">Add</button>
           </div>
-          <div class="source-scope-hint" style="margin-top:6px">Paste a 64-char hex from a private bee, or type a public topic name (hex computed automatically).</div>
+          <div class="source-scope-hint" style="margin-top:6px">
+            ⚠️ Adding a private topic makes this a <strong>private queen</strong>: it needs an auth key and must not be exposed publicly — its answers would include the private knowledge.
+          </div>
         </div>
 
         <div class="settings-save-row" style="margin-top:16px">
@@ -2052,6 +2071,44 @@ async function copyPrivateTopic() {
   setTimeout(() => btn.textContent = prev, 2000);
 }
 
+// Shared renderer for one subscribed-topic row in the queen list.
+function renderQueenTopicItem(name, hex, isPublic) {
+  const item = document.createElement('div');
+  item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
+  item.dataset.hex = hex; item.dataset.name = name ?? ''; item.dataset.isPublic = isPublic ? '1' : '0';
+  const badge = isPublic
+    ? '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--green);font-weight:700">PUBLIC</span>'
+    : '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:var(--accent-glow);color:var(--accent);font-weight:700">PRIVATE</span>';
+  item.innerHTML = `
+    <span style="font-size:12px;color:var(--text);font-weight:600;white-space:nowrap">${escHtml(name || hex.slice(0,8)+'…')}</span>
+    ${badge}
+    <span style="font-family:monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(hex)}</span>
+    <button class="source-remove-btn" onclick="removeQueenTopic(this)" style="padding:3px 7px">✕</button>`;
+  return item;
+}
+
+function removeQueenTopic(btn) {
+  btn.closest('[data-hex]')?.remove();
+  updateQueenVisibility();
+  loadRegistry(); // a removed public topic becomes subscribable again
+}
+
+// Queen visibility = PUBLIC xor PRIVATE. Any private topic ⇒ private queen.
+function updateQueenVisibility() {
+  const badge = document.getElementById('queen-visibility-badge');
+  if (!badge) return;
+  const items = document.querySelectorAll('#queen-topics-list [data-hex]');
+  const hasPrivate = Array.from(items).some(el => el.dataset.isPublic === '0');
+  const authed = !!(LATEST_STATUS && LATEST_STATUS.auth_enabled);
+  if (hasPrivate && !authed) {
+    badge.innerHTML = '<div style="padding:10px 12px;border-radius:8px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;color:#b45309;line-height:1.5"><strong>⚠️ Private queen with NO auth key.</strong> Its <code>/api/query</code> is blocked until you set one in <strong>API auth key</strong> below — otherwise private knowledge would be served to anyone.</div>';
+  } else if (hasPrivate) {
+    badge.innerHTML = '<div style="padding:10px 12px;border-radius:8px;background:var(--accent-glow);border:1px solid rgba(139,92,246,.3);font-size:12px;color:var(--text);line-height:1.5"><strong>🔒 Private queen.</strong> Holds a private topic — keep it auth-gated and don\'t expose it publicly.</div>';
+  } else {
+    badge.innerHTML = '<div style="padding:10px 12px;border-radius:8px;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.30);font-size:12px;color:var(--text);line-height:1.5"><strong>🌐 Public queen.</strong> Replicates only public topics — safe to expose.</div>';
+  }
+}
+
 async function addQueenTopic() {
   const input = document.getElementById('queen-topic-hex-input');
   const raw = input.value.trim();
@@ -2061,22 +2118,7 @@ async function addQueenTopic() {
   if (/^[0-9a-fA-F]{64}$/.test(raw)) {
     hex = raw.toLowerCase(); name = hex.slice(0, 8) + '…'; isPublic = false;
   } else {
-    hex = await topicHexFromString(raw); name = raw; isPublic = true;
-  }
-
-  // Private topic + open query API = private knowledge leaks through /api/query.
-  // The P2P layer never re-serves the private core, but THIS queen's answers
-  // would. Force the operator to acknowledge before subscribing.
-  if (!isPublic && LATEST_STATUS && !LATEST_STATUS.auth_enabled) {
-    const proceed = confirm(
-      '⚠️ This queen has NO auth key set.\n\n' +
-      'It can replicate the private bee safely, but its /api/query endpoint is ' +
-      'OPEN — anyone could ask it questions and receive the private knowledge in ' +
-      'the answers.\n\n' +
-      'Recommended: set an auth key first (API auth key section below).\n\n' +
-      'Subscribe to this private topic anyway?'
-    );
-    if (!proceed) return;
+    hex = await topicHexFromString(raw); name = raw; isPublic = true;  // someone typed a public name
   }
 
   const list = document.getElementById('queen-topics-list');
@@ -2086,16 +2128,71 @@ async function addQueenTopic() {
     return;
   }
 
-  const item = document.createElement('div');
-  item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
-  item.dataset.hex = hex; item.dataset.name = name; item.dataset.isPublic = isPublic ? '1' : '0';
-  item.innerHTML = `
-    <span style="font-size:12px;color:var(--text);font-weight:600;white-space:nowrap">${escHtml(name)}</span>
-    ${isPublic ? '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--green);font-weight:700">PUBLIC</span>' : '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:var(--accent-glow);color:var(--accent);font-weight:700">PRIVATE</span>'}
-    <span style="font-family:monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${hex}</span>
-    <button class="source-remove-btn" onclick="this.closest('[data-hex]').remove()" style="padding:3px 7px">✕</button>`;
-  list.appendChild(item);
+  // Adding a private topic flips the queen to private. If it has no auth key,
+  // the backend fails /api/query closed — warn so the operator sets the key.
+  if (!isPublic && LATEST_STATUS && !LATEST_STATUS.auth_enabled) {
+    const proceed = confirm(
+      '⚠️ Adding a private topic makes this a PRIVATE queen.\n\n' +
+      'It has no auth key, so /api/query stays BLOCKED until you set one (API auth ' +
+      'key section below) — better that than leaking private answers to strangers.\n\n' +
+      'Add the private topic now (and set the key next)?'
+    );
+    if (!proceed) return;
+  }
+
+  list.appendChild(renderQueenTopicItem(name, hex, isPublic));
   input.value = '';
+  updateQueenVisibility();
+}
+
+// Public Topics Registry — browse specialised public topics and subscribe.
+async function loadRegistry() {
+  const el = document.getElementById('registry-list');
+  if (!el) return;
+  try {
+    const d = await apiFetch(`${API}/api/topics-registry`).then(r => r.json());
+    const topics = (d.topics ?? []).filter(t => t.topic_name !== 'hive-network-v0.1'); // general is implicit
+    const subscribed = new Set(Array.from(document.querySelectorAll('#queen-topics-list [data-hex]')).map(e => e.dataset.hex));
+    if (!topics.length) {
+      el.innerHTML = '<div class="source-scope-hint">No specialised public topics announced on the network yet.</div>';
+      return;
+    }
+    el.innerHTML = '';
+    for (const t of topics) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-size:13px;font-weight:600;color:var(--text)';
+      nameEl.textContent = t.topic_name;
+      const metaEl = document.createElement('span');
+      metaEl.style.cssText = 'font-size:10px;color:var(--muted)';
+      metaEl.textContent = `${t.bee_count} bee${t.bee_count === 1 ? '' : 's'} · ${(t.adapters || []).join(', ')}`;
+      const spacer = document.createElement('span'); spacer.style.flex = '1';
+      row.append(nameEl, metaEl, spacer);
+      if (subscribed.has(t.topic_hex)) {
+        const s = document.createElement('span');
+        s.style.cssText = 'font-size:10px;color:var(--green);font-weight:700';
+        s.textContent = '✓ subscribed';
+        row.append(s);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'add-source-btn'; b.style.padding = '4px 12px'; b.textContent = 'Subscribe';
+        b.addEventListener('click', () => subscribeRegistryTopic(t.topic_name, t.topic_hex));
+        row.append(b);
+      }
+      el.appendChild(row);
+    }
+  } catch {
+    el.innerHTML = '<div class="source-scope-hint">Registry unavailable.</div>';
+  }
+}
+
+function subscribeRegistryTopic(name, hex) {
+  const list = document.getElementById('queen-topics-list');
+  if (list.querySelector(`[data-hex="${hex}"]`)) return;
+  list.appendChild(renderQueenTopicItem(name, hex, true));
+  updateQueenVisibility();
+  loadRegistry(); // refresh ✓ subscribed markers
 }
 
 async function loadTopicsSettings() {
@@ -2114,23 +2211,14 @@ async function loadTopicsSettings() {
         if (inp) { inp.value = topicStr; updateTopicHexPreview(topicStr); }
       }
     } else {
-      // Queen panel
+      // Queen panel — render subscribed topics, then visibility badge + registry.
       const list = document.getElementById('queen-topics-list');
       list.innerHTML = '';
       for (const t of (d.subscribed_topics ?? [])) {
-        const item = document.createElement('div');
-        item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;';
-        item.dataset.hex = t.hex; item.dataset.name = t.name ?? ''; item.dataset.isPublic = t.is_public ? '1' : '0';
-        const badge = t.is_public
-          ? '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--green);font-weight:700">PUBLIC</span>'
-          : '<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:var(--accent-glow);color:var(--accent);font-weight:700">PRIVATE</span>';
-        item.innerHTML = `
-          <span style="font-size:12px;color:var(--text);font-weight:600;white-space:nowrap">${escHtml(t.name || t.hex.slice(0,8)+'…')}</span>
-          ${badge}
-          <span style="font-family:monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.hex}</span>
-          <button class="source-remove-btn" onclick="this.closest('[data-hex]').remove()" style="padding:3px 7px">✕</button>`;
-        list.appendChild(item);
+        list.appendChild(renderQueenTopicItem(t.name, t.hex, t.is_public));
       }
+      updateQueenVisibility();
+      loadRegistry();
     }
   } catch { /* silent */ }
 }
@@ -2148,8 +2236,8 @@ async function saveTopics() {
     if (mode !== 'queen') {
       const isPrivate = document.getElementById('topic-btn-private').classList.contains('active');
       if (isPrivate) {
-        const hex = document.getElementById('topic-private-hex').value.trim();
-        if (!hex) throw new Error('Generate a private topic key first.');
+        const hex = document.getElementById('topic-private-hex').value.trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error('Enter a valid 64-char hex — Generate a new private topic or paste an existing one to join it.');
         payload = { mode: 'private', topic_hex: hex };
       } else {
         const topicStr = (document.getElementById('topic-public-input')?.value ?? '').trim() || 'hive-network-v0.1';

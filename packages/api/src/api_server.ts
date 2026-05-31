@@ -148,6 +148,16 @@ function buildTopics(): Buffer[] {
   return [PUBLIC_TOPIC];
 }
 
+// v0.9.4 — a queen is PUBLIC xor PRIVATE, symmetric to a bee. Holding ANY
+// private topic makes it a private queen: its /api/query would otherwise blend
+// private knowledge into answers served to anyone. So a private queen must be
+// auth-gated and must not advertise a public demo token. Computed live from the
+// current config so saving a private topic flips visibility before the restart.
+function queenHasPrivateTopics(): boolean {
+  if (!(IS_QUEEN || IS_HIVE)) return false;
+  return (topicsConfig?.subscribed_topics ?? []).some(t => !t.is_public);
+}
+
 // Runtime overrides for LLM provider/key (UI-driven), persisted under the data
 // volume so they survive container recreates.
 const RUNTIME_ENV_PATH = join(DATA_DIR, '.runtime.env');
@@ -430,11 +440,31 @@ if (HIVE_API_KEY) {
     }
   });
   console.log(`   API auth ✓ (Bearer required on: ${PROTECTED_PREFIXES.join(', ')})`);
-  if (HIVE_PUBLIC_DEMO_TOKEN) {
+  if (HIVE_PUBLIC_DEMO_TOKEN && !queenHasPrivateTopics()) {
     console.log(`   Public demo-token ✓ (UI auto-prefills the query box via /api/public-bootstrap)`);
   }
 } else {
   console.log(`   API auth ✗ (open — set HIVE_API_KEY to enable)`);
+}
+
+// v0.9.4 — fail-closed guard: a queen holding private topics with NO auth key
+// would answer strangers with private knowledge. Block /api/query until an auth
+// key is set (better no answers than leaked ones). Registered unconditionally
+// (the auth hook above only exists when HIVE_API_KEY is set). The UI prevents
+// reaching this state, but this guarantees no leak if it's reached anyway.
+if (!HIVE_API_KEY) {
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.method === 'OPTIONS') return;
+    const path = req.url.split('?')[0];
+    if ((path === '/api/query' || path.startsWith('/api/query/')) && queenHasPrivateTopics()) {
+      reply.code(403).send({
+        error: 'This queen subscribes to a private topic but has no auth key. Set one (Settings → API auth key) before it can answer — otherwise private knowledge would be served to anyone.',
+      });
+    }
+  });
+  if (queenHasPrivateTopics()) {
+    console.warn('   ⚠ PRIVATE queen with NO auth key — /api/query is BLOCKED until you set HIVE_API_KEY (Settings → API auth key).');
+  }
 }
 
 await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
@@ -446,7 +476,9 @@ await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 // HIVE_API_KEY (and HIVE_PUBLIC_DEMO_TOKEN with it) to kick everyone off.
 app.get('/api/public-bootstrap', async () => ({
   version: HIVE_VERSION,
-  demoToken: HIVE_PUBLIC_DEMO_TOKEN,
+  // Never hand a demo token to anonymous visitors when this queen holds private
+  // topics — that token would auto-authenticate them into private knowledge.
+  demoToken: queenHasPrivateTopics() ? null : HIVE_PUBLIC_DEMO_TOKEN,
 }));
 
 // ── POST /api/query ────────────────────────────────────────────────────────
@@ -623,6 +655,10 @@ app.get('/api/status', async () => {
     // v0.9 — true when a producer is holding off all swarm joins until configured
     // (privacy gate). Explains peers=0 on a fresh, not-yet-configured node.
     swarm_gated: SWARM_GATED,
+    // v0.9.4 — queen visibility. A queen holding any private topic is 'private'
+    // and must be auth-gated (the UI enforces; /api/query fails closed without a key).
+    queen_has_private: queenHasPrivateTopics(),
+    queen_visibility: queenHasPrivateTopics() ? 'private' : 'public',
     peers: p2pNode.peerCount,
     coreKey: knowledgeStore.coreKey?.toString('hex') ?? null,
     claimsCoreKey: claimRegistry.coreKey?.toString('hex') ?? null,
