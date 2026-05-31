@@ -9,9 +9,10 @@ import {
   isLLMConfigured, validateLLMKey, buildDeclaredSources,
   EMBEDDING_MODEL, EMBEDDING_DIM, CHUNKER_VERSION, SCHEMA_VERSION,
   PUBLIC_TOPIC, topicFromString, topicFromHex,
+  TopicsRegistry,
   type FragmentV08,
 } from '@hive/core';
-import type { PeerMeta, BeeManifest, DeclaredSource } from '@hive/core';
+import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
 import { runAutonomousExtraction } from '@hive/agent';
 
@@ -135,14 +136,16 @@ function buildTopics(): Buffer[] {
     const buf = topicFromHex(topicsConfig.topic_hex);
     if (buf) return [buf];
   }
-  // Public bee: ALWAYS on the commons, plus its named topic as an additive
-  // tag. So a generalist queen (commons-only) discovers every public bee
-  // ("accessible by everyone"), while a specialist queen can subscribe to just
-  // the named topic (e.g. hive-medicine-v0.1) to scope what it replicates.
-  const topics: Buffer[] = [PUBLIC_TOPIC];
+  // Public bee: EXCLUSIVE to its declared topic (v0.9.4 — revises the 0.9.1
+  // additive model). A topic is a specialised knowledge domain ("python",
+  // "medicine") fed by many bees; a queen replicates a topic only if it
+  // subscribes to it. So a named-topic bee joins ONLY that topic, NOT the
+  // commons — otherwise a generalist queen would pull every specialist bee and
+  // "subscribing" would mean nothing. Discovery happens via the Public Topics
+  // Registry, not via the commons. The default (general) bee joins the commons.
   const name = topicsConfig.topic_string;
-  if (name && name !== 'hive-network-v0.1') topics.push(topicFromString(name));
-  return topics;
+  if (name && name !== 'hive-network-v0.1') return [topicFromString(name)];
+  return [PUBLIC_TOPIC];
 }
 
 // Runtime overrides for LLM provider/key (UI-driven), persisted under the data
@@ -320,6 +323,44 @@ if (!SWARM_GATED) {
       );
     }
   }, 60_000).unref();
+}
+
+// ── Public Topics Registry (v0.9, ROADMAP §3) ──────────────────────────────
+// Announce-only discovery swarm, separate from the content swarm above. A
+// PUBLIC producer announces a card for the specialised topic it feeds; queens
+// (and any node) collect cards to browse what public topics exist. A PRIVATE
+// producer never joins → stays invisible. A gated (unconfigured) node doesn't
+// join either, consistent with the privacy gate.
+function summarizeScope(scope?: Record<string, unknown>): string | undefined {
+  if (!scope) return undefined;
+  if (typeof scope.category_tree === 'string') return scope.category_tree;
+  if (Array.isArray(scope.categories)) return (scope.categories as string[]).join(', ');
+  if (Array.isArray(scope.feeds)) return `${(scope.feeds as string[]).length} feed(s)`;
+  if (Array.isArray(scope.domains)) return (scope.domains as string[]).join(', ');
+  return undefined;
+}
+
+const isPrivateProducer = HAS_LOCAL_STORE && topicsConfig?.mode === 'private';
+let topicsRegistry: TopicsRegistry | null = null;
+if (!SWARM_GATED && !isPrivateProducer) {
+  let myCard: TopicCard | null = null;
+  if (HAS_LOCAL_STORE) {
+    // Public producer → announce the topic it feeds.
+    const topicName = topicsConfig?.topic_string || 'hive-network-v0.1';
+    const src = (manifestOverride?.declared_sources ?? buildDeclaredSources())[0];
+    myCard = {
+      topic_name: topicName,
+      topic_hex: topicFromString(topicName).toString('hex'),
+      adapter: src?.id ?? 'wikipedia-en',
+      scope_summary: summarizeScope(src?.scope as Record<string, unknown> | undefined),
+      node_id: identity.nodeId,
+      pubkey: identity.publicKeyHex,
+      updated_at: new Date().toISOString(),
+    };
+  }
+  topicsRegistry = new TopicsRegistry(myCard);
+  await topicsRegistry.start();
+  console.log(`[registry] joined Public Topics Registry${myCard ? ` — announcing "${myCard.topic_name}" (${myCard.adapter})` : ' (browse-only)'}`);
 }
 
 // Hive mode: local bee writes also need to flow into the local queen index.
@@ -980,6 +1021,15 @@ app.get('/api/topics-config', async () => ({
   subscribed_topics: topicsConfig?.subscribed_topics ?? [],
   is_queen: IS_QUEEN,
   is_bee: IS_BEE,
+}));
+
+// ── GET /api/topics-registry — browse public topics announced on the network ──
+// Aggregated from the Public Topics Registry swarm. Private topics never appear
+// (their bees don't announce). A queen's Settings reads this to let the operator
+// subscribe to specialised topics (e.g. "python") beyond the default general one.
+app.get('/api/topics-registry', async () => ({
+  registry_active: !!topicsRegistry,
+  topics: topicsRegistry ? topicsRegistry.topics : [],
 }));
 
 // ── POST /api/topics-config — save topic configuration ────────────────────

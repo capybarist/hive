@@ -2,6 +2,8 @@ export * from './node_identity.js';
 export { KnowledgeStore } from './knowledge_store.js';
 export type { QueryFilter } from './knowledge_store.js';
 export { HiveP2PNode, PUBLIC_TOPIC, topicFromString, topicFromHex } from './p2p_node.js';
+export { TopicsRegistry, REGISTRY_TOPIC } from './topics_registry.js';
+export type { TopicCard, TopicSummary } from './topics_registry.js';
 export { ClaimRegistry } from './claim_registry.js';
 export { PeerRegistry } from './peer_registry.js';
 export type { PeerMeta } from './p2p_node.js';
