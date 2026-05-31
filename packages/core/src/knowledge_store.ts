@@ -292,15 +292,31 @@ export class KnowledgeStore {
       const remoteBee = new Hyperbee(remoteCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
       await remoteBee.ready();
 
-      try {
-        const manifestNode = await remoteBee.get('bee:manifest');
-        if (manifestNode?.value) {
-          const m = manifestNode.value as BeeManifest;
-          this.remoteManifests.set(nodeId, m);
-          const srcs = m.declared_sources?.map((s: any) => s.id).join(', ') ?? '—';
-          console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (schema_v=${m.schema_version ?? '?'}, model=${m.embedding_model ?? '?'})`);
+      // Read the peer's 'bee:manifest' — resiliently. The bee writes it first,
+      // but right after the core opens our local view of its length is usually
+      // still 0 (the peer's length handshake hasn't landed yet), so a one-shot
+      // get returns null and /api/directory stays empty even though fragments
+      // later stream fine (the v0.9 directory bug). Retry in the background,
+      // syncing the length from the peer each time, until the manifest resolves.
+      (async () => {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          try {
+            await remoteCore.update({ wait: true }).catch(() => {});
+            if (remoteCore.length > 0) {
+              const manifestNode = await remoteBee.get('bee:manifest');
+              if (manifestNode?.value) {
+                const m = manifestNode.value as BeeManifest;
+                this.remoteManifests.set(nodeId, m);
+                const srcs = m.declared_sources?.map((s: any) => s.id).join(', ') ?? '—';
+                console.log(`[manifest] ${nodeId.slice(0, 16)} declared: ${srcs} (schema_v=${m.schema_version ?? '?'}, model=${m.embedding_model ?? '?'})`);
+                return;
+              }
+            }
+          } catch { /* keep retrying — manifest may not be replicated yet */ }
+          await new Promise(r => setTimeout(r, 2_000));
         }
-      } catch { /* manifest absent — not fatal */ }
+        console.warn(`[manifest] ${nodeId.slice(0, 16)} — no bee:manifest after retries; /api/directory will omit it`);
+      })();
 
       let buffer: FragmentV08[] = [];
       let lastSeqInBuffer = 0;
