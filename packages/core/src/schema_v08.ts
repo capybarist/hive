@@ -71,5 +71,6 @@ export const DEFAULT_TTL: Record<string, number> = {
   wikipedia: 7 * 24 * 3600,
   rss: 24 * 3600,
   arxiv: 30 * 24 * 3600,
+  pubmed: 90 * 24 * 3600,
   commoncrawl: 30 * 24 * 3600,
 };

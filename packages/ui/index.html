@@ -1638,6 +1638,7 @@ function scoreColor(s) { return s >= .5 ? '#059669' : s >= .3 ? '#d97706' : '#94
 function sourceIcon(source) {
   if (!source) return '📄';
   if (source.includes('arXiv') || source.includes('arxiv')) return '🔬';
+  if (source.includes('pubmed')) return '🧬';
   if (source.includes('.xml') || source.includes('rss') || source.includes('feed')) return '📰';
   if (source.includes('wikipedia')) return '📖';
   return '🌐';
@@ -1813,6 +1814,16 @@ const ADAPTER_CONFIG = {
     scopeType: 'text',
     toScope: v => { const cats = v.split(',').map(s => s.trim()).filter(Boolean); return cats.length ? { categories: cats } : undefined; },
     fromScope: s => (s?.categories ?? []).join(', '),
+  },
+  'pubmed': {
+    label: 'PubMed',
+    scopeField: 'query',
+    scopeLabel: 'Search query',
+    scopeHint: 'PubMed term — supports field tags, e.g. asthma[mesh] AND 2024[pdat]',
+    scopePlaceholder: 'CRISPR gene editing',
+    scopeType: 'text',
+    toScope: v => v.trim() ? { query: v.trim() } : undefined,
+    fromScope: s => s?.query ?? '',
   },
   'rss': {
     label: 'RSS feeds',

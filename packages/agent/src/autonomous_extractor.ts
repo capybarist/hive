@@ -21,6 +21,7 @@ import { BudgetController, type BudgetConfig, DEFAULT_BUDGET } from './budget_co
 import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
 import { arxivSource } from './forager/arxiv_source.js';
+import { pubmedSource } from './forager/pubmed_source.js';
 import { rssSource } from './forager/rss_source.js';
 import { CommonCrawlSource } from './forager/common_crawl_source.js';
 import type { VerbatimFragment } from './forager/source.js';
@@ -50,6 +51,7 @@ export interface ExtractionResult {
 function sourceTypeFor(adapterId: string): string {
   if (adapterId.startsWith('wikipedia')) return 'wikipedia';
   if (adapterId === 'arxiv') return 'arxiv';
+  if (adapterId === 'pubmed') return 'pubmed';
   if (adapterId === 'rss') return 'rss';
   if (adapterId.startsWith('common-crawl')) return 'commoncrawl';
   return 'custom';
@@ -197,6 +199,7 @@ export async function runAutonomousExtraction(
 
   const wikiDecl  = declaredSources.find(s => s.id === 'wikipedia-en');
   const arxivDecl = declaredSources.find(s => s.id === 'arxiv');
+  const pubmedDecl = declaredSources.find(s => s.id === 'pubmed');
   const rssDecl   = declaredSources.find(s => s.id === 'rss');
   const ccDecl    = declaredSources.find(s => s.id === 'common-crawl' || s.id.startsWith('common-crawl-'));
 
@@ -328,6 +331,36 @@ export async function runAutonomousExtraction(
       console.log(`  [arxiv] indexed ${indexed} papers`);
     } catch (e: any) {
       console.warn(`  [arxiv] search failed: ${e.message ?? e}`);
+    }
+  }
+
+  // ── PubMed ───────────────────────────────────────────────────────────────
+  if (pubmedDecl && !budget.exhausted().yes) {
+    // Like arXiv, PubMed is a search corpus: derive a search term from the
+    // claimed partition, the declared scope query, or the objective. The term
+    // is passed through verbatim so operators can use PubMed field tags
+    // (e.g. `asthma[mesh] AND 2024[pdat]`).
+    const pubmedQuery = pubmedDecl.partition
+      ?? (typeof pubmedDecl.scope?.query === 'string' ? pubmedDecl.scope.query as string : undefined)
+      ?? (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+    if (pubmedDecl.partition) console.log(`  [pubmed] Partition claimed: ${pubmedDecl.partition}`);
+    console.log(`\n  [pubmed] seed+fetch("${pubmedQuery}") scope=${JSON.stringify(pubmedDecl.scope ?? {})}`);
+    try {
+      const urls = await pubmedSource.seed({ query: pubmedQuery, limit: 5, scope: pubmedDecl.scope });
+      let indexed = 0;
+      for (const u of urls) {
+        if (budget.exhausted().yes) break;
+        try {
+          const result = await pubmedSource.fetch(u);
+          for (const vf of result.fragments) await onVerbatim(vf, pubmedSource.id, pubmedDecl.partition);
+          indexed += result.fragments.length;
+        } catch (perPaper: any) {
+          console.warn(`  [pubmed] per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
+        }
+      }
+      console.log(`  [pubmed] indexed ${indexed} abstracts`);
+    } catch (e: any) {
+      console.warn(`  [pubmed] search failed: ${e.message ?? e}`);
     }
   }
 

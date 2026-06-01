@@ -44,7 +44,7 @@ not a model forward pass — so one queen can aggregate hundreds of bees.
 
 ```mermaid
 flowchart LR
-    SRC([source<br/>wiki · arxiv · rss])
+    SRC([source<br/>wiki · arxiv · pubmed · rss])
     USER([client / your LLM])
 
     subgraph BEE["🐝 BEE — producer"]
