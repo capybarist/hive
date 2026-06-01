@@ -3,6 +3,49 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.9.4 — Public Topics Registry + exclusive public topics + public-xor-private queen
+
+A topic is now a **specialised knowledge domain** ("python", "medicine") fed by
+many bees, that a queen opts into — not a per-bee tag.
+
+- **Exclusive public topics** (revises 0.9.1 additive): a public bee feeds ONE
+  topic — `general` by default, or a named one. A named-topic bee joins only that
+  topic, not the commons.
+- **Public Topics Registry**: an announce-only Hyperswarm where public bees
+  broadcast a card `{topic_name, hex, adapter, scope, pubkey}`. Any node browses
+  it via `GET /api/topics-registry`; queens subscribe to topics from it. Private
+  bees never announce → invisible. Private topics are symmetric multi-bee shared
+  secrets — paste a hex to join one.
+- **Queen is PUBLIC xor PRIVATE**: any private topic makes it private → auth
+  mandatory. Fail-closed: a private queen with no `HIVE_API_KEY` returns 403 on
+  `/api/query` and its demo token is suppressed. `/api/status` exposes
+  `queen_visibility` + `queen_has_private`.
+- **Fix:** `/api/directory` returned 0 bees even while replication/indexing
+  worked — the manifest read raced the core-length sync; now retries past it.
+- UI: queen registry browse/subscribe + visibility badge; bee paste-to-join.
+
+## v0.9.3 — Privacy gate: unconfigured producers join no swarm
+
+Closes a bridge-leak: a fresh node defaulted onto the public commons and handed
+its fragments core key to commons peers before the operator set it private.
+`SWARM_GATED = HAS_LOCAL_STORE && !OPERATOR_CONFIGURED` now skips `p2pNode.start()`
+entirely for an unconfigured producer — it joins no topic until sources/topic are
+declared and the node restarts. Pure queens are never gated. `HIVE_AUTOSTART=1`
+(set by docker-compose + start.sh) keeps headless deploys running.
+
+## v0.9.1–0.9.2 — first-run gate + role prompt
+
+- **First-run gate:** a fresh node won't extract until configured. `/api/status`
+  exposes `configured`; the web UI forces Settings before anything runs.
+- **Role prompt:** `npx @capybaralabs/hive` asks bee/queen/hive on first run (the
+  one thing the web UI can't change later); `hive bee|queen|hive` skips it.
+
+## v0.9.0 — Settings UI
+
+Operator-facing Settings panel in the node web UI: manifest builder (sources,
+scope, policy, partition), topic config (public/private), LLM provider + key, and
+API auth key — with Save & restart. Replaces the CLI wizard (removed).
+
 ## v0.8.15 — Fix the @capybaralabs/hive npm package (per-package bundles)
 
 `@capybaralabs/hive@0.1.0` crashed on `npx` at `KnowledgeStore.ready()` with
