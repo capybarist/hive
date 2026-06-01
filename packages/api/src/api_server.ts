@@ -1003,7 +1003,7 @@ app.get('/api/manifest', async () => {
 });
 
 // ── POST /api/manifest — save declared sources from Settings UI ──────────────
-const VALID_ADAPTERS = ['wikipedia-en', 'arxiv', 'rss', 'web', 'common-crawl'];
+const VALID_ADAPTERS = ['wikipedia-en', 'arxiv', 'pubmed', 'rss', 'web', 'common-crawl'];
 
 app.post<{ Body: { declared_sources: DeclaredSource[]; replication?: string } }>('/api/manifest', async (req, reply) => {
   if (!HAS_LOCAL_STORE) return reply.code(400).send({ error: 'This node does not produce fragments (queen mode)' });
