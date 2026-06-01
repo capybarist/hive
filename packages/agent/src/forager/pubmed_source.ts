@@ -43,6 +43,30 @@ function withCreds(params: URLSearchParams): URLSearchParams {
   return params;
 }
 
+// NCBI throttles to 3 req/s without an API key, 10/s with one (HTTP 429 over
+// the limit). The extractor fires esearch + N efetch back-to-back per cycle, so
+// without spacing it bursts past 3/s and gets 429'd. A tiny module-global
+// limiter serialises every E-utilities call from this source with a minimum
+// gap. Reserving the slot synchronously (`nextSlot`) keeps concurrent awaiters
+// correctly spaced rather than all reading the same `lastReq`.
+const MIN_GAP_MS = process.env.NCBI_API_KEY ? 120 : 360;
+let nextSlot = 0;
+async function eutilsThrottle(): Promise<void> {
+  const now = Date.now();
+  const at = Math.max(now, nextSlot);
+  nextSlot = at + MIN_GAP_MS;
+  const wait = at - now;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
+/** fetch() wrapper that throttles + surfaces 429 with a clear, retryable error. */
+async function eutilsFetch(url: string): Promise<Response> {
+  await eutilsThrottle();
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (res.status === 429) throw new Error('NCBI rate limit (429) — set NCBI_API_KEY or lower cycle budget');
+  return res;
+}
+
 // PubMed efetch XML leaks HTML entities into text nodes (e.g. a non-breaking
 // space arrives as `&#xa0;` after the XML layer is parsed). Decode them so the
 // embedded/displayed text is clean — same approach as web_source.ts. nbsp is
@@ -167,9 +191,7 @@ export class PubmedSource implements ForagerSource {
       retmax: String(opts.limit ?? 5),
       sort: 'relevance',
     }));
-    const res = await fetch(`${EUTILS}/esearch.fcgi?${params}`, {
-      signal: AbortSignal.timeout(10_000),
-    });
+    const res = await eutilsFetch(`${EUTILS}/esearch.fcgi?${params}`);
     if (!res.ok) throw new Error(`PubMed esearch: HTTP ${res.status}`);
     const json = await res.json() as { esearchresult?: { idlist?: string[] } };
     const pmids = json.esearchresult?.idlist ?? [];
@@ -187,9 +209,7 @@ export class PubmedSource implements ForagerSource {
       rettype: 'abstract',
       retmode: 'xml',
     }));
-    const res = await fetch(`${EUTILS}/efetch.fcgi?${params}`, {
-      signal: AbortSignal.timeout(10_000),
-    });
+    const res = await eutilsFetch(`${EUTILS}/efetch.fcgi?${params}`);
     if (!res.ok) throw new Error(`PubMed efetch: HTTP ${res.status} for PMID ${pmid}`);
     const xml = await res.text();
 
