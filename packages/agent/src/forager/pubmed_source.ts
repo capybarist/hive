@@ -26,6 +26,8 @@ import type {
   SeedOptions,
   VerbatimFragment,
 } from './source.js';
+import { promises as fsp } from 'node:fs';
+import { join as pathJoin } from 'node:path';
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const ABSTRACT_URL_PREFIX = 'https://pubmed.ncbi.nlm.nih.gov/';
@@ -65,6 +67,25 @@ async function eutilsFetch(url: string): Promise<Response> {
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (res.status === 429) throw new Error('NCBI rate limit (429) — set NCBI_API_KEY or lower cycle budget');
   return res;
+}
+
+// ── Pagination cursor ───────────────────────────────────────────────────────
+// sort=date + retmax alone only ever surfaces a term's newest N PMIDs; once
+// those are signed every revisit is "0 new" until new papers publish. To keep
+// ingesting a term's back-catalogue we walk down the result list with retstart,
+// persisting a per-term offset across cycles (and process restarts) in the data
+// dir so progress isn't lost. The offset wraps to 0 once we pass the count.
+const CURSOR_FILE = pathJoin(process.env.HIVE_DATA_DIR || '.', 'pubmed_cursors.json');
+let cursors: Record<string, number> | null = null;
+async function loadCursors(): Promise<Record<string, number>> {
+  if (cursors) return cursors;
+  try { cursors = JSON.parse(await fsp.readFile(CURSOR_FILE, 'utf8')) as Record<string, number>; }
+  catch { cursors = {}; }
+  return cursors;
+}
+async function saveCursors(): Promise<void> {
+  try { await fsp.writeFile(CURSOR_FILE, JSON.stringify(cursors ?? {}), 'utf8'); }
+  catch { /* best-effort: a lost cursor just re-walks from the top next restart */ }
 }
 
 // PubMed efetch XML leaks HTML entities into text nodes (e.g. a non-breaking
@@ -192,18 +213,33 @@ export class PubmedSource implements ForagerSource {
     // top-N PMIDs every cycle forever (all already-signed → "0 new"). Newest-first
     // keeps fresh abstracts arriving as they are published. Override via scope.sort.
     const sort = typeof opts.scope?.sort === 'string' ? (opts.scope.sort as string) : 'date';
+    const limit = opts.limit ?? 5;
+
+    // Resume where this term left off last cycle so we keep pulling fresh PMIDs
+    // instead of replateauing on its newest `limit`.
+    const store = await loadCursors();
+    const retstart = store[term] ?? 0;
 
     const params = withCreds(new URLSearchParams({
       db: 'pubmed',
       term,
       retmode: 'json',
-      retmax: String(opts.limit ?? 5),
+      retmax: String(limit),
+      retstart: String(retstart),
       sort,
     }));
     const res = await eutilsFetch(`${EUTILS}/esearch.fcgi?${params}`);
     if (!res.ok) throw new Error(`PubMed esearch: HTTP ${res.status}`);
-    const json = await res.json() as { esearchresult?: { idlist?: string[] } };
+    const json = await res.json() as { esearchresult?: { idlist?: string[]; count?: string } };
     const pmids = json.esearchresult?.idlist ?? [];
+    const count = Number(json.esearchresult?.count ?? 0);
+
+    // Advance the cursor; wrap to the top once we've walked past the last page
+    // (empty page or next offset ≥ total), so the term re-harvests over time.
+    const next = retstart + limit;
+    store[term] = (pmids.length === 0 || (count > 0 && next >= count)) ? 0 : next;
+    await saveCursors();
+
     return pmids.filter((id) => /^\d+$/.test(id)).map((id) => this.urlFromPmid(id));
   }
 
