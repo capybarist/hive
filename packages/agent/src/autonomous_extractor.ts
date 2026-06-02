@@ -340,9 +340,19 @@ export async function runAutonomousExtraction(
     // claimed partition, the declared scope query, or the objective. The term
     // is passed through verbatim so operators can use PubMed field tags
     // (e.g. `asthma[mesh] AND 2024[pdat]`).
-    const pubmedQuery = pubmedDecl.partition
-      ?? (typeof pubmedDecl.scope?.query === 'string' ? pubmedDecl.scope.query as string : undefined)
-      ?? (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
+    // Rotate one term per cycle (same pattern as the RSS feed picker below) so a
+    // multi-topic bee keeps pulling fresh abstracts across its declared topics
+    // instead of re-querying one fixed term and re-skipping the same top-N every
+    // cycle (which plateaus at "0 new" after the first pass). Falls back to the
+    // single partition/scope.query/objective term when no terms[] is declared.
+    const pubmedTerms = Array.isArray(pubmedDecl.scope?.terms)
+      ? (pubmedDecl.scope!.terms as unknown[]).filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+      : [];
+    const pubmedQuery = pubmedTerms.length > 0
+      ? pubmedTerms[Math.floor(Math.random() * pubmedTerms.length)]!
+      : (pubmedDecl.partition
+        ?? (typeof pubmedDecl.scope?.query === 'string' ? pubmedDecl.scope.query as string : undefined)
+        ?? (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim());
     if (pubmedDecl.partition) console.log(`  [pubmed] Partition claimed: ${pubmedDecl.partition}`);
     console.log(`\n  [pubmed] seed+fetch("${pubmedQuery}") scope=${JSON.stringify(pubmedDecl.scope ?? {})}`);
     try {

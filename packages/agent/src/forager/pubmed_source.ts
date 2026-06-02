@@ -181,15 +181,24 @@ export class PubmedSource implements ForagerSource {
     const scopeTerms = Array.isArray(opts.scope?.terms)
       ? (opts.scope!.terms as unknown[]).filter((t): t is string => typeof t === 'string')
       : [];
-    const term = (scopeQuery ?? scopeTerms[0] ?? opts.query ?? '').trim();
+    // The extractor resolves topic rotation (scope.terms) and passes the chosen
+    // term as opts.query, so it takes precedence here; scopeQuery / scopeTerms[0]
+    // remain the fallback for direct callers that don't pre-resolve a term.
+    const term = (opts.query?.trim() || scopeQuery || scopeTerms[0] || '').trim();
     if (!term) return [];
+
+    // Default to most-recent (sort=date) rather than relevance: a continuously
+    // running bee re-querying a fixed term under sort=relevance gets the same
+    // top-N PMIDs every cycle forever (all already-signed → "0 new"). Newest-first
+    // keeps fresh abstracts arriving as they are published. Override via scope.sort.
+    const sort = typeof opts.scope?.sort === 'string' ? (opts.scope.sort as string) : 'date';
 
     const params = withCreds(new URLSearchParams({
       db: 'pubmed',
       term,
       retmode: 'json',
       retmax: String(opts.limit ?? 5),
-      sort: 'relevance',
+      sort,
     }));
     const res = await eutilsFetch(`${EUTILS}/esearch.fcgi?${params}`);
     if (!res.ok) throw new Error(`PubMed esearch: HTTP ${res.status}`);
