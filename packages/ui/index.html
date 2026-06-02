@@ -780,22 +780,23 @@
         <div id="bee-status-text">Loading extraction state…</div>
       </div>
 
-      <!-- Forager metrics, 2-col grid -->
+      <!-- Headline: how much this bee has produced + a source-aware secondary
+           stat (Queue for frontier crawlers, recent fetch count for search). -->
       <div class="bee-grid-2">
-        <div class="bee-card accent-queue">
-          <div class="bee-card-label"><span class="glyph">📥</span><span>Queue</span></div>
-          <div class="bee-stat-num" id="bee-stat-queue">—</div>
-          <div class="bee-stat-sub">Articles waiting to fetch</div>
-        </div>
         <div class="bee-card accent-visited">
-          <div class="bee-card-label"><span class="glyph">✓</span><span>Visited</span></div>
-          <div class="bee-stat-num" id="bee-stat-visited">—</div>
-          <div class="bee-stat-sub">Articles already fetched</div>
+          <div class="bee-card-label"><span class="glyph">🔏</span><span>Fragments signed</span></div>
+          <div class="bee-stat-num" id="bee-stat-signed">—</div>
+          <div class="bee-stat-sub">Signed into this bee's Hypercore</div>
+        </div>
+        <div class="bee-card accent-queue" id="bee-card-secondary">
+          <div class="bee-card-label"><span class="glyph" id="bee-label-secondary-glyph">📥</span><span id="bee-label-secondary">Queue</span></div>
+          <div class="bee-stat-num" id="bee-stat-secondary">—</div>
+          <div class="bee-stat-sub" id="bee-stat-secondary-sub">Articles waiting to fetch</div>
         </div>
       </div>
 
       <!-- Objective -->
-      <div class="bee-card accent-objective">
+      <div class="bee-card accent-objective" id="bee-objective-card">
         <div class="bee-card-label"><span class="glyph">🎯</span><span>Current objective</span></div>
         <div class="bee-objective" id="bee-objective">—</div>
       </div>
@@ -809,14 +810,14 @@
         <div class="manifest-meta" id="bee-manifest-meta"></div>
       </div>
 
-      <!-- Next-up + recently fetched lists -->
+      <!-- Next-up (frontier crawlers only) + recently signed -->
       <div class="bee-grid-2">
-        <div class="bee-card">
+        <div class="bee-card" id="bee-card-nextup">
           <div class="bee-card-label">Next up</div>
           <div class="bee-list" id="bee-next-list"><div class="bee-list-item" style="color:var(--muted)">—</div></div>
         </div>
-        <div class="bee-card">
-          <div class="bee-card-label">Recently fetched</div>
+        <div class="bee-card" id="bee-card-recent">
+          <div class="bee-card-label" id="bee-recent-label">Recently signed</div>
           <div class="bee-list" id="bee-visited-list"><div class="bee-list-item" style="color:var(--muted)">—</div></div>
         </div>
       </div>
@@ -1420,36 +1421,64 @@ async function loadActivity() {
 // Polls /api/crawl every 8 s and updates the queue/visited counters plus the
 // next-up and recently-fetched title lists. Safe to call on any mode — the
 // DOM nodes only exist when bee-dashboard is rendered (mode=bee); we guard.
+// Kind of this bee's primary declared source ('crawl' frontier vs 'search'),
+// set by loadManifest() from the registry catalogue. Drives the source-aware
+// dashboard (a search bee has no queue/next-up — show what it signed instead).
+let BEE_PRIMARY_KIND = 'crawl';
+
 async function loadCrawl() {
-  const queueEl   = document.getElementById('bee-stat-queue');
-  const visitedEl = document.getElementById('bee-stat-visited');
-  if (!queueEl || !visitedEl) return;
+  const signedEl = document.getElementById('bee-stat-signed');
+  const secEl    = document.getElementById('bee-stat-secondary');
+  if (!signedEl) return;
+  // "Fragments signed" is the Hypercore size from /api/status — always meaningful.
+  signedEl.textContent = (LATEST_STATUS?.local_fragments ?? 0).toLocaleString();
+
+  const renderList = (id, items) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!items || !items.length) {
+      el.innerHTML = '<div class="bee-list-item" style="color:var(--muted)">—</div>';
+      return;
+    }
+    el.innerHTML = '';
+    for (const t of items.slice(0, 10)) {
+      const li = document.createElement('div');
+      li.className = 'bee-list-item';
+      li.title = t;
+      li.textContent = t;
+      el.appendChild(li);
+    }
+  };
+
   try {
     const d = await apiFetch(`${API}/api/crawl`).then(r => r.json());
-    queueEl.textContent = (d.queue_size ?? 0).toLocaleString();
-    visitedEl.textContent = (d.visited_size ?? 0).toLocaleString();
+    const nextCard    = document.getElementById('bee-card-nextup');
+    const recentLabel = document.getElementById('bee-recent-label');
+    const secLabel    = document.getElementById('bee-label-secondary');
+    const secGlyph    = document.getElementById('bee-label-secondary-glyph');
+    const secSub      = document.getElementById('bee-stat-secondary-sub');
 
-    const renderList = (id, items) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (!items || !items.length) {
-        el.innerHTML = '<div class="bee-list-item" style="color:var(--muted)">—</div>';
-        return;
-      }
-      el.innerHTML = '';
-      for (const t of items.slice(0, 10)) {
-        const li = document.createElement('div');
-        li.className = 'bee-list-item';
-        li.title = t;
-        li.textContent = t;
-        el.appendChild(li);
-      }
-    };
-    renderList('bee-next-list',    d.next_in_queue);
-    renderList('bee-visited-list', d.recent_visited);
+    if (BEE_PRIMARY_KIND === 'search') {
+      // No crawl frontier — surface what was just signed instead of an empty queue.
+      if (nextCard) nextCard.style.display = 'none';
+      if (secLabel) secLabel.textContent = 'Fetched recently';
+      if (secGlyph) secGlyph.textContent = '📡';
+      if (secSub) secSub.textContent = 'Documents pulled in recent cycles';
+      if (secEl) secEl.textContent = (d.recent_fetched?.length ?? 0).toLocaleString();
+      if (recentLabel) recentLabel.textContent = 'Recently signed';
+      renderList('bee-visited-list', (d.recent_fetched ?? []).map(e => e.title).filter(Boolean));
+    } else {
+      if (nextCard) nextCard.style.display = '';
+      if (secLabel) secLabel.textContent = 'Queue';
+      if (secGlyph) secGlyph.textContent = '📥';
+      if (secSub) secSub.textContent = 'Articles waiting to fetch';
+      if (secEl) secEl.textContent = (d.queue_size ?? 0).toLocaleString();
+      if (recentLabel) recentLabel.textContent = 'Recently fetched';
+      renderList('bee-next-list',    d.next_in_queue);
+      renderList('bee-visited-list', d.recent_visited);
+    }
   } catch {
-    queueEl.textContent = '—';
-    visitedEl.textContent = '—';
+    if (secEl) secEl.textContent = '—';
   }
 }
 
@@ -1460,6 +1489,7 @@ async function loadManifest() {
   const metaEl    = document.getElementById('bee-manifest-meta');
   if (!sourcesEl) return;
   try {
+    await loadSourceCatalog();   // so we can resolve each source's kind/icon
     const d = await apiFetch(`${API}/api/directory`).then(r => r.json());
     const self = (d.bees ?? []).find(b => b.is_self) ?? (d.bees ?? [])[0];
     if (!self) {
@@ -1467,13 +1497,15 @@ async function loadManifest() {
       return;
     }
     const sources = self.declared_sources ?? [];
+    // Resolve the primary source kind so the dashboard renders the right shape.
+    BEE_PRIMARY_KIND = (sources.length && ADAPTER_CONFIG[sources[0].id]?.kind) || 'crawl';
     if (!sources.length) {
       sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">No sources declared</span>';
       return;
     }
     sourcesEl.innerHTML = sources.map(s => `
       <span class="manifest-tag">
-        ${s.id}
+        ${sourceIcon(s.id)} ${ADAPTER_CONFIG[s.id]?.label ?? s.id}
         <span class="manifest-policy">${s.policy ?? 'drift-ok'}</span>
       </span>`).join('');
     const repl = self.replication ?? 'all';
@@ -1509,7 +1541,12 @@ async function loadNetwork() {
     const peerCount = LATEST_STATUS?.peers ?? 0;
     const indexedTotal = LATEST_STATUS?.indexed ?? 0;
     const peerNodes = nodes.filter(n => n.nodeId !== MY_NODE_ID);
-    const myCount = nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0;
+    // On a bee, the authoritative "how much have I signed" number is the
+    // Hypercore size (local_fragments), not the claim's fragmentCount (which is
+    // the vestigial topic-claim counter and reads 0 for a manifest-driven bee).
+    const myCount = (LATEST_STATUS?.mode === 'bee' && LATEST_STATUS?.local_fragments != null)
+      ? LATEST_STATUS.local_fragments
+      : (nodes.find(n => n.nodeId === MY_NODE_ID)?.count ?? 0);
 
     // Bucket topics by their first slash-separated segment. Topic IDs look
     // like "science/physics/cosmology" → domain "science". Aggregates how
@@ -1637,6 +1674,8 @@ function scoreColor(s) { return s >= .5 ? '#059669' : s >= .3 ? '#d97706' : '#94
 
 function sourceIcon(source) {
   if (!source) return '📄';
+  // Prefer the registry icon (exact adapter id, e.g. 'pubmed', 'wikipedia-en').
+  if (ADAPTER_CONFIG[source]?.icon) return ADAPTER_CONFIG[source].icon;
   if (source.includes('arXiv') || source.includes('arxiv')) return '🔬';
   if (source.includes('pubmed')) return '🧬';
   if (source.includes('.xml') || source.includes('rss') || source.includes('feed')) return '📰';
@@ -1794,7 +1833,10 @@ document.getElementById('clear-btn').addEventListener('click', () => {
 });
 
 // ── Settings panel (v0.9) ────────────────────────────────────────────────────
-const ADAPTER_CONFIG = {
+// Offline fallback only. The live catalogue is built from GET /api/sources
+// (the ForagerRegistry) by loadSourceCatalog() so adding a source needs no UI
+// edit. Kept minimal-but-correct in case /api/sources is briefly unreachable.
+const FALLBACK_ADAPTER_CONFIG = {
   'wikipedia-en': {
     label: 'Wikipedia (English)',
     scopeField: 'category_tree',
@@ -1857,6 +1899,42 @@ const ADAPTER_CONFIG = {
   },
 };
 
+// Build a picker config from a /api/sources descriptor. toScope/fromScope are
+// derived from the scope `input` type (text | csv | lines) so the registry stays
+// the single source of truth — the UI never re-lists adapters or scope shapes.
+function descriptorToConfig(d) {
+  const sc = d.scope;
+  const base = { label: d.displayName, icon: d.icon, kind: d.kind };
+  if (!sc) return { ...base, scopeType: 'none', toScope: () => undefined, fromScope: () => '' };
+  const field = sc.field, alias = sc.aliasField;
+  // Read an array-valued field, tolerating a legacy single-string alias (pubmed
+  // `query` → terms) and a single string stored under the field.
+  const readArr = (s) => Array.isArray(s?.[field]) ? s[field]
+    : (alias && s?.[alias] != null ? [s[alias]] : (s?.[field] != null ? [s[field]] : []));
+  const common = { ...base, scopeField: field, scopeLabel: sc.label, scopeHint: sc.help ?? '', scopePlaceholder: sc.placeholder };
+  if (sc.input === 'csv') return { ...common, scopeType: 'text',
+    toScope: (v) => { const a = v.split(',').map(s => s.trim()).filter(Boolean); return a.length ? { [field]: a } : undefined; },
+    fromScope: (s) => readArr(s).join(', ') };
+  if (sc.input === 'lines') return { ...common, scopeType: 'textarea',
+    toScope: (v) => { const a = v.split('\n').map(s => s.trim()).filter(Boolean); return a.length ? { [field]: a } : undefined; },
+    fromScope: (s) => readArr(s).join('\n') };
+  return { ...common, scopeType: 'text',
+    toScope: (v) => v.trim() ? { [field]: v.trim() } : undefined,
+    fromScope: (s) => (s?.[field] ?? (alias ? s?.[alias] : '') ?? '') };
+}
+
+let ADAPTER_CONFIG = { ...FALLBACK_ADAPTER_CONFIG };
+let _catalogLoaded = false;
+async function loadSourceCatalog() {
+  if (_catalogLoaded) return;
+  try {
+    const r = await apiFetch(`${API}/api/sources`).then((r) => r.json());
+    const built = {};
+    for (const d of (r.sources ?? [])) built[d.id] = descriptorToConfig(d);
+    if (Object.keys(built).length) { ADAPTER_CONFIG = built; _catalogLoaded = true; }
+  } catch { /* keep the offline fallback */ }
+}
+
 let _settingsLoaded = false;
 
 function openSettings() {
@@ -1874,6 +1952,7 @@ function closeSettings() {
 
 async function loadManifestSettings() {
   try {
+    await loadSourceCatalog();   // build the picker from the registry first
     const d = await apiFetch(`${API}/api/manifest`).then(r => r.json());
     if (!d.has_local_store) {
       document.getElementById('settings-manifest-section').classList.add('hidden');

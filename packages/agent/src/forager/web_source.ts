@@ -74,6 +74,24 @@ export class WebSource implements ForagerSource {
   // source of truth for re-verification.
   readonly licence = 'site-defined';
 
+  describe() {
+    return {
+      id: 'web',
+      displayName: this.displayName,
+      icon: '🔗',
+      kind: 'crawl' as const,
+      sourceType: 'custom',
+      defaultLanguages: ['en'],
+      scope: {
+        field: 'domains',
+        label: 'Domains (one per line, optional)',
+        placeholder: 'pubmed.ncbi.nlm.nih.gov',
+        input: 'lines' as const,
+        help: 'Leave empty for unrestricted web crawl',
+      },
+    };
+  }
+
   normalize(url: string): string {
     return url.split('#')[0]!;
   }
@@ -93,6 +111,11 @@ export class WebSource implements ForagerSource {
     } catch {
       return false;
     }
+  }
+
+  /** The generic web isn't partitionable — it has no enumerable scope. */
+  partitions(_scope?: Record<string, unknown>): string[] {
+    return ['*'];
   }
 
   /**

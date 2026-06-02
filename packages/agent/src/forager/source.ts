@@ -51,6 +51,65 @@ export interface VerbatimFragment {
 }
 
 /**
+ * v0.9 — self-describing metadata for the ForagerRegistry.
+ *
+ * One descriptor per adapter is the single source of truth that manifest
+ * validation, the Settings source-picker (UI), source_type/lang derivation and
+ * the source-aware dashboard all derive from — replacing the adapter lists that
+ * used to be hardcoded in five disconnected places (api_server VALID_ADAPTERS,
+ * ui ADAPTER_CONFIG + sourceIcon, extractor sourceTypeFor/langFor + if-ladder,
+ * schema_v08 DEFAULT_TTL key, bee_manifest default). Third-party foragers
+ * become first-class by shipping a descriptor + registering — no core edits.
+ */
+export type ForagerKind =
+  /** seed(query/terms) → fetch; no link frontier (PubMed, arXiv, RSS, Web). */
+  | 'search'
+  /** BFS over a link frontier persisted in CrawlQueue (Wikipedia, Common Crawl). */
+  | 'crawl';
+
+/** How the UI renders a scope field and (de)serialises it to `scope[field]`. */
+export type ScopeInput =
+  | 'text'   // single string  → scope[field] = "value"
+  | 'csv'    // comma list      → scope[field] = ["a","b"]
+  | 'lines'  // one-per-line    → scope[field] = ["a","b"]
+  | 'none';  // adapter takes no operator-provided scope
+
+export interface ForagerScopeSchema {
+  /** Manifest scope key this field writes, e.g. 'terms', 'category_tree'. */
+  field: string;
+  label: string;
+  placeholder: string;
+  input: ScopeInput;
+  help?: string;
+  /** Legacy scope key to also read when displaying (e.g. pubmed 'query' → terms). */
+  aliasField?: string;
+  /**
+   * If true, the extractor rotates ONE entry of this (array) scope field per
+   * cycle and uses it as the seed query — so a multi-entry bee keeps pulling
+   * fresh content across all entries instead of replateauing on one. Used for
+   * pubmed `terms`, rss `feeds`, cc `domains`. False/absent ⇒ the field is a
+   * filter (arxiv `categories`), not a rotated query.
+   */
+  rotates?: boolean;
+}
+
+export interface ForagerDescriptor {
+  id: string;
+  displayName: string;
+  /** Emoji used in the UI source chips / picker. */
+  icon: string;
+  kind: ForagerKind;
+  /** v0.8 fragment `source_type` (also the DEFAULT_TTL key in @hive/core). */
+  sourceType: string;
+  /** Default content languages when the manifest doesn't override. */
+  defaultLanguages: string[];
+  /** How many seed URLs to request per cycle for a `search` source (default 5). */
+  seedLimit?: number;
+  /** Scope-field schema for the Settings picker; null = no operator scope. */
+  scope: ForagerScopeSchema | null;
+}
+
+/**
  * Options for the seed phase — a one-shot search to bootstrap the crawl
  * frontier when the queue is empty.
  */
@@ -90,6 +149,13 @@ export interface ForagerSource {
   readonly displayName: string;
   /** SPDX-like licence string. Tracked per-source so consumers can filter. */
   readonly licence: string;
+
+  /**
+   * v0.9 — self-describing metadata for the ForagerRegistry. Must be pure and
+   * cheap (no I/O): it's called to build manifest validation, the UI picker and
+   * the dashboard. See {@link ForagerDescriptor}.
+   */
+  describe(): ForagerDescriptor;
 
   /**
    * Bootstrap a crawl by turning a search query into a list of URLs this

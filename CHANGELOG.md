@@ -3,6 +3,31 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.9.5 — ForagerRegistry + source-aware dashboard
+
+Sources become first-class: a single **ForagerRegistry** is now the source of
+truth for "what HIVE can extract", so adding a source no longer means editing
+five disconnected places (the cause of the v0.9.4 `pubmed` "Unknown adapter"
+round-trip).
+
+- **ForagerRegistry** (`packages/agent/src/forager/registry.ts`). Every adapter
+  ships a `describe(): ForagerDescriptor` — `id, icon, kind (search|crawl),
+  sourceType, languages, scope schema`. Manifest validation (`VALID_ADAPTERS`),
+  the Settings source-picker, `source_type`/`lang` and the dashboard all derive
+  from it. New `GET /api/sources` exposes the catalogue to the UI.
+- **Settings picker is registry-driven.** The UI builds the source dropdown +
+  scope field from `/api/sources` (no hardcoded `ADAPTER_CONFIG`). **PubMed is
+  now configurable**: a "search terms (one per line)" field → `scope.terms[]`,
+  the bee rotates + paginates across them. Back-compat: a legacy `scope.query`
+  string is read as a single term. Save & Restart round-trips without loss.
+- **Uniform extractor loop.** The per-source `if`-ladder is replaced by one loop
+  that dispatches by descriptor `kind`. Term rotation + `retstart` pagination
+  now apply to every `search` source (arXiv/RSS/Common Crawl inherit them).
+- **Source-aware bee dashboard.** Shows a real **"Fragments signed"** count
+  (`local_fragments`; fixes the "0 frags" bug) and, for `search` sources, a
+  "Recently signed" feed (new `forager_recent.jsonl` activity log) instead of
+  the empty Wikipedia-only Queue/Visited/Next-up cards.
+
 ## v0.9.4 — Public Topics Registry + exclusive public topics + public-xor-private queen
 
 A topic is now a **specialised knowledge domain** ("python", "medicine") fed by

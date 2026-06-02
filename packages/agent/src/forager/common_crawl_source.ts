@@ -136,6 +136,28 @@ export class CommonCrawlSource implements ForagerSource {
     this.id = `common-crawl-${this.snapshot}`;
   }
 
+  describe() {
+    // Canonical family id 'common-crawl' (what manifests/UI use), distinct from
+    // the per-instance snapshot-suffixed `this.id`.
+    return {
+      id: 'common-crawl',
+      displayName: this.displayName,
+      icon: '🌐',
+      kind: 'search' as const,
+      sourceType: 'commoncrawl',
+      defaultLanguages: ['en'],
+      seedLimit: 10,
+      scope: {
+        field: 'domains',
+        label: 'Domains (one per line, optional)',
+        placeholder: 'example.com',
+        input: 'lines' as const,
+        help: 'Leave empty to sample the full Common Crawl index',
+        rotates: true,
+      },
+    };
+  }
+
   normalize(url: string): string {
     try {
       const u = new URL(url);

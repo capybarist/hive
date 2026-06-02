@@ -20,11 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { BudgetController, type BudgetConfig, DEFAULT_BUDGET } from './budget_controller.js';
 import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
-import { arxivSource } from './forager/arxiv_source.js';
-import { pubmedSource } from './forager/pubmed_source.js';
-import { rssSource } from './forager/rss_source.js';
 import { CommonCrawlSource } from './forager/common_crawl_source.js';
-import type { VerbatimFragment } from './forager/source.js';
+import { getForager, describeForager } from './forager/registry.js';
+import type { VerbatimFragment, ForagerDescriptor } from './forager/source.js';
+import { promises as fs } from 'node:fs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = process.env.HIVE_DATA_DIR ?? resolve(__dirname, '../../../data');
@@ -48,20 +47,21 @@ export interface ExtractionResult {
 // source_type + lang + identifiers, so we derive them from the adapter id +
 // the per-fragment hints (arxiv_id, doi). One place that knows the mapping.
 
+// Resolve an adapter id to its registry descriptor. CommonCrawl instances carry
+// a snapshot-suffixed id (common-crawl-CC-MAIN-…) → fall back to the family id.
+function descFor(adapterId: string): ForagerDescriptor | undefined {
+  return describeForager(adapterId)
+    ?? (adapterId.startsWith('common-crawl') ? describeForager('common-crawl') : undefined);
+}
+
 function sourceTypeFor(adapterId: string): string {
-  if (adapterId.startsWith('wikipedia')) return 'wikipedia';
-  if (adapterId === 'arxiv') return 'arxiv';
-  if (adapterId === 'pubmed') return 'pubmed';
-  if (adapterId === 'rss') return 'rss';
-  if (adapterId.startsWith('common-crawl')) return 'commoncrawl';
-  return 'custom';
+  return descFor(adapterId)?.sourceType ?? 'custom';
 }
 
 function langFor(adapterId: string): string {
-  const m = adapterId.match(/-([a-z]{2})$/);
+  const m = adapterId.match(/-([a-z]{2})$/); // e.g. wikipedia-en, wikipedia-es
   if (m) return m[1]!;
-  if (adapterId === 'arxiv') return 'en';
-  return 'en';
+  return descFor(adapterId)?.defaultLanguages?.[0] ?? 'en';
 }
 
 function ttlSecondsFor(sourceType: string): number {
@@ -197,23 +197,30 @@ export async function runAutonomousExtraction(
     ? manifest.declared_sources
     : [{ id: 'wikipedia-en', policy: 'drift-ok' }];
 
-  const wikiDecl  = declaredSources.find(s => s.id === 'wikipedia-en');
-  const arxivDecl = declaredSources.find(s => s.id === 'arxiv');
-  const pubmedDecl = declaredSources.find(s => s.id === 'pubmed');
-  const rssDecl   = declaredSources.find(s => s.id === 'rss');
-  const ccDecl    = declaredSources.find(s => s.id === 'common-crawl' || s.id.startsWith('common-crawl-'));
-
   console.log(`[manifest] Active sources: ${declaredSources.map(s => s.id).join(', ')} (from ${manifest ? 'published manifest' : 'defaults'})`);
 
-  const ccSource = ccDecl ? new CommonCrawlSource({
-    snapshot: (ccDecl.scope?.snapshot as string | undefined) ?? undefined,
-    domains:  Array.isArray(ccDecl.scope?.domains) ? ccDecl.scope!.domains as string[] : [],
-  }) : null;
-
+  // The persistent BFS frontier — only `crawl`-kind sources (Wikipedia) use it.
   const crawlQueue = new CrawlQueue({ dataDir: DATA_DIR });
   await crawlQueue.load();
-  const BATCH_PER_CYCLE = 5;
-  const batchTitles = wikiDecl ? crawlQueue.dequeueBatch(BATCH_PER_CYCLE) : [];
+
+  // Source-agnostic "recently fetched" feed. `crawl` sources expose progress via
+  // the queue/visited counts; `search` sources have no frontier, so the dashboard
+  // reads this capped JSONL tail instead. One entry per fetched document/cycle.
+  const activityFile = resolve(DATA_DIR, 'forager_recent.jsonl');
+  const activityBuf: { ts: string; source: string; title: string; url: string }[] = [];
+  const seenDocs = new Set<string>();
+  const recordActivity = (adapterId: string, vf: VerbatimFragment) => {
+    if (seenDocs.has(vf.source)) return;
+    seenDocs.add(vf.source);
+    activityBuf.push({ ts: new Date().toISOString(), source: sourceTypeFor(adapterId), title: vf.title ?? vf.id, url: vf.source });
+  };
+  const flushActivity = async () => {
+    if (!activityBuf.length) return;
+    let prev: string[] = [];
+    try { prev = (await fs.readFile(activityFile, 'utf8')).split('\n').filter(Boolean); } catch { /* none yet */ }
+    const lines = [...prev, ...activityBuf.map((e) => JSON.stringify(e))].slice(-200);
+    try { await fs.writeFile(activityFile, lines.join('\n') + '\n', 'utf8'); } catch { /* best-effort */ }
+  };
 
   const onVerbatim = async (vf: VerbatimFragment, adapterId: string, partition?: string) => {
     const sourceType = sourceTypeFor(adapterId);
@@ -226,7 +233,10 @@ export async function runAutonomousExtraction(
       const n = await buildAndSaveV08(vf, adapterId, store, identity, partition, onIndexed);
       budget.recordFragments(n);
       fragmentsIndexed += n;
-      if (n > 0) console.log(`  [+] Indexed: ${vf.id} → ${n} chunk${n === 1 ? '' : 's'}`);
+      if (n > 0) {
+        console.log(`  [+] Indexed: ${vf.id} → ${n} chunk${n === 1 ? '' : 's'}`);
+        recordActivity(adapterId, vf);
+      }
     } catch (e: any) {
       console.warn(`[v0.8] Build/save failed for ${vf.id}: ${e?.message ?? e}`);
       errors++;
@@ -236,17 +246,28 @@ export async function runAutonomousExtraction(
   console.log(`\n🤖 Autonomous extractor starting (v0.8 — chunk → embed → sign → append)`);
   console.log(`   Budget: ${budget['cfg'].maxFragments} fragments | ${budget['cfg'].maxMinutes}min`);
 
-  // ── Wikipedia (BFS crawler) ──────────────────────────────────────────────
-  if (wikiDecl) {
-    const partLabel = wikiDecl.partition ?? null;
+  // ── Uniform source loop (v0.9 — ForagerRegistry) ─────────────────────────
+  // Each declared source dispatches by its descriptor `kind`: `crawl` walks the
+  // persistent BFS frontier (Wikipedia); `search` runs seed(query)→fetch with a
+  // descriptor-driven rotation (pubmed terms / rss feeds / cc domains). A new
+  // source only registers a descriptor — no new branch is needed here.
+
+  // Wikipedia BFS frontier crawl.
+  const runFrontierCrawl = async (decl: DeclaredSource): Promise<void> => {
+    // Only the title-based Wikipedia frontier is wired today; other `crawl`
+    // sources (generic web) are dispatch-only with no seedable frontier.
+    if (decl.id !== 'wikipedia-en') return;
+    const partLabel = decl.partition ?? null;
     const partAsTopic = partLabel ? partLabel.replace(/^Category:/i, '') : null;
-    const scopeCat = typeof wikiDecl.scope?.category_tree === 'string'
-      ? (wikiDecl.scope.category_tree as string).replace(/^Category:/i, '')
+    const scopeCat = typeof decl.scope?.category_tree === 'string'
+      ? (decl.scope.category_tree as string).replace(/^Category:/i, '')
       : null;
     const quoted = objective.match(/"([^"]+)"/);
     const seedQuery = partAsTopic ?? scopeCat ?? (quoted ? quoted[1] : objective.slice(0, 60));
     if (partLabel) console.log(`   [wiki] Partition claimed: ${partLabel}`);
 
+    const BATCH_PER_CYCLE = 5;
+    const batchTitles = crawlQueue.dequeueBatch(BATCH_PER_CYCLE);
     if (batchTitles.length === 0) {
       console.log(`   [wiki] Queue empty — seeding via wikipediaSource.seed("${seedQuery}")`);
       let seedTitles: string[] = [];
@@ -265,7 +286,6 @@ export async function runAutonomousExtraction(
         batchTitles.push(bootstrap);
       }
     }
-
     console.log(`   [wiki] Crawl batch: ${batchTitles.length} titles | queue: ${crawlQueue.size()} | visited: ${crawlQueue.visitedSize()}`);
 
     for (const title of batchTitles) {
@@ -278,12 +298,12 @@ export async function runAutonomousExtraction(
       try {
         const url = wikipediaSource.urlFromTitle(title);
         const result = await wikipediaSource.fetch(url);
-        for (const vf of result.fragments) await onVerbatim(vf, wikipediaSource.id, wikiDecl.partition);
+        for (const vf of result.fragments) await onVerbatim(vf, wikipediaSource.id, decl.partition);
         let outboundUrls = result.outboundLinks;
-        if (wikiDecl.policy === 'exclusive' && wikiDecl.partition) {
+        if (decl.policy === 'exclusive' && decl.partition) {
           const before = outboundUrls.length;
           outboundUrls = outboundUrls.filter(u =>
-            wikipediaSource.isInPartition!(u, wikiDecl.scope, wikiDecl.partition!));
+            wikipediaSource.isInPartition!(u, decl.scope, decl.partition!));
           if (before - outboundUrls.length > 0) {
             console.log(`  [wiki] dropped ${before - outboundUrls.length}/${before} out-of-partition links`);
           }
@@ -299,123 +319,80 @@ export async function runAutonomousExtraction(
         console.warn(`  [wiki] failed for "${title}": ${e.message ?? e}`);
       }
     }
-  }
+  };
 
-  // ── arXiv ────────────────────────────────────────────────────────────────
-  const manifestDrivenArxiv = !!arxivDecl;
-  const heuristicArxiv = !manifest && /science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective);
-  if ((manifestDrivenArxiv || heuristicArxiv) && !budget.exhausted().yes) {
-    // arXiv categories belong in the *filter* path (see arxiv_source.seed),
-    // not in the query — joining them into a string ("cs.LG cs.AI") returns
-    // zero papers because no abstract contains that phrase. Always use the
-    // objective (or partition / quoted topic) as the topic query and pass the
-    // scope through so the adapter can build a category filter from it.
-    const arxivQuery = arxivDecl?.partition
-      ? arxivDecl.partition
-      : (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim();
-    if (arxivDecl?.partition) console.log(`  [arxiv] Partition claimed: ${arxivDecl.partition}`);
-    console.log(`\n  [arxiv] seed+fetch("${arxivQuery}") scope=${JSON.stringify(arxivDecl?.scope ?? {})}`);
-    try {
-      const urls = await arxivSource.seed({ query: arxivQuery, limit: 5, scope: arxivDecl?.scope });
-      let indexed = 0;
-      for (const u of urls) {
-        if (budget.exhausted().yes) break;
-        try {
-          const result = await arxivSource.fetch(u);
-          for (const vf of result.fragments) await onVerbatim(vf, arxivSource.id, arxivDecl?.partition);
-          indexed += result.fragments.length;
-        } catch (perPaper: any) {
-          console.warn(`  [arxiv] per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
-        }
-      }
-      console.log(`  [arxiv] indexed ${indexed} papers`);
-    } catch (e: any) {
-      console.warn(`  [arxiv] search failed: ${e.message ?? e}`);
-    }
-  }
+  // seed(query)→fetch for `search` sources (arXiv, PubMed, Common Crawl, RSS).
+  const runSearchSource = async (decl: DeclaredSource, desc: ForagerDescriptor): Promise<void> => {
+    // Common Crawl needs a scope-bound instance (snapshot/domains); the rest use
+    // the registered singleton.
+    const forager = desc.sourceType === 'commoncrawl'
+      ? new CommonCrawlSource({
+          snapshot: (decl.scope?.snapshot as string | undefined) ?? undefined,
+          domains: Array.isArray(decl.scope?.domains) ? decl.scope!.domains as string[] : [],
+        })
+      : getForager(decl.id);
+    if (!forager) { console.warn(`  [${decl.id}] no forager registered — skipping`); return; }
 
-  // ── PubMed ───────────────────────────────────────────────────────────────
-  if (pubmedDecl && !budget.exhausted().yes) {
-    // Like arXiv, PubMed is a search corpus: derive a search term from the
-    // claimed partition, the declared scope query, or the objective. The term
-    // is passed through verbatim so operators can use PubMed field tags
-    // (e.g. `asthma[mesh] AND 2024[pdat]`).
-    // Rotate one term per cycle (same pattern as the RSS feed picker below) so a
-    // multi-topic bee keeps pulling fresh abstracts across its declared topics
-    // instead of re-querying one fixed term and re-skipping the same top-N every
-    // cycle (which plateaus at "0 new" after the first pass). Falls back to the
-    // single partition/scope.query/objective term when no terms[] is declared.
-    const pubmedTerms = Array.isArray(pubmedDecl.scope?.terms)
-      ? (pubmedDecl.scope!.terms as unknown[]).filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+    // This cycle's seed query: rotate one entry of the declared array field if the
+    // descriptor marks it as a rotated query list (pubmed terms / rss feeds / cc
+    // domains); else fall back to partition / scope.query / objective. arXiv's
+    // `categories` are a filter (rotates=false), so they stay in scope, not query.
+    const field = desc.scope?.field;
+    let candidates: string[] = (desc.scope?.rotates && field && Array.isArray(decl.scope?.[field]))
+      ? (decl.scope![field] as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
       : [];
-    const pubmedQuery = pubmedTerms.length > 0
-      ? pubmedTerms[Math.floor(Math.random() * pubmedTerms.length)]!
-      : (pubmedDecl.partition
-        ?? (typeof pubmedDecl.scope?.query === 'string' ? pubmedDecl.scope.query as string : undefined)
-        ?? (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim());
-    if (pubmedDecl.partition) console.log(`  [pubmed] Partition claimed: ${pubmedDecl.partition}`);
-    console.log(`\n  [pubmed] seed+fetch("${pubmedQuery}") scope=${JSON.stringify(pubmedDecl.scope ?? {})}`);
+    // RSS without declared feeds keeps the env/default-feed behaviour.
+    if (desc.sourceType === 'rss' && candidates.length === 0) {
+      const envFeeds = (process.env.HIVE_AUX_RSS_FEEDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      candidates = envFeeds.length ? envFeeds : ['https://feeds.bbci.co.uk/news/world/rss.xml'];
+    }
+    const query = candidates.length
+      ? candidates[Math.floor(Math.random() * candidates.length)]!
+      : (decl.partition
+          ?? (typeof decl.scope?.query === 'string' ? decl.scope.query as string : undefined)
+          ?? (objective.match(/"([^"]+)"/)?.[1] ?? objective.slice(0, 80)).trim());
+
+    if (decl.partition) console.log(`  [${desc.id}] Partition claimed: ${decl.partition}`);
+    console.log(`\n  [${desc.id}] seed+fetch("${query}") scope=${JSON.stringify(decl.scope ?? {})}`);
     try {
-      const urls = await pubmedSource.seed({ query: pubmedQuery, limit: 5, scope: pubmedDecl.scope });
+      const urls = await forager.seed({ query, limit: desc.seedLimit ?? 5, scope: decl.scope });
       let indexed = 0;
       for (const u of urls) {
         if (budget.exhausted().yes) break;
         try {
-          const result = await pubmedSource.fetch(u);
-          for (const vf of result.fragments) await onVerbatim(vf, pubmedSource.id, pubmedDecl.partition);
+          const result = await forager.fetch(u);
+          for (const vf of result.fragments) await onVerbatim(vf, forager.id, decl.partition);
           indexed += result.fragments.length;
-        } catch (perPaper: any) {
-          console.warn(`  [pubmed] per-paper failed ${u}: ${perPaper.message ?? perPaper}`);
+        } catch (perItem: any) {
+          console.warn(`  [${desc.id}] item failed ${u}: ${perItem.message ?? perItem}`);
         }
       }
-      console.log(`  [pubmed] indexed ${indexed} abstracts`);
+      console.log(`  [${desc.id}] fetched ${indexed} fragments`);
     } catch (e: any) {
-      console.warn(`  [pubmed] search failed: ${e.message ?? e}`);
+      console.warn(`  [${desc.id}] search failed: ${e.message ?? e}`);
+    }
+  };
+
+  // Legacy: a bee with NO published manifest could infer arxiv/rss from the
+  // objective keywords. Preserve that by augmenting the declared list.
+  const effectiveSources: DeclaredSource[] = [...declaredSources];
+  if (!manifest) {
+    if (/science|physics|biology|chemistry|astrophysic|mathematic|machine\s*learning|deep\s*learning|artificial\s*intelligence|neural|quantum|cs\.|cosmology/i.test(objective)
+        && !effectiveSources.some(s => s.id === 'arxiv')) {
+      effectiveSources.push({ id: 'arxiv', policy: 'drift-ok' });
+    }
+    if (/current[\s_-]?events|news|today|breaking|headline|politics|election/i.test(objective)
+        && !effectiveSources.some(s => s.id === 'rss')) {
+      effectiveSources.push({ id: 'rss', policy: 'drift-ok' });
     }
   }
 
-  // ── RSS ──────────────────────────────────────────────────────────────────
-  const manifestDrivenRss = !!rssDecl;
-  const heuristicRss = !manifest && /current[\s_-]?events|news|today|breaking|headline|politics|election/i.test(objective);
-  if ((manifestDrivenRss || heuristicRss) && !budget.exhausted().yes) {
-    const declaredFeeds = Array.isArray(rssDecl?.scope?.feeds) ? rssDecl!.scope!.feeds as string[] : [];
-    const envFeeds = (process.env.HIVE_AUX_RSS_FEEDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
-    const defaultFeeds = ['https://feeds.bbci.co.uk/news/world/rss.xml'];
-    const feeds = declaredFeeds.length > 0 ? declaredFeeds : (envFeeds.length > 0 ? envFeeds : defaultFeeds);
-    const feed = feeds[Math.floor(Math.random() * feeds.length)]!;
-    console.log(`\n  [rss] fetch("${feed}")`);
-    try {
-      const result = await rssSource.fetch(feed);
-      for (const vf of result.fragments) await onVerbatim(vf, rssSource.id, rssDecl?.partition);
-      console.log(`  [rss] indexed ${result.fragments.length} items`);
-    } catch (e: any) {
-      console.warn(`  [rss] failed: ${e.message ?? e}`);
-    }
-  }
-
-  // ── Common Crawl ─────────────────────────────────────────────────────────
-  if (ccSource && !budget.exhausted().yes) {
-    const domains = (ccDecl?.scope?.domains as string[] | undefined) ?? [];
-    const snapshot = (ccDecl?.scope?.snapshot as string | undefined) ?? 'env/default';
-    console.log(`\n  [cc] snapshot=${snapshot} domains=${domains.join(',') || '(env)'}`);
-    try {
-      const seedQuery = domains[0] ?? objective.slice(0, 60);
-      const urls = await ccSource.seed({ query: seedQuery, limit: 10 });
-      let indexed = 0;
-      for (const u of urls) {
-        if (budget.exhausted().yes) break;
-        try {
-          const result = await ccSource.fetch(u);
-          for (const vf of result.fragments) await onVerbatim(vf, ccSource.id, ccDecl?.partition);
-          indexed += result.fragments.length;
-        } catch (perPage: any) {
-          console.warn(`  [cc] per-page failed ${u}: ${perPage.message ?? perPage}`);
-        }
-      }
-      console.log(`  [cc] indexed ${indexed} fragments`);
-    } catch (e: any) {
-      console.warn(`  [cc] failed: ${e.message ?? e}`);
-    }
+  for (const decl of effectiveSources) {
+    if (budget.exhausted().yes) break;
+    const desc = descFor(decl.id);
+    if (!desc) { console.warn(`[manifest] Unknown source '${decl.id}' — no forager registered; skipping`); continue; }
+    if (desc.kind === 'crawl') await runFrontierCrawl(decl);
+    else await runSearchSource(decl, desc);
   }
 
   // Read the Hypercore-resident total so the runLoop log carries "I signed X
@@ -434,6 +411,7 @@ export async function runAutonomousExtraction(
   console.log(`\n[done] ${finalSummary}`);
 
   await crawlQueue.flush();
+  await flushActivity();
   if (ownStore) await store.close();
   return { fragmentsIndexed, skippedFresh, errors, totalLocal, summary: finalSummary, budget: budget.summary() };
 }

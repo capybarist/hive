@@ -9,12 +9,12 @@ import {
   isLLMConfigured, validateLLMKey, buildDeclaredSources,
   EMBEDDING_MODEL, EMBEDDING_DIM, CHUNKER_VERSION, SCHEMA_VERSION,
   PUBLIC_TOPIC, topicFromString, topicFromHex,
-  TopicsRegistry,
+  TopicsRegistry, DEFAULT_TTL,
   type FragmentV08,
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
-import { runAutonomousExtraction } from '@hive/agent';
+import { runAutonomousExtraction, validAdapterIds, listDescriptors } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -716,13 +716,25 @@ app.get('/api/crawl', async () => {
     try { return (await fsP.readFile(p, 'utf8')).split('\n').filter(l => l.trim().length > 0).slice(-n).reverse(); }
     catch { return []; }
   }
-  const [queueSize, visitedSize, nextInQueue, recentVisited] = await Promise.all([
+  // v0.9 — source-agnostic activity feed (written by the extractor for every
+  // source). `search` sources have no crawl frontier, so the dashboard renders
+  // "recently signed" from this instead of the Wikipedia-only queue/visited.
+  const recentPath = join(DATA_DIR, 'forager_recent.jsonl');
+  async function tailJson(p: string, n: number): Promise<Array<{ ts: string; source: string; title: string; url: string }>> {
+    try {
+      return (await fsP.readFile(p, 'utf8')).split('\n').filter(l => l.trim().length > 0).slice(-n).reverse()
+        .map(l => { try { return JSON.parse(l); } catch { return null; } })
+        .filter((e): e is { ts: string; source: string; title: string; url: string } => !!e);
+    } catch { return []; }
+  }
+  const [queueSize, visitedSize, nextInQueue, recentVisited, recentFetched] = await Promise.all([
     lineCount(queuePath),
     lineCount(visitedPath),
     headLines(queuePath, 10),
     tailLines(visitedPath, 10),
+    tailJson(recentPath, 12),
   ]);
-  return { queue_size: queueSize, visited_size: visitedSize, next_in_queue: nextInQueue, recent_visited: recentVisited };
+  return { queue_size: queueSize, visited_size: visitedSize, next_in_queue: nextInQueue, recent_visited: recentVisited, recent_fetched: recentFetched };
 });
 
 // ── GET /api/directory — local + remote BeeManifests ────────────────────────
@@ -1002,8 +1014,21 @@ app.get('/api/manifest', async () => {
   };
 });
 
+// ── GET /api/sources — adapter catalogue for the Settings picker ────────────
+// v0.9 — derived from the ForagerRegistry (single source of truth), so adding a
+// source no longer means hand-editing the UI's ADAPTER_CONFIG. The UI builds the
+// source dropdown + scope field (input type) + icons from this, and (de)serialises
+// scope generically by `scope.input` ('text' | 'csv' | 'lines'). TTL is derived
+// from @hive/core's DEFAULT_TTL keyed by the descriptor's sourceType.
+app.get('/api/sources', async () => ({
+  sources: listDescriptors().map(d => ({
+    ...d,
+    defaultTtlSeconds: DEFAULT_TTL[d.sourceType] ?? 3 * 24 * 3600,
+  })),
+}));
+
 // ── POST /api/manifest — save declared sources from Settings UI ──────────────
-const VALID_ADAPTERS = ['wikipedia-en', 'arxiv', 'pubmed', 'rss', 'web', 'common-crawl'];
+const VALID_ADAPTERS = validAdapterIds();
 
 app.post<{ Body: { declared_sources: DeclaredSource[]; replication?: string } }>('/api/manifest', async (req, reply) => {
   if (!HAS_LOCAL_STORE) return reply.code(400).send({ error: 'This node does not produce fragments (queen mode)' });

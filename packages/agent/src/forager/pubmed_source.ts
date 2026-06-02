@@ -135,6 +135,27 @@ export class PubmedSource implements ForagerSource {
   // treat the source URL as the source of truth for re-verification.
   readonly licence = 'NCBI-public-metadata';
 
+  describe() {
+    return {
+      id: 'pubmed',
+      displayName: this.displayName,
+      icon: '🧬',
+      kind: 'search' as const,
+      sourceType: 'pubmed',
+      defaultLanguages: ['en'],
+      seedLimit: 5,
+      scope: {
+        field: 'terms',
+        label: 'Search terms (one per line)',
+        placeholder: 'crispr gene editing',
+        input: 'lines' as const,
+        help: 'Each line is a PubMed query the bee rotates through; supports field tags, e.g. asthma[mesh] AND 2024[pdat]',
+        aliasField: 'query',
+        rotates: true,
+      },
+    };
+  }
+
   /** Extract the numeric PMID from `https://pubmed.ncbi.nlm.nih.gov/12345/`. */
   pmidFromUrl(url: string): string | null {
     const normalised = this.normalize(url);

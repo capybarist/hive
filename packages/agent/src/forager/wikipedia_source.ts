@@ -84,6 +84,24 @@ export class WikipediaSource implements ForagerSource {
   readonly displayName = 'Wikipedia (English)';
   readonly licence = 'CC-BY-SA-4.0';
 
+  describe() {
+    return {
+      id: 'wikipedia-en',
+      displayName: this.displayName,
+      icon: '📚',
+      kind: 'crawl' as const,
+      sourceType: 'wikipedia',
+      defaultLanguages: ['en'],
+      scope: {
+        field: 'category_tree',
+        label: 'Category tree',
+        placeholder: 'Category:Medicine',
+        input: 'text' as const,
+        help: 'e.g. Category:Medicine — leave empty for a general crawl',
+      },
+    };
+  }
+
   /** Title → canonical article URL. Used by the bridge in autonomous_extractor. */
   urlFromTitle(title: string): string {
     return ARTICLE_URL_PREFIX + encodeURIComponent(title.trim().replace(/ /g, '_'));

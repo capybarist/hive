@@ -75,6 +75,25 @@ export class RssSource implements ForagerSource {
   // here; consumers should treat fragments at "publisher-defined" terms.
   readonly licence = 'publisher-defined';
 
+  describe() {
+    return {
+      id: 'rss',
+      displayName: this.displayName,
+      icon: '📰',
+      kind: 'search' as const,
+      sourceType: 'rss',
+      defaultLanguages: ['en'],
+      scope: {
+        field: 'feeds',
+        label: 'Feed URLs (one per line)',
+        placeholder: 'https://feeds.example.com/rss',
+        input: 'lines' as const,
+        help: 'Each line is one RSS/Atom feed URL',
+        rotates: true,
+      },
+    };
+  }
+
   normalize(url: string): string {
     // Strip #fragment but preserve query string — many feed URLs carry
     // meaningful ?param=value identifiers (e.g. RSS feed aggregators).

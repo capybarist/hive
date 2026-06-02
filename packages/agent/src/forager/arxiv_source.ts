@@ -42,6 +42,25 @@ export class ArxivSource implements ForagerSource {
   readonly displayName = 'arXiv';
   readonly licence = 'arXiv-perpetual'; // see https://arxiv.org/help/license
 
+  describe() {
+    return {
+      id: 'arxiv',
+      displayName: this.displayName,
+      icon: '🔬',
+      kind: 'search' as const,
+      sourceType: 'arxiv',
+      defaultLanguages: ['en'],
+      seedLimit: 5,
+      scope: {
+        field: 'categories',
+        label: 'Categories (comma-separated)',
+        placeholder: 'cs.AI, stat.ML',
+        input: 'csv' as const,
+        help: 'e.g. cs.AI, stat.ML — leave empty for all arXiv',
+      },
+    };
+  }
+
   /** Extract arxiv_id from `https://arxiv.org/abs/2501.12345[v2]`. */
   arxivIdFromUrl(url: string): string | null {
     const normalised = this.normalize(url);
