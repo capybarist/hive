@@ -115,11 +115,12 @@ EOF
       > "/tmp/hive_api.log" 2>&1 ) &
   NODE_PID=$!
 
-  # v0.8.14: wait up to 120s, not 30s. A large corestore (a long-lived
-  # Wikipedia bee can hit hundreds of MB) takes well over 30s to open, and the
-  # old 30s cap made the launcher give up and kill a perfectly healthy node
-  # mid-load → infinite restart loop (bee-1, 779 MB, 2026-05-29).
-  for i in $(seq 1 120); do
+  # v0.9.5: wait up to 300s (was 120s). A large corestore (a long-lived
+  # Wikipedia bee hit ~400k fragments) plus a cold e5 ONNX warmup can take
+  # minutes — especially under memory pressure when several nodes warm at once
+  # on a small box. We NEVER kill the node from here (see the hand-off below);
+  # this loop only governs how long we wait before printing the status line.
+  for i in $(seq 1 300); do
     alive "http://127.0.0.1:$PORT/api/status" && break
     sleep 1
   done

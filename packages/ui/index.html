@@ -797,7 +797,7 @@
 
       <!-- Objective -->
       <div class="bee-card accent-objective" id="bee-objective-card">
-        <div class="bee-card-label"><span class="glyph">🎯</span><span>Current objective</span></div>
+        <div class="bee-card-label"><span class="glyph">🎯</span><span>Focus</span></div>
         <div class="bee-objective" id="bee-objective">—</div>
       </div>
 
@@ -1397,7 +1397,9 @@ async function loadActivity() {
         beeStatusText.textContent = 'Idle.';
       }
     }
-    if (beeObjective) beeObjective.textContent = d.objective ?? 'No objective set yet (assigned on next cycle).';
+    // Prefer the manifest-derived focus (e.g. "🧬 PubMed — 15 search terms");
+    // fall back to the raw objective only when no manifest summary is available.
+    if (beeObjective) beeObjective.textContent = BEE_FOCUS_SUMMARY || d.objective || 'No objective set yet (assigned on next cycle).';
     if (beeEventList) {
       if (!events.length) {
         beeEventList.innerHTML = '<div class="bee-list-item" style="color:var(--muted)">No activity yet — first cycle in flight.</div>';
@@ -1425,6 +1427,25 @@ async function loadActivity() {
 // set by loadManifest() from the registry catalogue. Drives the source-aware
 // dashboard (a search bee has no queue/next-up — show what it signed instead).
 let BEE_PRIMARY_KIND = 'crawl';
+
+// A human summary of what this bee is focused on, derived from the manifest
+// (e.g. "🧬 PubMed — 15 search terms"). Replaces the misleading raw
+// HIVE_OBJECTIVE ("current world news") in the objective card for a configured
+// bee. Empty until loadManifest() runs; falls back to the objective then.
+let BEE_FOCUS_SUMMARY = '';
+function focusSummaryFor(src) {
+  const cfg = ADAPTER_CONFIG[src.id] || {};
+  const label = cfg.label ?? src.id;
+  const icon = cfg.icon ? cfg.icon + ' ' : '';
+  const sc = src.scope || {};
+  const field = cfg.scopeField;
+  let detail = '';
+  if (src.partition) detail = src.partition.replace(/^Category:/i, '');
+  else if (field && Array.isArray(sc[field])) detail = `${sc[field].length} ${field}`;
+  else if (field && typeof sc[field] === 'string' && sc[field]) detail = sc[field];
+  else if (typeof sc.query === 'string' && sc.query) detail = sc.query;
+  return `${icon}${label}${detail ? ' — ' + detail : ''}`;
+}
 
 async function loadCrawl() {
   const signedEl = document.getElementById('bee-stat-signed');
@@ -1499,6 +1520,12 @@ async function loadManifest() {
     const sources = self.declared_sources ?? [];
     // Resolve the primary source kind so the dashboard renders the right shape.
     BEE_PRIMARY_KIND = (sources.length && ADAPTER_CONFIG[sources[0].id]?.kind) || 'crawl';
+    // Build the focus summary from the manifest (coherent, vs the raw objective).
+    BEE_FOCUS_SUMMARY = sources.length
+      ? focusSummaryFor(sources[0]) + (sources.length > 1 ? ` +${sources.length - 1} more` : '')
+      : '';
+    const objEl = document.getElementById('bee-objective');
+    if (objEl && BEE_FOCUS_SUMMARY) objEl.textContent = BEE_FOCUS_SUMMARY;
     if (!sources.length) {
       sourcesEl.innerHTML = '<span style="color:var(--muted);font-size:10px">No sources declared</span>';
       return;
