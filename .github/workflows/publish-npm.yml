@@ -1,0 +1,37 @@
+name: Publish npm (@capybaralabs/hive)
+
+# Publishing is deliberate, not per-push: npm versions are immutable, so we
+# publish on a GitHub Release (or manual dispatch), NOT on every commit to main.
+# Bump packages/runtime/package.json version, tag/release, and this ships it.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Install the whole workspace so the runtime build can inline @hive/*.
+      - name: Install workspace
+        run: npm ci || npm install
+
+      # `npm publish` runs the package's prepublishOnly → esbuild bundle.
+      - name: Publish @capybaralabs/hive
+        working-directory: packages/runtime
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## npm publish" >> $GITHUB_STEP_SUMMARY
+          echo "Result: ${{ job.status }} — @capybaralabs/hive @ $(node -p "require('./packages/runtime/package.json').version")" >> $GITHUB_STEP_SUMMARY

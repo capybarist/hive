@@ -1,6 +1,6 @@
 {
   "name": "@hive/agent",
-  "version": "0.9.4",
+  "version": "1.0.0",
   "description": "HIVE knowledge extraction agent",
   "type": "module",
   "main": "./src/index.ts",

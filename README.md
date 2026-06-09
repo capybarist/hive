@@ -233,6 +233,29 @@ bash stop.sh --force     # kill all
 
 ---
 
+## System requirements
+
+Requirements scale with **role** and with **how much you index** — disk is the
+variable that grows. Most self-hosters run **one bee** (or a single `hive` node),
+not a swarm.
+
+| Role | RAM | Disk |
+|---|---|---|
+| **BEE** (extract only) | ~1 GB (Node + e5-base ONNX int8 embedder, in-process) | its own signed Hypercore — grows with what it extracts (a few GB typical) |
+| **QUEEN** (index + serve) | **2–3 GB** — it embeds only the query, but periodic LanceDB compaction briefly spikes RAM | LanceDB index + the replicated bee cores ≈ **~1–2 GB per 100k fragments** |
+| **Typical self-host** (queen + 1 bee, or one `hive` node) | **≥ 4 GB (8 GB comfortable)**; +~1 GB per extra bee | **≥ 25 GB to start**, then ~1–2 GB per 100k fragments indexed |
+
+Notes:
+- Disk is the one to watch: e.g. ~630k fragments ≈ ~5 GB LanceDB index + ~7 GB
+  replicated cores. The queen runs periodic compaction to keep MVCC versions
+  pruned — give it headroom.
+- On a tight box (≤ 4 GB), add **swap** (≥ 2 GB) so the compaction RAM spike
+  doesn't OOM the queen, and prefer **one bee**. Two bees + a queen want ≥ 6 GB.
+- CPU: 2+ cores recommended (compaction is faster with cores to spare); it runs
+  on 1, just slower.
+
+---
+
 ## LLM providers
 
 HIVE uses an LLM in exactly **one place**: query synthesis on the queen. **Bees

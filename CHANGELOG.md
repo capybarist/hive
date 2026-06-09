@@ -3,6 +3,27 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.0.0 — First stable release
+
+HIVE is production-deployed and stable: the all-Node v0.8 engine (bees embed +
+sign inline, queen indexes in LanceDB, P2P via Hypercore) hardened through v0.9
+into a real product — Settings UI, bearer auth + HTTPS, public/private topics,
+the ForagerRegistry with first-party connectors (Wikipedia, arXiv, PubMed, RSS,
+Common Crawl), third-party npm connectors, and distribution via npm + an MCP
+server + a Claude Skill. 1.0 marks the API/protocol/manifest shape as stable.
+
+Consolidates the entries below (optimize/OOM hardening, external forager plugins,
+personal-memory). Notable for operators:
+- **System requirements** are now documented (per bee / per queen / full set +
+  disk estimate) — see README. Disk scales ~1–2 GB per 100k fragments; a tight
+  box wants swap so compaction doesn't OOM the queen.
+- **Personal memory ships as BETA**: the `personal-memory` umbrella + readers
+  (Claude conversations/memory, notes; ChatGPT/shell opt-in) work, but the
+  turnkey private-queen UX is still in progress — run it on a private topic.
+- The passive `web` source is no longer offered in the picker (it indexed
+  nothing autonomously).
+- npm publishing is now a deliberate CI job (`publish-npm.yml`, on release).
+
 ## Unreleased — Personal memory connector v1 (umbrella + "what to include")
 
 Roadmap #2: the operator's own data as a single opt-in connector. Rather than one
