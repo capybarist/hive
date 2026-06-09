@@ -27,26 +27,37 @@ import type { PersonalMemoryReader } from './personal/reader.js';
 import { PERSONAL_SCHEME, parsePersonalUrl } from './personal/reader.js';
 import { claudeConversationsReader } from './personal/claude_conversations_reader.js';
 import { claudeFilesReader } from './personal/claude_files_reader.js';
+import { notesReader } from './personal/notes_reader.js';
+import { chatgptReader } from './personal/chatgpt_reader.js';
+import { shellHistoryReader } from './personal/shell_history_reader.js';
 
 /** Registered readers. Order = display order in the multiselect. */
 const READERS: PersonalMemoryReader[] = [
   claudeConversationsReader,
   claudeFilesReader,
-  // Coming next: gemini, chatgpt-export, obsidian-notes, shell-history, cursor.
+  notesReader,
+  chatgptReader,
+  shellHistoryReader,
+  // Coming next (need format confirmation): gemini, cursor.
 ];
 const BY_ID = new Map<string, PersonalMemoryReader>(READERS.map((r) => [r.id, r]));
+
+// Safe defaults: low-risk readers ON, sensitive ones (shell history can hold
+// secrets; ChatGPT needs an explicit export path) OFF unless ticked.
+const DEFAULT_INCLUDE = ['claude-conversations', 'claude-memory-files', 'notes'];
 
 const TTL_SECONDS = 365 * 24 * 3600;   // personal data is immutable history
 let warnedPrivacy = false;
 
-/** Which readers are enabled for this bee — `scope.include`, or all by default. */
+/** Which readers are enabled — `scope.include`, else the safe default set. */
 function enabledReaders(scope?: Record<string, unknown>): PersonalMemoryReader[] {
   const include = scope?.include;
-  if (Array.isArray(include) && include.length > 0) {
-    const want = new Set(include.filter((x): x is string => typeof x === 'string'));
-    return READERS.filter((r) => want.has(r.id));
-  }
-  return READERS; // none chosen ⇒ everything (a personal queen wants it all)
+  const want = new Set(
+    Array.isArray(include) && include.length > 0
+      ? include.filter((x): x is string => typeof x === 'string')
+      : DEFAULT_INCLUDE,
+  );
+  return READERS.filter((r) => want.has(r.id));
 }
 
 export class PersonalMemorySource implements ForagerSource {
@@ -69,7 +80,7 @@ export class PersonalMemorySource implements ForagerSource {
         input: 'multiselect' as const,
         help: 'Pick which of your local sources to index. Runs PRIVATE only — never put this on a public queen.',
         options: READERS.map((r) => ({ value: r.id, label: r.label, help: r.help })),
-        defaultSelected: READERS.map((r) => r.id),
+        defaultSelected: DEFAULT_INCLUDE,
       },
     };
   }

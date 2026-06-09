@@ -11,11 +11,16 @@ UMBRELLA holding pluggable **readers**; the Settings picker shows ONE entry with
 new **`multiselect` scope** so you tick exactly what to ingest. Indexed like any
 source → queryable through the queen and the MCP.
 
-- v1 readers: **Claude conversations** (`~/.claude/projects/**/*.jsonl` — verbatim
-  user prompts + assistant `text`; `thinking`/tool blocks skipped; one fragment per
-  turn) and **Claude memory files** (the curated `…/memory/*.md`, higher confidence).
-  Override the root with `HIVE_CLAUDE_PROJECTS_DIR`. Adding a provider
-  (Gemini/ChatGPT/Obsidian/shell/Cursor) = one small reader module.
+- v1 readers (each ~one module under `personal/`):
+  - **Claude conversations** — `~/.claude/projects/**/*.jsonl`, verbatim user
+    prompts + assistant `text` (thinking/tool blocks skipped), one fragment/turn.
+  - **Claude memory files** — the curated `…/memory/*.md` (higher confidence).
+  - **Markdown notes** — a notes folder (`HIVE_NOTES_DIR`, recursive `*.md`), e.g. Obsidian.
+  - **ChatGPT export** — `conversations.json` (`HIVE_CHATGPT_EXPORT`); built defensively, not yet validated on a real export.
+  - **Shell history** — `~/.bash_history`/`~/.zsh_history` (`HIVE_SHELL_HISTORY`).
+  - **Safe defaults**: Claude readers + notes ON; shell history (may hold secrets)
+    and ChatGPT (needs an export path) OFF unless ticked. Next, pending format
+    confirmation: Gemini, Cursor.
 - New scope `input: 'multiselect'` (with `options`/`defaultSelected`) end-to-end:
   type in `@hive/agent`, rendered as a checkbox group in the Settings UI, stored as
   `scope.include = [...]`, read by the umbrella's `seed()`. No selection ⇒ all.
