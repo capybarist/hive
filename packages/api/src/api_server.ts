@@ -14,7 +14,7 @@ import {
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
-import { runAutonomousExtraction, validAdapterIds, listDescriptors } from '@hive/agent';
+import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers } from '@hive/agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -65,6 +65,12 @@ const HAS_QUERY_API           = IS_QUEEN || IS_HIVE;
 const HAS_QUEEN_INDEX         = IS_QUEEN || IS_HIVE;   // owns the LanceDB index
 const HAS_REMOTE_REPLICATION  = IS_QUEEN || IS_HIVE;   // downloads peer Hypercores
 const HAS_DASHBOARD_PROXY     = IS_QUEEN;              // proxies /api/crawl to a bee for external dashboards
+
+// v0.9.x — load any third-party ForagerSources named in HIVE_FORAGER_PLUGINS
+// into the registry BEFORE extraction starts (line ~978) and before
+// VALID_ADAPTERS snapshots the id list (~1045), so plugin connectors are
+// first-class from the first cycle. Failures are logged, not fatal.
+await loadExternalForagers();
 
 const DATA_DIR = resolve(process.env.HIVE_DATA_DIR ?? join(__dirname, '../../../data'));
 const IDENTITY_DIR = join(DATA_DIR, 'identity');

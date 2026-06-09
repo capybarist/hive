@@ -3,6 +3,28 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — External forager plugins (load 3rd-party connectors from npm)
+
+The ForagerRegistry (v0.9.5) made connectors first-class internally; this opens
+it to **third-party connectors installed as npm packages**, with no fork of HIVE
+core. List package names in `HIVE_FORAGER_PLUGINS` (comma-separated); at boot
+each is `import()`ed, validated against the `ForagerSource` shape, and pushed
+into the registry via `registerForager()` — after which it flows to
+`/api/sources`, the Settings picker, manifest validation, the dashboard and TTL
+exactly like a built-in (unknown `sourceType`s fall back to a 3-day TTL).
+
+- New `packages/agent/src/forager/plugin_loader.ts` (`loadExternalForagers`,
+  `pluginSpecifiers`), called once at `api_server` boot before extraction starts
+  and before `validAdapterIds()` snapshots. A plugin may export a
+  default/`forager`/`source` `ForagerSource`, several named ones, or a
+  `registerForagers(api)` hook. A failing plugin is logged and skipped — never
+  fatal to boot. Verified end-to-end (load + register + valid-id + graceful
+  failure) via tsx smoke test.
+- **We are not authoring external connectors** — ours stay bundled; this is only
+  the loading mechanism (roadmap focus #1, 2026-06-09).
+- SECURITY: plugins run with the node's full privileges (like any npm dep) and
+  must already be installed in `node_modules`; only list trusted packages.
+
 ## Unreleased — Optimize resilience after restarts + OOM survival ordering
 
 Follow-up to the **2026-06-09** Hetzner re-occurrence of the disk-fill outage.

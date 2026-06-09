@@ -11,3 +11,6 @@ export {
 export type {
   ForagerSource, ForagerDescriptor, ForagerKind, ForagerScopeSchema, ScopeInput,
 } from './forager/source.js';
+// v0.9.x — load third-party ForagerSources from npm (HIVE_FORAGER_PLUGINS).
+export { loadExternalForagers, pluginSpecifiers } from './forager/plugin_loader.js';
+export type { PluginLoadResult } from './forager/plugin_loader.js';
