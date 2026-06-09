@@ -20,8 +20,13 @@ import { arxivSource } from './arxiv_source.js';
 import { pubmedSource } from './pubmed_source.js';
 import { rssSource } from './rss_source.js';
 import { commonCrawlSource } from './common_crawl_source.js';
-import { webSource } from './web_source.js';
 import { personalMemorySource } from './personal_memory_source.js';
+
+// NOTE: `webSource` is intentionally NOT registered. The generic web source is
+// passive (seed() returns [] — it only fetches URLs handed to it by other
+// adapters, and live crawl is non-deterministic so it breaks corroboration).
+// Offering it in the Settings picker was a trap: a bee declaring `web` runs
+// cycles but indexes nothing. Re-add here once a real `web` seeding path exists.
 
 /** The registered forager singletons. Order = display order in the UI picker. */
 const ALL: ForagerSource[] = [
@@ -30,7 +35,6 @@ const ALL: ForagerSource[] = [
   pubmedSource,
   rssSource,
   commonCrawlSource,
-  webSource,
   personalMemorySource,
 ];
 

@@ -1913,16 +1913,7 @@ const FALLBACK_ADAPTER_CONFIG = {
     toScope: v => { const feeds = v.split('\n').map(s => s.trim()).filter(Boolean); return feeds.length ? { feeds } : undefined; },
     fromScope: s => (s?.feeds ?? []).join('\n'),
   },
-  'web': {
-    label: 'Generic web',
-    scopeField: 'domains',
-    scopeLabel: 'Domains (one per line, optional)',
-    scopeHint: 'Leave empty for unrestricted web crawl',
-    scopePlaceholder: 'pubmed.ncbi.nlm.nih.gov',
-    scopeType: 'textarea',
-    toScope: v => { const d = v.split('\n').map(s => s.trim()).filter(Boolean); return d.length ? { domains: d } : undefined; },
-    fromScope: s => (s?.domains ?? []).join('\n'),
-  },
+  // 'web' (Generic web) intentionally omitted — passive/non-seeding, see registry.ts.
   'common-crawl': {
     label: 'Common Crawl',
     scopeField: 'domains',
