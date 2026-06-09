@@ -87,6 +87,12 @@ services:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-1
     restart: unless-stopped
+    # OOM survival ordering on the 3.7 GB box: the queen's periodic LanceDB
+    # compaction briefly spikes RAM; under global memory pressure the kernel
+    # must sacrifice a bee (cheap to restart) before the queen (whose death
+    # stalls compaction → unbounded MVCC versions → disk-fill outage, see the
+    # 2026-06-09 incident). Bees score +500 (killed first); queen scores -900.
+    oom_score_adj: 500
     # v0.7.7.12 — give node time to flush its Hypercore on SIGTERM (launcher
     # forwards). Without this, abrupt kills fork the bee's fragments core.
     stop_grace_period: 40s
@@ -123,6 +129,8 @@ services:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
     restart: unless-stopped
+    # Sacrificed before the queen under memory pressure — see bee-1 note.
+    oom_score_adj: 500
     stop_grace_period: 40s
     environment:
       - HIVE_MODE=bee
@@ -169,6 +177,12 @@ services:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-queen
     restart: unless-stopped
+    # Protect the queen from the OOM killer (last to die). Its LanceDB
+    # compaction spikes RAM on the 3.7 GB box; if the kernel kills the queen
+    # mid-compaction the optimize never completes, MVCC versions accumulate
+    # unbounded and fill the disk (2026-06-09 outage). Bees are sacrificed
+    # first (oom_score_adj: 500). Pair with host swap + bee foraging throttle.
+    oom_score_adj: -900
     stop_grace_period: 40s
     command: ["bash", "queen.sh"]
     networks:

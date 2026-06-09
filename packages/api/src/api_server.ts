@@ -391,13 +391,27 @@ if (IS_HIVE && queenIndex) {
 if (queenIndex) {
   const intervalMs = Number(process.env.HIVE_OPTIMIZE_INTERVAL_MS ?? 30 * 60_000);
   const keepMs = Number(process.env.HIVE_OPTIMIZE_KEEP_MS ?? 60 * 60_000);
-  setInterval(() => {
+  // Startup delay before the FIRST optimize. Queen restarts (deploys, and — on
+  // the RAM-constrained prod box — OOM kills) leave a version backlog that used
+  // to sit unpruned for a full intervalMs; if the queen OOM-died again in that
+  // window the backlog compounded until the disk filled (2026-06-09 outage).
+  // Prune soon after boot so a freshly-restarted queen recovers headroom fast,
+  // staggered past the cold-start model warm so we don't pile onto that RAM peak.
+  const bootDelayMs = Number(process.env.HIVE_OPTIMIZE_BOOT_DELAY_MS ?? 3 * 60_000);
+  let running = false;
+  const runOptimize = () => {
+    if (running) { console.log('[queen] LanceDB optimize skipped (previous run still in flight)'); return; }
+    running = true;
     const t0 = Date.now();
+    console.log('[queen] LanceDB optimize starting…');
     queenIndex.optimize(keepMs)
       .then(() => console.log(`[queen] LanceDB optimize done in ${((Date.now() - t0) / 1000).toFixed(1)}s`))
-      .catch(err => console.warn(`[queen] LanceDB optimize failed: ${err?.message ?? err}`));
-  }, intervalMs).unref();
-  console.log(`   LanceDB optimize loop ✓ (every ${(intervalMs / 60_000).toFixed(0)} min, keep ${(keepMs / 60_000).toFixed(0)} min)`);
+      .catch(err => console.warn(`[queen] LanceDB optimize failed: ${err?.message ?? err}`))
+      .finally(() => { running = false; });
+  };
+  setTimeout(runOptimize, bootDelayMs).unref();
+  setInterval(runOptimize, intervalMs).unref();
+  console.log(`   LanceDB optimize loop ✓ (first run in ${(bootDelayMs / 60_000).toFixed(0)} min, then every ${(intervalMs / 60_000).toFixed(0)} min, keep ${(keepMs / 60_000).toFixed(0)} min)`);
 }
 
 // ── Fastify ─────────────────────────────────────────────────────────────────

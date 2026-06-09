@@ -3,6 +3,33 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — Optimize resilience after restarts + OOM survival ordering
+
+Follow-up to the **2026-06-09** Hetzner re-occurrence of the disk-fill outage.
+Root cause this time was upstream of disk: the 3.7 GB box OOM-killed the queen
+roughly every 30 min (the queen's LanceDB compaction briefly spikes RAM while
+2 bees forage + queries are served). Each kill aborted the in-flight optimize,
+so MVCC versions were never pruned and the disk refilled — the disk-full errors
+were the *symptom*, the OOM loop the *cause*. A one-shot `optimize()` run with
+the bees stopped completed in **16.8 s** (157 fragments → 1; 752 stale versions
++ 6 GB pruned), confirming the compaction code itself is healthy and fast when
+it isn't starved.
+
+**Changes**
+- `api_server.ts`: the optimize loop now runs an initial pass `HIVE_OPTIMIZE_BOOT_DELAY_MS`
+  after boot (default 3 min) instead of waiting a full interval — a queen that
+  just restarted prunes its version backlog promptly rather than risking another
+  OOM death with the backlog still growing. Added a `running` guard (skip if a
+  prior run is still in flight) and an `optimize starting…` log line so the loop
+  is observable (previously you couldn't tell a stalled run from a silent timer).
+- `docker-compose.yml`: `oom_score_adj` on all HIVE nodes — queen `-900` (last
+  to be OOM-killed), bees `+500` (sacrificed first; cheap to restart). Keeps the
+  queen alive through the compaction RAM spike so the optimize completes.
+- Operational (not in image): host swap raised to 4 GB; bee foraging throttled
+  via `HIVE_EXTRACT_INTERVAL_MS`/`BEE2_INTERVAL_MS` (30 s/60 s → 180 s) to shrink
+  the per-cycle compaction working set. The live dataset is ~38 GB for ~632 k
+  rows and still grows — disk capacity is the next ceiling to watch.
+
 ## v0.9.5 — ForagerRegistry + source-aware dashboard
 
 Sources become first-class: a single **ForagerRegistry** is now the source of
