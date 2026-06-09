@@ -69,10 +69,19 @@ export type ForagerKind =
 
 /** How the UI renders a scope field and (de)serialises it to `scope[field]`. */
 export type ScopeInput =
-  | 'text'   // single string  → scope[field] = "value"
-  | 'csv'    // comma list      → scope[field] = ["a","b"]
-  | 'lines'  // one-per-line    → scope[field] = ["a","b"]
-  | 'none';  // adapter takes no operator-provided scope
+  | 'text'        // single string  → scope[field] = "value"
+  | 'csv'         // comma list      → scope[field] = ["a","b"]
+  | 'lines'       // one-per-line    → scope[field] = ["a","b"]
+  | 'multiselect' // checkbox list from `options` → scope[field] = ["a","b"] (chosen)
+  | 'none';       // adapter takes no operator-provided scope
+
+/** One choice in a `multiselect` scope field. */
+export interface ScopeOption {
+  value: string;
+  label: string;
+  /** Optional hint shown under the choice (e.g. where the data is read from). */
+  help?: string;
+}
 
 export interface ForagerScopeSchema {
   /** Manifest scope key this field writes, e.g. 'terms', 'category_tree'. */
@@ -81,6 +90,10 @@ export interface ForagerScopeSchema {
   placeholder: string;
   input: ScopeInput;
   help?: string;
+  /** Choices for `input: 'multiselect'`. Ignored otherwise. */
+  options?: ScopeOption[];
+  /** Default selection for `multiselect` when the manifest doesn't set the field. */
+  defaultSelected?: string[];
   /** Legacy scope key to also read when displaying (e.g. pubmed 'query' → terms). */
   aliasField?: string;
   /**

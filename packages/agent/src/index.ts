@@ -9,7 +9,7 @@ export {
   listDescriptors, validAdapterIds, describeForager,
 } from './forager/registry.js';
 export type {
-  ForagerSource, ForagerDescriptor, ForagerKind, ForagerScopeSchema, ScopeInput,
+  ForagerSource, ForagerDescriptor, ForagerKind, ForagerScopeSchema, ScopeInput, ScopeOption,
 } from './forager/source.js';
 // v0.9.x — load third-party ForagerSources from npm (HIVE_FORAGER_PLUGINS).
 export { loadExternalForagers, pluginSpecifiers } from './forager/plugin_loader.js';

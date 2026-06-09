@@ -73,5 +73,5 @@ export const DEFAULT_TTL: Record<string, number> = {
   arxiv: 30 * 24 * 3600,
   pubmed: 90 * 24 * 3600,
   commoncrawl: 30 * 24 * 3600,
-  'claude-memory': 365 * 24 * 3600,   // personal conversations are immutable history
+  'personal-memory': 365 * 24 * 3600,   // personal data (Claude/notes/…) is immutable history
 };

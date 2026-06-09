@@ -523,6 +523,15 @@
     .source-scope-input:focus, .source-scope-textarea:focus { outline: none; border-color: var(--accent); }
     .source-scope-textarea { resize: vertical; min-height: 64px; }
     .source-scope-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .source-scope-multi { display: flex; flex-direction: column; gap: 7px; }
+    .source-scope-check {
+      display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px;
+      padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+      background: var(--bg); cursor: pointer; font-size: 13px;
+    }
+    .source-scope-check input { grid-row: span 2; }
+    .source-scope-check-label { font-weight: 500; }
+    .source-scope-opt-hint { grid-column: 2; font-size: 10px; color: var(--muted); line-height: 1.3; }
     .source-partition-row {
       display: flex; align-items: center; gap: 8px; margin-top: 10px;
     }
@@ -1945,6 +1954,14 @@ function descriptorToConfig(d) {
   if (sc.input === 'lines') return { ...common, scopeType: 'textarea',
     toScope: (v) => { const a = v.split('\n').map(s => s.trim()).filter(Boolean); return a.length ? { [field]: a } : undefined; },
     fromScope: (s) => readArr(s).join('\n') };
+  if (sc.input === 'multiselect') {
+    const opts = sc.options ?? [];
+    const def = sc.defaultSelected ?? opts.map(o => o.value);
+    return { ...common, scopeType: 'multiselect', scopeOptions: opts, scopeDefault: def,
+      // toScope receives the checked array (see readSourceRows).
+      toScope: (arr) => Array.isArray(arr) && arr.length ? { [field]: arr } : undefined,
+      fromScope: (s) => Array.isArray(s?.[field]) ? s[field] : def };
+  }
   return { ...common, scopeType: 'text',
     toScope: (v) => v.trim() ? { [field]: v.trim() } : undefined,
     fromScope: (s) => (s?.[field] ?? (alias ? s?.[alias] : '') ?? '') };
@@ -2047,6 +2064,19 @@ function addSourceRow(src) {
 
 function buildScopeFieldHtml(adapterId, value) {
   const cfg = ADAPTER_CONFIG[adapterId] ?? ADAPTER_CONFIG['wikipedia-en'];
+  if (cfg.scopeType === 'multiselect') {
+    const selected = new Set(Array.isArray(value) && value.length ? value : (cfg.scopeDefault ?? []));
+    const boxes = (cfg.scopeOptions ?? []).map(o => `
+        <label class="source-scope-check">
+          <input type="checkbox" data-field="scope-multi" value="${escHtml(o.value)}"${selected.has(o.value) ? ' checked' : ''}>
+          <span class="source-scope-check-label">${escHtml(o.label)}</span>
+          ${o.help ? `<span class="source-scope-opt-hint">${escHtml(o.help)}</span>` : ''}
+        </label>`).join('');
+    return `
+      <label class="source-scope-label">${cfg.scopeLabel}</label>
+      <div class="source-scope-multi">${boxes}</div>
+      <div class="source-scope-hint">${cfg.scopeHint}</div>`;
+  }
   const escaped = escHtml(value ?? '');
   if (cfg.scopeType === 'textarea') {
     return `
@@ -2067,7 +2097,8 @@ function onAdapterChange(select) {
   const adapterId = select.value;
   const scopeArea = row.querySelector('[data-field="scope-area"]');
   scopeArea.innerHTML = buildScopeFieldHtml(adapterId, '');
-  scopeArea.querySelector('[data-field="scope-value"]')?.addEventListener('input', updateManifestPreview);
+  scopeArea.querySelectorAll('[data-field="scope-value"], [data-field="scope-multi"]')
+    .forEach(el => el.addEventListener('input', updateManifestPreview));
   updateManifestPreview();
 }
 
@@ -2082,10 +2113,16 @@ function readSourceRows() {
   return Array.from(rows).map(row => {
     const adapter = row.querySelector('[data-field="adapter"]').value;
     const policy = row.querySelector('[data-field="policy"]').value;
-    const scopeRaw = row.querySelector('[data-field="scope-value"]')?.value ?? '';
     const partition = row.querySelector('[data-field="partition"]')?.value.trim();
     const cfg = ADAPTER_CONFIG[adapter] ?? ADAPTER_CONFIG['wikipedia-en'];
-    const scope = cfg.toScope(scopeRaw);
+    let scope;
+    if (cfg.scopeType === 'multiselect') {
+      const checked = Array.from(row.querySelectorAll('[data-field="scope-multi"]:checked')).map(c => c.value);
+      scope = cfg.toScope(checked);
+    } else {
+      const scopeRaw = row.querySelector('[data-field="scope-value"]')?.value ?? '';
+      scope = cfg.toScope(scopeRaw);
+    }
     const src = { id: adapter, policy };
     if (scope) src.scope = scope;
     if (partition) src.partition = partition;

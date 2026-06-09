@@ -21,7 +21,7 @@ import { pubmedSource } from './pubmed_source.js';
 import { rssSource } from './rss_source.js';
 import { commonCrawlSource } from './common_crawl_source.js';
 import { webSource } from './web_source.js';
-import { claudeMemorySource } from './claude_memory_source.js';
+import { personalMemorySource } from './personal_memory_source.js';
 
 /** The registered forager singletons. Order = display order in the UI picker. */
 const ALL: ForagerSource[] = [
@@ -31,7 +31,7 @@ const ALL: ForagerSource[] = [
   rssSource,
   commonCrawlSource,
   webSource,
-  claudeMemorySource,
+  personalMemorySource,
 ];
 
 // Keyed by the *canonical* descriptor id (e.g. 'common-crawl'), which is what

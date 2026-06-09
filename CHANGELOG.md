@@ -3,26 +3,30 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased — Personal memory connector v1 (Claude conversations)
+## Unreleased — Personal memory connector v1 (umbrella + "what to include")
 
-First "personal memory" source (roadmap #2, v1 = Claude only): a `ClaudeMemorySource`
-ForagerSource that reads local Claude Code transcripts (`~/.claude/projects/<proj>/
-<session>.jsonl`, override with `HIVE_CLAUDE_PROJECTS_DIR`) and emits the verbatim
-user prompts + assistant `text` answers as fragments — `thinking`/`tool_use`/
-`tool_result` blocks are skipped. Indexed like any source, so the conversations
-become queryable through the queen and the MCP.
+Roadmap #2: the operator's own data as a single opt-in connector. Rather than one
+source per provider, `PersonalMemorySource` (id `personal-memory`, 🧠) is an
+UMBRELLA holding pluggable **readers**; the Settings picker shows ONE entry with a
+new **`multiselect` scope** so you tick exactly what to ingest. Indexed like any
+source → queryable through the queen and the MCP.
 
-- New `packages/agent/src/forager/claude_memory_source.ts`, registered in the
-  ForagerRegistry (id `claude-memory`, 🧠, `sourceType: claude-memory`, 365-day
-  TTL). One fragment per turn, deterministic id `claude_<sessionId>_m<seq>`,
-  `claude-session://<project>/<sessionId>#m<seq>` URL.
+- v1 readers: **Claude conversations** (`~/.claude/projects/**/*.jsonl` — verbatim
+  user prompts + assistant `text`; `thinking`/tool blocks skipped; one fragment per
+  turn) and **Claude memory files** (the curated `…/memory/*.md`, higher confidence).
+  Override the root with `HIVE_CLAUDE_PROJECTS_DIR`. Adding a provider
+  (Gemini/ChatGPT/Obsidian/shell/Cursor) = one small reader module.
+- New scope `input: 'multiselect'` (with `options`/`defaultSelected`) end-to-end:
+  type in `@hive/agent`, rendered as a checkbox group in the Settings UI, stored as
+  `scope.include = [...]`, read by the umbrella's `seed()`. No selection ⇒ all.
+- URL namespace `personal://<readerId>/<path>`; the umbrella dispatches `fetch` to
+  the owning reader. `sourceType: personal-memory`, 365-day TTL.
 - PRIVACY: ingests personal data — a bee declaring it **must** run on a private
-  queen/topic (never the public commons). The source only reads local files and
-  logs a one-time warning; visibility is the manifest's responsibility (v0.9.3
-  privacy gate + v0.9.4 private topics). In Docker, bind-mount `~/.claude/projects`
-  and set `HIVE_CLAUDE_PROJECTS_DIR`; npx/local installs see it directly.
-- Verified end-to-end against real local transcripts (seed enumerates sessions,
-  fetch parses turns into clean verbatim fragments).
+  queen/topic (never the public commons). Readers only read local files and log a
+  one-time warning; visibility is the manifest's responsibility (v0.9.3 privacy
+  gate + v0.9.4 private topics). In Docker, bind-mount `~/.claude/projects`.
+- Verified end-to-end against real local data (multiselect filtering, per-reader
+  seed fan-out, fetch dispatch to both Claude readers).
 
 ## Unreleased — External forager plugins (load 3rd-party connectors from npm)
 

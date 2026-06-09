@@ -225,13 +225,13 @@ runs for other HIVEs; no new mental model.
 - **Out of scope for v1:** OS-level screen recording, OCR snapshots, clipboard
   watching. Revisit if the basic version proves valuable.
 
-**Status.** 🟡 v1 shipped — `ClaudeMemorySource` (`claude-memory`) indexes local
-Claude Code transcripts (user prompts + assistant text; `thinking`/tool blocks
-skipped) and is queryable via the MCP ([14](#14--mcp-server)), which it relies
-on. Conversations only for v1 (notes/shell history/other tools deferred). The
-turnkey private-personal-queen UX (one-command launch, bind-mount, private topic
-by default) is the remaining work; today it requires manual private-bee config.
-MUST run private — the connector reads personal data and warns, but visibility
+**Status.** 🟡 v1 shipped — `PersonalMemorySource` (`personal-memory`), an umbrella
+with pluggable readers and a `multiselect` "what to include" scope in the Settings
+UI. v1 readers: Claude conversations + Claude memory files; queryable via the MCP
+([14](#14--mcp-server)). More readers (Gemini, ChatGPT export, Obsidian notes,
+shell history, Cursor) are one small module each. Remaining: those extra readers,
+plus the turnkey private-queen UX (one-command launch, bind-mount, private-by-
+default). MUST run private — readers only read local files and warn, but visibility
 is the manifest's call ([02](#02--private-swarm), v0.9.3/9.4).
 
 `personal RAG` · `cross-session memory` · `local-only` · `user-signed`
