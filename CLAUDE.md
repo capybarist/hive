@@ -44,13 +44,37 @@ the obligation to update the docs.
 
 ---
 
-## Current state — v0.8.0 (all-Node, producer-side vectorization)
+## Current state — v0.9.5 (productised on the v0.8 all-Node core)
 
-v0.8 landed the unified migration as one coordinated breaking change.
-Full plan + cutover runbook: [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md);
-per-version summary in CHANGELOG.
+The **v0.8 architecture below is still the engine** (all-Node, producer-side
+vectorization, LanceDB, schema v2) — v0.9 layered productisation on top without
+changing it. Per-version detail in CHANGELOG; v0.8 cutover runbook in
+[`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
 
-What v0.8 is, in one screen:
+What v0.9 added on top of v0.8 (all SHIPPED):
+- **Distribution**: published to npm — `@capybaralabs/hive` (full node via
+  `npx`, per-package esbuild bundles, v0.8.15) and `@capybaralabs/hive-mcp`
+  (MCP server: `hive_query` returns raw fragments, `hive_list_sources`). Claude
+  Skill at `skills/hive-research/`.
+- **Auth + HTTPS**: optional bearer-token gate on write/expensive `/api/*`
+  (v0.8.7–8.12, read-only metadata stays public); HTTPS via Caddy + sslip.io
+  with no domain needed (v0.8.13, direct host ports dropped).
+- **Settings UI** (v0.9.0): operator panel — graphical manifest builder
+  (sources/scope/policy), role prompt, first-run gate (v0.9.1–9.2; an
+  unconfigured node won't extract or join any swarm — privacy gate, v0.9.3).
+- **Topics** (v0.9.4): a topic = a specialised knowledge domain; Public Topics
+  Registry for discovery; a queen is public-XOR-private.
+- **ForagerRegistry** (v0.9.5): single source of truth for "what HIVE can
+  extract" — adding a connector no longer means editing 5 disconnected places.
+  Connectors: `wikipedia-en`, `arxiv`, `rss`, `common-crawl`, `pubmed` (NCBI
+  E-utilities). Generic `web` is passive by design (non-deterministic crawl
+  breaks corroboration). Specialized connectors first; Common Crawl is the
+  arbitrary-domain backup.
+- **Ops** (queen): periodic LanceDB `optimize()` compaction loop with a
+  post-boot first run + OOM-survival ordering (`oom_score_adj`) — see the
+  2026-06-09 disk/RAM incident in CHANGELOG.
+
+What v0.8 is (the still-current engine), in one screen:
 - **Bees embed; the queen does not.** Each bee chunks deterministically,
   embeds every chunk with `intfloat/multilingual-e5-base` (ONNX int8, 768-d)
   in-process, and **signs the vector inline** in its Hypercore fragment
@@ -91,7 +115,7 @@ Key files:
 
 ---
 
-## v0.7.6 — opt-in scope partitions for multi-bee coordination (still current)
+## Feature reference — opt-in scope partitions for multi-bee coordination (since v0.7.6, still in effect)
 
 ### v0.7.6 — Scope partitions
 Adds an opt-in `partition` field per declared source so multiple bees on

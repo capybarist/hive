@@ -131,20 +131,21 @@ know — a legacy ERP, an in-house REST API, a proprietary archive, a vertical
 data feed.
 
 **How it works.** Implement the `ForagerSource` interface (`seed` / `fetch` /
-`normalize` / `owns`), publish as an npm package, and add the id to the BEE's
-manifest. On next start the forager picks it up, drains its queue mechanically
-and signs every emitted fragment. No fork of HIVE core, no central registry to
-update — the connector lives in the customer's repo and ships as a normal
-dependency.
+`normalize` / `owns`) and register it in the **ForagerRegistry** (v0.9.5, the
+single source of truth for connectors); the forager picks it up by manifest id,
+drains its queue mechanically and signs every emitted fragment.
 
-**Why HIVE.** The same plugin contract that powers the built-in adapters
-(Wikipedia, arXiv, RSS, CommonCrawl, Web) is the customer-facing extension
-point. No tier of "approved partners" to negotiate with.
+**Why HIVE.** The same plugin contract powers the built-in adapters
+(Wikipedia, arXiv, RSS, CommonCrawl, PubMed). No tier of "approved partners".
 
-**Status.** 🟢 Production today. *Also enables [08](#08--personal-context-memory),
+**Status.** 🟡 In-repo connectors are production via the ForagerRegistry
+(v0.9.5). Loading **external, npm-installed** `ForagerSource`s at runtime
+without forking is the next step (roadmap focus #1, 2026-06-09) — the registry
+is the hook, the dynamic-import + manifest-resolution path is what's missing.
+*Underpins [08](#08--personal-context-memory),
 [10](#10--team--organisational-knowledge), [11](#11--per-project-codebase-context).*
 
-`ForagerSource` · `npm package` · `BeeManifest.sources` · `no fork`
+`ForagerSource` · `ForagerRegistry` · `BeeManifest.sources` · `no fork`
 
 ---
 
@@ -393,10 +394,12 @@ between queens that are intentionally isolated by topic / encryption key).
 A user who wants to consult *someone else's* queen without replicating
 just points the MCP server at that queen's URL.
 
-**Status.** 🔴 First package in the v0.9 productisation push. See
-[ROADMAP.md §4](./ROADMAP.md#4-mcp--agents-integration-the-productization).
+**Status.** 🟢 Shipped — `@capybaralabs/hive-mcp` published to npm. Exposes
+`hive_query` (returns raw fragments; synthesis is left to the host LLM by
+design) and `hive_list_sources`. Single-queen by design (no client-side
+cross-queen federation). Validated end-to-end against the Hetzner queen.
 
-`@capybaralabs/hive-mcp` · `stdio + SSE` · `slim client` · `universal LLM host`
+`@capybaralabs/hive-mcp` · `stdio` · `slim client` · `universal LLM host`
 
 ---
 
@@ -444,8 +447,9 @@ out-of-the-box behaviour.
 delivers integration with the entire MCP ecosystem — OpenClaw, Claude
 Desktop, Cursor, Goose, Continue — without per-host effort.
 
-**Status.** 🔴 Falls out of [14](#14--mcp-server) automatically. Publishing
-the OpenClaw skill is a small follow-up.
+**Status.** 🟡 The MCP server ([14](#14--mcp-server)) it relies on is now
+published, so OpenClaw/`mcporter` can discover and use HIVE today. Publishing a
+dedicated OpenClaw skill bundle is a small remaining follow-up.
 
 `OpenClaw` · `mcporter` · `zero-extra-code reach` · `tool palette`
 

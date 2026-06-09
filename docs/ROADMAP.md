@@ -1,7 +1,9 @@
 # HIVE — Roadmap
 
-> Last revised: 2026-05-28, post v0.8.2 deploy. Source of truth for "what's
-> next". Update this file when items move between sections.
+> Last revised: 2026-06-09, post v0.9.5 + the disk/RAM incident hardening.
+> Source of truth for "what's next". Update this file when items move between
+> sections. Per-version detail lives in CHANGELOG; many items in sections 1–8
+> below have since shipped — CHANGELOG is authoritative on what's done.
 
 Section conventions: each item starts with **why** (the problem) and ends with
 the **shape** of the work (what we'd actually build).
@@ -10,26 +12,39 @@ the **shape** of the work (what we'd actually build).
 
 ## 0. Where we are
 
-**v0.8.2 is live on Hetzner.** Bee-1 (Wikipedia generalist) and bee-2 (arXiv
-ML specialist) produce signed fragments with the vector inline; the queen
-replicates both cores, verifies signatures, upserts pre-computed vectors into
-LanceDB, embeds only the query, gates with the recalibrated 0.82 threshold,
-and synthesises with the LLM. No Python, no Qdrant, no topic_tree.
+**v0.9.5 is live on Hetzner** (queen + bee-1 Wikipedia + bee-2 PubMed/news).
+The v0.8 all-Node engine is unchanged underneath: bees embed (e5-base ONNX) and
+sign vectors inline, the queen replicates, verifies, upserts into LanceDB,
+embeds only the query, gates at 0.82, synthesises with the LLM. v0.9 layered
+productisation on top — all **shipped**:
 
-Recently shipped (since v0.7.7.12):
+- **Distribution**: `@capybaralabs/hive` (npm, `npx`) + `@capybaralabs/hive-mcp`
+  (MCP server) + Claude Skill (`skills/hive-research/`).
+- **Auth + HTTPS**: bearer-token gate on write/expensive `/api/*`; Caddy +
+  sslip.io HTTPS without a domain.
+- **Settings UI** (v0.9.0): graphical manifest builder, first-run + privacy
+  gate. **Topics** (v0.9.4): public/private topics + discovery registry.
+- **ForagerRegistry** (v0.9.5): one source of truth for connectors —
+  `wikipedia-en`, `arxiv`, `rss`, `common-crawl`, `pubmed`.
+- **Ops hardening** (2026-06-09): periodic LanceDB optimize with a post-boot
+  first run + `oom_score_adj` survival ordering, after the RAM-driven disk-fill
+  recurrence (see CHANGELOG).
 
-- **v0.8.0** — All-Node stack, e5-base ONNX in-process embedder, LanceDB,
-  Fragment schema v2 with the vector inside the signed payload, deterministic
-  chunking, recalibrated retrieval gate.
-- **v0.8.1** — Queen UI brand (HiveLogo), peering self-heal that refreshes
-  Hyperswarm discovery when `peerCount=0`, README rewritten with a single
-  clearer diagram.
-- **v0.8.2** — `topic_tree.json` removed (1842 LoC of v0.6 taxonomy gone).
-  Bees seed their crawl from the manifest's partition → scope → objective →
-  adapter default.
-- **multi-bee in prod** — bee-2 added as an arXiv ML specialist with an
-  intentionally non-overlapping manifest, exercising the partition/scope path
-  end-to-end.
+---
+
+## 0b. Current focus (next 3, agreed 2026-06-09)
+
+1. **Pluggable external connectors via npm.** HIVE loads 3rd-party
+   `ForagerSource`s installed as npm packages; ours stay bundled. Natural
+   extension of the ForagerRegistry (already the single registration point).
+   *We are not authoring external connectors yet — just the loading mechanism.*
+2. **Personal-memory adapter (case 08).** Index the user's own context
+   (Claude conversations + notes to start) into a private queen, surfaced via
+   the MCP. Scope of "what goes in" to be defined.
+3. **Storage abstraction / optional centralized mode.** Put the Holepunch P2P
+   stack behind an interface so HIVE can also run in a non-P2P, centralized
+   mode for orgs that won't adopt P2P (today only achievable indirectly via a
+   private-topic bee+queen).
 
 ---
 

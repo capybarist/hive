@@ -155,7 +155,7 @@ All source adapters implement the same `ForagerSource` interface (`seed`,
 forager owns queue + visited + dedup + budgeting + claims. Adding a source =
 one file.
 
-### Scope partitions (v0.7.6, still current)
+### Scope partitions (since v0.7.6, still in effect)
 
 The coordination unit is `(source_id, partition_key)` where the partition
 lives **inside** the scope — so three Medicine bees can pick Pharmacology /

@@ -136,8 +136,8 @@ HIVE is built on battle-tested P2P infrastructure, local-first systems, and the 
 
 - **[Hypercore](https://github.com/holepunchto/hypercore)** — append-only cryptographic log with native P2P replication (same tech as Keet)
 - **[Hyperswarm](https://github.com/holepunchto/hyperswarm)** — P2P DHT for node discovery and NAT hole-punching
-- **[Qdrant](https://qdrant.tech/)** — vector database for scalable search across the full network (aggregator)
-- **[sentence-transformers](https://github.com/UKPLab/sentence-transformers)** — local semantic embeddings (~80MB, runs on CPU)
+- **[LanceDB](https://lancedb.com/)** — embedded vector store on the queen for scalable search across the full network (no separate database service)
+- **[e5-base ONNX](https://huggingface.co/intfloat/multilingual-e5-base)** — local multilingual semantic embeddings, int8 768-d, runs in-process on CPU via `@huggingface/transformers` (all-Node since v0.8 — no Python)
 - **LLM with function calling** — autonomous extraction agent (Groq, Gemini, Claude, OpenAI, or Ollama for fully local inference)
 
 ### Tether ecosystem integration (planned)
@@ -170,31 +170,37 @@ Decentralized systems are only as good as their trust model. HIVE's approach:
 - **Multi-agent consensus (planned):** multiple BEEs vote on fragment quality before it propagates widely. Reduces spam and misinformation without centralized moderation.
 - **Source traceability:** every fragment links to its original source (arXiv paper, DOI, news article). The chain of provenance is always visible.
 
-## Current state: v0.5
+## Current state: v0.9.5
 
-HIVE v0.5 is a working system — all core modules implemented and running, with native P2P replication operational. See the [README](./README.md) for the full status breakdown.
+HIVE is a working, deployed system. The v0.8 all-Node engine (bees embed with
+e5-base ONNX, sign inline, queen indexes in LanceDB) runs in production; v0.9
+layered productisation on top. See the [README](./README.md) and CHANGELOG for
+the full breakdown.
 
 **What works today:**
-- Autonomous BEEs extracting knowledge from Wikipedia (full article sections), arXiv, RSS feeds, and the open web
-- Native Hypercore P2P replication between BEEs
-- Aggregator node indexing the full network in Qdrant
-- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI, **Ollama local — no API key**)
-- Web UI (light theme) for human queries with source attribution
-- Vector API for machine queries
-- Fully local operation with Ollama — no API keys, no cloud dependency
-- Zero-config Docker deployment: `docker compose up -d` starts everything
+- Autonomous BEEs extracting verbatim, signed knowledge from Wikipedia, arXiv,
+  RSS, PubMed (NCBI E-utilities), and Common Crawl — connectors registered in a
+  single **ForagerRegistry**
+- Producer-side vectorization: each bee embeds + signs its vectors inline; the
+  queen replicates and indexes them in embedded LanceDB (no Python, no Qdrant)
+- Native Hypercore P2P replication between BEEs; ed25519-signed fragments
+  verified on receive; `content_hash` corroboration across bees
+- Multi-provider LLM synthesis (Groq, Gemini, Claude, OpenAI, **Ollama local**)
+- **Distributed as npm** (`npx @capybaralabs/hive`) and as an **MCP server**
+  (`@capybaralabs/hive-mcp`) + a Claude Skill — query HIVE from Claude/Cursor
+- **Settings UI** (graphical manifest builder), optional bearer-token auth,
+  HTTPS via Caddy + sslip.io, public/private topics with a discovery registry
+- Zero-config Docker deployment: `docker compose up -d`
 
-**What's next — v0.6 (Trust & correctness):**
-- **LLM-free verbatim extraction**: tools index source content directly without LLM writing the text — eliminates hallucination in the knowledge base, 10x throughput improvement
-- Signature verification on receive (ed25519 validated before indexing peer fragments)
-- Replication factor ≥ 3 (each fragment confirmed on at least 3 BEEs)
-- Multi-agent consensus (BEEs vote on fragment quality before wide propagation)
-
-**What's next — v0.7 (Scale):**
-- BulkImporter: direct Wikipedia XML dump ingestion — hours, not years
-- Semantic routing (queries route to relevant BEEs only)
-- QVAC integration for on-device inference
-- WDK payment layer (extractors earn USD₮ per query served)
+**What's next (v0.9.x → v1):**
+- **Pluggable external connectors**: load 3rd-party `ForagerSource`s installed
+  as npm packages (ours stay bundled) — extends the ForagerRegistry
+- **Personal-memory adapter**: index your own context (Claude conversations,
+  notes) into a private queen, surfaced through the MCP
+- **Storage abstraction**: put the Holepunch P2P stack behind an interface so
+  HIVE can also run in a centralized mode for orgs that don't want P2P
+- Score-by-corroboration ranking; WDK micropayments + QVAC on-device inference
+  (Tether-ecosystem, longer horizon)
 
 ## How to run a BEE
 
