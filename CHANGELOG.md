@@ -3,6 +3,27 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — Personal memory connector v1 (Claude conversations)
+
+First "personal memory" source (roadmap #2, v1 = Claude only): a `ClaudeMemorySource`
+ForagerSource that reads local Claude Code transcripts (`~/.claude/projects/<proj>/
+<session>.jsonl`, override with `HIVE_CLAUDE_PROJECTS_DIR`) and emits the verbatim
+user prompts + assistant `text` answers as fragments — `thinking`/`tool_use`/
+`tool_result` blocks are skipped. Indexed like any source, so the conversations
+become queryable through the queen and the MCP.
+
+- New `packages/agent/src/forager/claude_memory_source.ts`, registered in the
+  ForagerRegistry (id `claude-memory`, 🧠, `sourceType: claude-memory`, 365-day
+  TTL). One fragment per turn, deterministic id `claude_<sessionId>_m<seq>`,
+  `claude-session://<project>/<sessionId>#m<seq>` URL.
+- PRIVACY: ingests personal data — a bee declaring it **must** run on a private
+  queen/topic (never the public commons). The source only reads local files and
+  logs a one-time warning; visibility is the manifest's responsibility (v0.9.3
+  privacy gate + v0.9.4 private topics). In Docker, bind-mount `~/.claude/projects`
+  and set `HIVE_CLAUDE_PROJECTS_DIR`; npx/local installs see it directly.
+- Verified end-to-end against real local transcripts (seed enumerates sessions,
+  fetch parses turns into clean verbatim fragments).
+
 ## Unreleased — External forager plugins (load 3rd-party connectors from npm)
 
 The ForagerRegistry (v0.9.5) made connectors first-class internally; this opens

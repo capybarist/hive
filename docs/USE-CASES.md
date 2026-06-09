@@ -225,8 +225,14 @@ runs for other HIVEs; no new mental model.
 - **Out of scope for v1:** OS-level screen recording, OCR snapshots, clipboard
   watching. Revisit if the basic version proves valuable.
 
-**Status.** 🔴 Designed, not built. Depends on cases [05](#05--custom-connectors-foragersource)
-(ForagerSource) and [14](#14--mcp-server) (MCP server).
+**Status.** 🟡 v1 shipped — `ClaudeMemorySource` (`claude-memory`) indexes local
+Claude Code transcripts (user prompts + assistant text; `thinking`/tool blocks
+skipped) and is queryable via the MCP ([14](#14--mcp-server)), which it relies
+on. Conversations only for v1 (notes/shell history/other tools deferred). The
+turnkey private-personal-queen UX (one-command launch, bind-mount, private topic
+by default) is the remaining work; today it requires manual private-bee config.
+MUST run private — the connector reads personal data and warns, but visibility
+is the manifest's call ([02](#02--private-swarm), v0.9.3/9.4).
 
 `personal RAG` · `cross-session memory` · `local-only` · `user-signed`
 
