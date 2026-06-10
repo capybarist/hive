@@ -28,6 +28,8 @@ HIVE_INGEST_ENABLED=true | false  # default: false
 HIVE_INGEST_TOKEN=<shared secret>
 HIVE_TRUSTED_BEES=<bee_id>:<ed25519 pubkey>[,...]   # allowlist of signers
 HIVE_SWARM=on | off               # default: on. `off` = fully closed queen
+HIVE_META_COLUMNS=k1,k2,…         # v1.2: promote these meta keys to filterable
+                                  # `meta_<k>` LanceDB columns at ingest
 ```
 
 **`HIVE_SWARM=off`** is the closed-deployment switch for the queen side: the
@@ -111,6 +113,16 @@ Note for pre-existing queens: LanceDB tables created before this release have
 no `meta` column. Writes still work — `meta` is dropped with a one-time warning
 — but keeping it requires recreating the index (it re-fills from the bees'
 signed cores / re-delivery).
+
+Two v1.2 refinements close the loop for domain deployments:
+
+- **Promoted meta columns** — `HIVE_META_COLUMNS=celex,article,…` on the queen
+  lifts those meta keys into real `meta_<k>` LanceDB columns at ingest, so a
+  product layer can run exact filtered lookups (`meta_article = '6'`) instead
+  of parsing JSON. The full `meta` JSON is still stored verbatim.
+- **`VerbatimFragment.embedText`** — an adapter may supply anchor-contextualized
+  embedding input ("AI Act, Article 6(1)(a): …") while the stored, signed
+  `text` stays verbatim. Citation-shaped queries retrieve far better.
 
 ## CatalogSource
 
