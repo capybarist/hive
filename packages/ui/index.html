@@ -1272,7 +1272,17 @@ async function checkStatus() {
     const mEl = document.getElementById('hive-mode-badge');
     const m = (d.mode ?? 'hive').toString();
     if (mEl) {
-      mEl.textContent = m;
+      // v1.x — direct mode (docs/direct-mode.md): a direct bee delivers over
+      // HTTP and joins no swarm; an ingest-enabled queen accepts those batches.
+      // Surface it on the badge so the operator can tell at a glance.
+      const direct = d.transport === 'direct';
+      const ingest = !!d.ingest_enabled;
+      mEl.textContent = direct ? `${m} · direct` : (ingest ? `${m} · ingest` : m);
+      mEl.title = direct
+        ? 'Node mode — direct transport: signed fragments deliver to the queen over HTTP (no P2P swarm)'
+        : ingest
+          ? 'Node mode — direct ingest enabled: accepts signed fragment batches from allowlisted bees over HTTP'
+          : 'Node mode';
       // Backward-compat: v0.6 "aggregator" still gets the highlighted style;
       // v0.7 "queen" inherits the same class for parity.
       mEl.className = 'brand-mode' + ((m === 'aggregator' || m === 'queen') ? ' aggregator' : '');
