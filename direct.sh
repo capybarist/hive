@@ -22,10 +22,10 @@
 #   LLM_PROVIDER/KEY    only needed for synthesis; raw-fragment queries
 #                       (`"use_llm": false`) work with no LLM at all.
 #
-# NOTE the queen still joins the public Hyperswarm commons (direct ingest and
-# p2p replication coexist by design), so /api/status `indexed` may include
-# fragments replicated from public bees. Filter queries by the sandbox bee's
-# node_id (printed below) to see exactly what travelled over HTTP.
+# The sandbox queen runs HIVE_SWARM=off: it joins NO Hyperswarm topic, so the
+# ONLY fragments in its index are the ones the sandbox bee delivered over
+# HTTP — what a fully closed deployment looks like. (A queen can also serve
+# direct ingest AND the p2p swarm at once: just drop HIVE_SWARM=off.)
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 cd "$(dirname "$(realpath "$0")")"
@@ -98,6 +98,7 @@ HIVE_DATA_DIR=$QUEEN_DATA
 HIVE_INGEST_ENABLED=true
 HIVE_INGEST_TOKEN=$HIVE_INGEST_TOKEN
 HIVE_TRUSTED_BEES=$TRUSTED
+HIVE_SWARM=off
 RUST_LOG=error
 EOF
   ( cd packages/api && exec node --env-file="$qenv" --import tsx/esm src/api_server.ts \

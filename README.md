@@ -259,6 +259,8 @@ HIVE_INGEST_TOKEN=<shared secret>
 HIVE_INGEST_ENABLED=true
 HIVE_INGEST_TOKEN=<same shared secret>
 HIVE_TRUSTED_BEES=<bee_id>:<ed25519 pubkey>[,...]
+HIVE_SWARM=off    # optional: fully closed queen — joins NO Hyperswarm topic,
+                  # so HTTP ingest is its only fragment source
 ```
 
 Try it locally in one command — boots a wired queen+bee pair (the script does

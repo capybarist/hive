@@ -27,7 +27,16 @@ HIVE_INGEST_TOKEN=<shared secret>           # required when direct
 HIVE_INGEST_ENABLED=true | false  # default: false
 HIVE_INGEST_TOKEN=<shared secret>
 HIVE_TRUSTED_BEES=<bee_id>:<ed25519 pubkey>[,...]   # allowlist of signers
+HIVE_SWARM=on | off               # default: on. `off` = fully closed queen
 ```
+
+**`HIVE_SWARM=off`** is the closed-deployment switch for the queen side: the
+node joins **no** Hyperswarm topic — not the public commons, not private
+topics, not the Public Topics Registry — so it neither replicates from nor
+announces to anyone. Its only fragment source is `/internal/ingest`. Without
+it, a queen serves direct ingest *and* p2p replication at once (both are
+fine; pick per deployment). A direct bee never needs the flag — direct
+transport already implies no swarm.
 
 A BEE in direct mode performs the full forager pipeline exactly as today; only
 the final "publish" step changes (HTTP POST instead of Hyperbee append). It
@@ -161,7 +170,9 @@ bash direct.sh clean                             # wipe the sandbox (~/.hive-dir
 `direct.sh` does the allowlist handshake automatically (pre-creates the bee
 identity and injects `bee_id:pubkey` into the queen's `HIVE_TRUSTED_BEES`),
 generates and persists a shared ingest token, starts both nodes and tails
-their logs; Ctrl+C shuts both down cleanly. It prints a ready-to-paste
+their logs; Ctrl+C shuts both down cleanly. The sandbox queen runs
+`HIVE_SWARM=off`, so its index contains exactly what the sandbox bee
+delivered over HTTP — nothing replicates in from the public network. It prints a ready-to-paste
 raw-fragment query (`"use_llm": false` — no LLM key needed) filtered by the
 sandbox bee's node id. The manual two-step handshake below is only needed
 when bee and queen live on different machines.
@@ -194,6 +205,7 @@ services:
       - HIVE_PORT=8090
       - HIVE_DATA_DIR=/hive/data
       - HIVE_INGEST_ENABLED=true
+      - HIVE_SWARM=off   # closed deployment: ingest is the only fragment source
       - HIVE_INGEST_TOKEN=${HIVE_INGEST_TOKEN:?set a shared secret}
       # Boot the bee once, copy the "Direct transport ✓" line from its log:
       - HIVE_TRUSTED_BEES=${HIVE_TRUSTED_BEES:?<bee_id>:<pubkey>}

@@ -80,6 +80,18 @@ if (TRANSPORT_DIRECT && (!HIVE_QUEEN_URL || !BEE_INGEST_TOKEN)) {
   process.exit(1);
 }
 
+// ── HIVE_SWARM — on | off ───────────────────────────────────────────────────
+// `off` keeps this node away from EVERY Hyperswarm topic (content swarm AND
+// the Public Topics Registry). For fully closed deployments — a direct-mode
+// queen inside a company perimeter that must not replicate from or announce
+// to the public network. A direct bee is already swarm-less by construction;
+// this flag is how the QUEEN side of a closed deployment opts out too.
+const RAW_SWARM = (process.env.HIVE_SWARM ?? 'on').toLowerCase();
+if (RAW_SWARM !== 'on' && RAW_SWARM !== 'off') {
+  console.warn(`[swarm] Unknown HIVE_SWARM=${RAW_SWARM}, defaulting to 'on'. Valid: on | off.`);
+}
+const SWARM_OFF = RAW_SWARM === 'off';
+
 // Capability flags derived once at boot.
 const HAS_EXTRACTOR           = IS_BEE  || IS_HIVE;
 const HAS_LOCAL_STORE         = IS_BEE  || IS_HIVE;
@@ -355,10 +367,17 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
 // config and restarts). Pure queens are never gated: they own no fragments core
 // to leak and must join the commons to replicate public bees.
 const SWARM_GATED = HAS_LOCAL_STORE && !OPERATOR_CONFIGURED;
+// One predicate for "this node touches Hyperswarm at all" — the start below,
+// the self-heal loop and the Topics Registry all follow it.
+const JOINS_SWARM = !SWARM_GATED && !TRANSPORT_DIRECT && !SWARM_OFF;
 if (TRANSPORT_DIRECT) {
   // Direct mode involves no P2P stack at all: fragments deliver over HTTP, so
   // there is no core to replicate and nothing to announce.
   console.log(`[direct] Swarm OFF — HIVE_TRANSPORT=direct delivers to ${HIVE_QUEEN_URL} over HTTP.`);
+} else if (SWARM_OFF) {
+  // Fully closed deployment: this node (typically a direct-ingest queen)
+  // neither replicates from nor announces to any public or private swarm.
+  console.log('[swarm] Swarm OFF (HIVE_SWARM=off) — no Hyperswarm topics will be joined; ingest/local pipes are the only fragment paths.');
 } else if (SWARM_GATED) {
   console.log('[p2p] Swarm join GATED — node not configured. It will join no topic (not even the public commons) until you declare sources/topic in the web Settings and save (which restarts the node).');
 } else {
@@ -373,7 +392,7 @@ if (TRANSPORT_DIRECT) {
 // glitch". Only matters when a node expects peers — pure-bee in this single-box
 // setup still wants the queen to find it, and the queen always wants peers.
 // Skipped entirely while the swarm is gated (nothing to refresh).
-if (!SWARM_GATED && !TRANSPORT_DIRECT) {
+if (JOINS_SWARM) {
   setInterval(() => {
     if (p2pNode.peerCount === 0) {
       console.log('[p2p] peerCount=0 — refreshing Hyperswarm discovery');
@@ -401,7 +420,7 @@ function summarizeScope(scope?: Record<string, unknown>): string | undefined {
 
 const isPrivateProducer = HAS_LOCAL_STORE && topicsConfig?.mode === 'private';
 let topicsRegistry: TopicsRegistry | null = null;
-if (!SWARM_GATED && !isPrivateProducer && !TRANSPORT_DIRECT) {
+if (JOINS_SWARM && !isPrivateProducer) {
   let myCard: TopicCard | null = null;
   if (HAS_LOCAL_STORE) {
     // Public producer → announce the topic it feeds.
@@ -722,6 +741,7 @@ app.get('/api/status', async () => {
     // v1.x — how this node publishes/receives fragments (docs/direct-mode.md).
     transport: TRANSPORT_DIRECT ? 'direct' : 'p2p',
     ingest_enabled: INGEST_ENABLED && !!queenIndex,
+    swarm_enabled: JOINS_SWARM,
     nodeId: identity.nodeId,
     nodeIdShort: identity.nodeId.slice(0, 20),
     embedder_online: true,                   // in-process; either we booted or we didn't

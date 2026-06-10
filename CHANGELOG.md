@@ -31,8 +31,11 @@ defaults to `p2p` and existing nodes are untouched.
   crawling: per-source `content_hash` inventory, unchanged docs skip
   embed+delivery, completeness verifiable after a full sweep
   (`new / changed / unchanged / errors` summaries).
-- `/api/status` now reports `transport` and `ingest_enabled`; the UI mode
-  badge shows `bee · direct` / `queen · ingest`.
+- **`HIVE_SWARM=off`** (queen): fully closed deployment — joins NO Hyperswarm
+  topic (commons, private topics, registry); `/internal/ingest` becomes the
+  only fragment source. Default `on`; a direct bee never needs it.
+- `/api/status` now reports `transport`, `ingest_enabled` and `swarm_enabled`;
+  the UI mode badge shows `bee · direct` / `queen · ingest`.
 - **`direct.sh`**: one-command local sandbox — boots a wired queen+bee pair
   with the allowlist handshake done for you. `hive.sh` / `queen.sh` document
   the pass-through env vars for single-node direct setups.
