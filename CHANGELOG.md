@@ -3,6 +3,45 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.1.0 — Direct mode (bee → queen HTTP ingest)
+
+An alternative transport for centralized / enterprise deployments
+([`docs/direct-mode.md`](docs/direct-mode.md)). **Additive** — `HIVE_TRANSPORT`
+defaults to `p2p` and existing nodes are untouched.
+
+- **Direct transport (bee)**: `HIVE_TRANSPORT=direct` + `HIVE_QUEEN_URL` +
+  `HIVE_INGEST_TOKEN`. Same pipeline (forage → chunk → embed → sign); the
+  publish step POSTs gzipped batches (≤ 500) to the queen instead of appending
+  to the Hyperbee, and the bee joins **no** swarm. Whole-batch retry with
+  exponential backoff — safe because fragment ids are deterministic, so double
+  delivery is a no-op. Delivered inventory persists in
+  `direct_inventory.json` (backs the TTL freshness skip across restarts).
+- **Ingest endpoint (queen)**: `POST /internal/ingest` behind
+  `HIVE_INGEST_ENABLED=true` + its own bearer token + the `HIVE_TRUSTED_BEES`
+  signer allowlist. Verifies **every** ed25519 signature before anything
+  touches LanceDB; one bad fragment rejects the whole batch
+  (`400 { rejected, reason }`). Upserts via LanceDB `mergeInsert(id)` and
+  reports `{ upserted, unchanged }`.
+- **`FragmentV08.meta`** (optional, signed): extensible
+  `Record<string, unknown>` for domain deployments — stored and returned
+  verbatim, never interpreted. Pre-existing LanceDB tables lack the column;
+  writes keep working (meta dropped with a one-time warning).
+- **CatalogSource** (`kind: 'catalog'`): sources with an authoritative listing
+  (`listAll` / `changedSince` / `fetchEntry`). The extractor sweeps instead of
+  crawling: per-source `content_hash` inventory, unchanged docs skip
+  embed+delivery, completeness verifiable after a full sweep
+  (`new / changed / unchanged / errors` summaries).
+- **`HIVE_SWARM=off`** (queen): fully closed deployment — joins NO Hyperswarm
+  topic (commons, private topics, registry); `/internal/ingest` becomes the
+  only fragment source. Default `on`; a direct bee never needs it.
+- `/api/status` now reports `transport`, `ingest_enabled` and `swarm_enabled`;
+  the UI mode badge shows `bee · direct` / `queen · ingest`.
+- **`direct.sh`**: one-command local sandbox — boots a wired queen+bee pair
+  with the allowlist handshake done for you. `hive.sh` / `queen.sh` document
+  the pass-through env vars for single-node direct setups.
+- Tests: `npm run test:direct -w @hive/api` (28 asserts, offline); existing
+  P2P suites pass untouched.
+
 ## v1.0.0 — First stable release
 
 HIVE is production-deployed and stable: the all-Node v0.8 engine (bees embed +

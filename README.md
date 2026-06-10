@@ -231,6 +231,48 @@ bash stop.sh --force     # kill all
 | `bash queen.sh` | `queen` | In-process LanceDB + `/api/query`. Embeds only the query. | Yes |
 | `HIVE_MODE=hive bash hive.sh` | `hive` | Everything in one process. | Yes |
 
+### Deployment modes: P2P vs Direct
+
+`HIVE_MODE` says what a node *does*; `HIVE_TRANSPORT` says how fragments
+*travel* between bee and queen:
+
+- **P2P** (`HIVE_TRANSPORT=p2p`, the default — nothing to configure):
+  decentralized. Bees append to their own Hypercore and queens replicate them
+  over Hyperswarm. Choose it whenever more than one operator is involved, nodes
+  come and go, or you want the append-only replicated log.
+- **Direct** (`HIVE_TRANSPORT=direct`): centralized. A bee runs the same
+  pipeline (forage → chunk → embed → sign) but POSTs signed fragment batches
+  straight to one queen's `POST /internal/ingest` over HTTP, and joins no
+  swarm. Choose it for single-operator / enterprise deployments on
+  conventional infrastructure (one VPS, a private network) where Hypercore
+  replication adds operational complexity without benefit. Per-fragment
+  ed25519 signatures — and therefore verifiability — are identical in both
+  modes; the queen only accepts batches from an explicit signer allowlist.
+
+```bash
+# BEE (direct)
+HIVE_TRANSPORT=direct
+HIVE_QUEEN_URL=https://queen.example.com
+HIVE_INGEST_TOKEN=<shared secret>
+
+# QUEEN (direct ingest target)
+HIVE_INGEST_ENABLED=true
+HIVE_INGEST_TOKEN=<same shared secret>
+HIVE_TRUSTED_BEES=<bee_id>:<ed25519 pubkey>[,...]
+HIVE_SWARM=off    # optional: fully closed queen — joins NO Hyperswarm topic,
+                  # so HTTP ingest is its only fragment source
+```
+
+Try it locally in one command — boots a wired queen+bee pair (the script does
+the allowlist handshake for you) and tails both logs until Ctrl+C:
+
+```bash
+bash direct.sh        # queen :8090 (ingest ✓) + bee :8080 (HIVE_TRANSPORT=direct)
+```
+
+Full contract, retry/idempotency semantics and a docker-compose example:
+[`docs/direct-mode.md`](docs/direct-mode.md).
+
 ---
 
 ## System requirements

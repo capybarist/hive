@@ -15,6 +15,12 @@ export type FragmentStatus = 'current' | 'superseded' | 'historical';
 
 export interface FragmentV08 {
   // A. Identity & version
+  //
+  // `id` MUST be deterministic: derived from source identity + structural
+  // anchor + chunk index (e.g. `wiki_<title>_<section>_c0`) — never a random
+  // UUID. This is the idempotency invariant direct mode (docs/direct-mode.md)
+  // rests on: a bee retries a whole ingest batch on any failure and double
+  // delivery is harmless because the queen upserts by id.
   id: string;
   schema_version: number;
   node_id: string;
@@ -53,6 +59,12 @@ export interface FragmentV08 {
 
   // G. Coordination
   partition?: string;
+
+  // G2. Extensible metadata (signed, since it sits inside the hashed payload).
+  // Domain-specific deployments attach structured metadata here (document
+  // anchors, validity windows, …) without forking the schema. Core HIVE
+  // stores and returns it verbatim and never interprets it.
+  meta?: Record<string, unknown>;
 
   // H. Integrity (signed)
   confidence: number;

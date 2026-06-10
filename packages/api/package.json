@@ -1,11 +1,12 @@
 {
   "name": "@hive/api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "HIVE query API — semantic search + Gemini synthesis",
   "type": "module",
   "scripts": {
     "start": "node --env-file=../../.env --import tsx/esm src/api_server.ts",
-    "dev": "node --env-file=../../.env --import tsx/esm --watch src/api_server.ts"
+    "dev": "node --env-file=../../.env --import tsx/esm --watch src/api_server.ts",
+    "test:direct": "RUST_LOG=error tsx src/test_direct_mode.ts"
   },
   "dependencies": {
     "@hive/agent": "*",

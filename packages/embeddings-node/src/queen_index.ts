@@ -54,23 +54,55 @@ export class QueenIndex {
       const pk = opts.pubkeyByNode?.[f.node_id];
       const ok = this.validate(f, pk);
       if (ok !== true) { skipped++; continue; }
-      const vec = decodeVector(f.vector, EMBEDDING_DIM);
-      records.push({
-        id: f.id,
-        vector: Array.from(vec),
-        text: f.text,
-        title: f.title ?? '',
-        url: f.url,
-        source: f.source,
-        source_type: f.source_type,
-        lang: f.lang,
-        node_id: f.node_id,
-        content_hash: f.content_hash,
-        status: f.status,
-      });
+      records.push(this.toRecord(f));
     }
     const added = await this.idx.upsertBatch(records);
     return { added, skipped };
+  }
+
+  private toRecord(f: FragmentV08): IndexRecord {
+    return {
+      id: f.id,
+      vector: Array.from(decodeVector(f.vector, EMBEDDING_DIM)),
+      text: f.text,
+      title: f.title ?? '',
+      url: f.url,
+      source: f.source,
+      source_type: f.source_type,
+      lang: f.lang,
+      node_id: f.node_id,
+      content_hash: f.content_hash,
+      status: f.status,
+      meta: f.meta ? JSON.stringify(f.meta) : '',
+    };
+  }
+
+  /**
+   * Direct-mode ingest (docs/direct-mode.md): verify EVERY fragment in the
+   * batch against the trusted bee's pubkey before touching the index. Any
+   * failure rejects the whole batch — partial acceptance is forbidden so the
+   * bee's retry semantics stay trivial. On success, upsert via mergeInsert
+   * (update-on-match) and report unchanged re-deliveries.
+   */
+  async ingestBatch(
+    frags: FragmentV08[],
+    pubkey: string,
+  ): Promise<
+    | { ok: true; upserted: number; unchanged: number }
+    | { ok: false; rejected: string[]; reason: string }
+  > {
+    const rejected: string[] = [];
+    let reason = '';
+    for (const f of frags) {
+      const ok = this.validate(f, pubkey);
+      if (ok !== true) {
+        rejected.push(f.id);
+        if (!reason) reason = ok;   // first failure names the batch's reason
+      }
+    }
+    if (rejected.length > 0) return { ok: false, rejected, reason };
+    const { upserted, unchanged } = await this.idx.mergeUpsertBatch(frags.map((f) => this.toRecord(f)));
+    return { ok: true, upserted, unchanged };
   }
 
   /** Query: embed (queen-side, the ONE place the queen embeds), search,

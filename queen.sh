@@ -20,6 +20,12 @@
 # Optional env:
 #   HIVE_PORT           API port (default: 8090)
 #   HIVE_DATA_DIR       Data directory (default: ~/.hive-queen)
+#
+# Direct ingest (docs/direct-mode.md) — accept signed fragment batches from
+# direct-transport bees over HTTP, alongside normal P2P replication:
+#   HIVE_INGEST_ENABLED=true HIVE_INGEST_TOKEN=<secret> \
+#   HIVE_TRUSTED_BEES=<bee_id>:<pubkey>[,...] bash queen.sh
+# For a local queen+bee direct pair in ONE command, use `bash direct.sh`.
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 cd "$(dirname "$(realpath "$0")")"

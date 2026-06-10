@@ -14,7 +14,8 @@ import {
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
 import { QueenIndex } from '@hive/embeddings-node';
-import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers } from '@hive/agent';
+import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers, DirectTransport } from '@hive/agent';
+import { registerIngestRoute, parseTrustedBees } from './ingest.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(__dirname, '../../ui');
@@ -57,6 +58,39 @@ if (RAW_HIVE_MODE !== HIVE_MODE && RAW_HIVE_MODE !== 'aggregator') {
 const IS_BEE   = HIVE_MODE === 'bee';
 const IS_QUEEN = HIVE_MODE === 'queen';
 const IS_HIVE  = HIVE_MODE === 'hive';
+
+// ── HIVE_TRANSPORT — p2p | direct (docs/direct-mode.md) ────────────────────
+// p2p (default) — fragments publish to the local Hyperbee; queens replicate
+//                 them over Hyperswarm/Hypercore. No behavior change.
+// direct        — a BEE delivers signed fragment batches to ONE queen's
+//                 POST /internal/ingest over HTTP and joins NO swarm.
+//                 Requires HIVE_QUEEN_URL + HIVE_INGEST_TOKEN.
+const RAW_TRANSPORT = (process.env.HIVE_TRANSPORT ?? 'p2p').toLowerCase();
+if (RAW_TRANSPORT !== 'p2p' && RAW_TRANSPORT !== 'direct') {
+  console.warn(`[direct] Unknown HIVE_TRANSPORT=${RAW_TRANSPORT}, defaulting to 'p2p'. Valid: p2p | direct.`);
+}
+const TRANSPORT_DIRECT = RAW_TRANSPORT === 'direct' && IS_BEE;
+if (RAW_TRANSPORT === 'direct' && !IS_BEE) {
+  console.warn(`[direct] HIVE_TRANSPORT=direct is a BEE setting; HIVE_MODE=${HIVE_MODE} keeps the p2p path (queens accept direct ingest via HIVE_INGEST_ENABLED).`);
+}
+const HIVE_QUEEN_URL = process.env.HIVE_QUEEN_URL?.trim() || null;
+const BEE_INGEST_TOKEN = process.env.HIVE_INGEST_TOKEN?.trim() || null;
+if (TRANSPORT_DIRECT && (!HIVE_QUEEN_URL || !BEE_INGEST_TOKEN)) {
+  console.error('[direct] HIVE_TRANSPORT=direct requires HIVE_QUEEN_URL and HIVE_INGEST_TOKEN. Refusing to start with a half-configured transport.');
+  process.exit(1);
+}
+
+// ── HIVE_SWARM — on | off ───────────────────────────────────────────────────
+// `off` keeps this node away from EVERY Hyperswarm topic (content swarm AND
+// the Public Topics Registry). For fully closed deployments — a direct-mode
+// queen inside a company perimeter that must not replicate from or announce
+// to the public network. A direct bee is already swarm-less by construction;
+// this flag is how the QUEEN side of a closed deployment opts out too.
+const RAW_SWARM = (process.env.HIVE_SWARM ?? 'on').toLowerCase();
+if (RAW_SWARM !== 'on' && RAW_SWARM !== 'off') {
+  console.warn(`[swarm] Unknown HIVE_SWARM=${RAW_SWARM}, defaulting to 'on'. Valid: on | off.`);
+}
+const SWARM_OFF = RAW_SWARM === 'off';
 
 // Capability flags derived once at boot.
 const HAS_EXTRACTOR           = IS_BEE  || IS_HIVE;
@@ -230,6 +264,10 @@ async function indexFragmentsIntoQueen(batch: FragmentV08[]): Promise<void> {
 const claimRegistry = new ClaimRegistry(DATA_DIR, knowledgeStore.corestore);
 await claimRegistry.ready();
 
+// Direct-mode delivery sink (bee). Built alongside the manifest below; when
+// set, the extractor publishes through it instead of the local Hyperbee.
+let directTransport: DirectTransport | null = null;
+
 // ── BeeManifest (v0.7.3, v0.8 fields populated) ────────────────────────────
 if (HAS_LOCAL_STORE) {
   const beeManifest: BeeManifest = {
@@ -248,6 +286,19 @@ if (HAS_LOCAL_STORE) {
     schema_version: SCHEMA_VERSION,
   };
   await knowledgeStore.publishManifest(beeManifest);
+
+  if (TRANSPORT_DIRECT) {
+    directTransport = new DirectTransport({
+      queenUrl: HIVE_QUEEN_URL!,
+      token: BEE_INGEST_TOKEN!,
+      beeId: identity.nodeId,
+      dataDir: DATA_DIR,
+      manifest: beeManifest,
+    });
+    await directTransport.ready();
+    console.log(`   Direct transport ✓ → ${HIVE_QUEEN_URL} (queen must list this bee in HIVE_TRUSTED_BEES as ${identity.nodeId}:${identity.publicKeyHex})`);
+  }
+
   const srcList = beeManifest.declared_sources.map(s => s.id).join(', ');
   console.log(`   Manifest  → sources: ${srcList} | policy: ${beeManifest.declared_sources[0]?.policy ?? 'drift-ok'} | replication: ${beeManifest.replication}`);
   console.log(`   v0.8     → model=${EMBEDDING_MODEL} dim=${EMBEDDING_DIM} chunker=${CHUNKER_VERSION} schema=${SCHEMA_VERSION}`);
@@ -316,7 +367,18 @@ p2pNode.on('peer-meta', (meta: PeerMeta, peerId: string) => {
 // config and restarts). Pure queens are never gated: they own no fragments core
 // to leak and must join the commons to replicate public bees.
 const SWARM_GATED = HAS_LOCAL_STORE && !OPERATOR_CONFIGURED;
-if (SWARM_GATED) {
+// One predicate for "this node touches Hyperswarm at all" — the start below,
+// the self-heal loop and the Topics Registry all follow it.
+const JOINS_SWARM = !SWARM_GATED && !TRANSPORT_DIRECT && !SWARM_OFF;
+if (TRANSPORT_DIRECT) {
+  // Direct mode involves no P2P stack at all: fragments deliver over HTTP, so
+  // there is no core to replicate and nothing to announce.
+  console.log(`[direct] Swarm OFF — HIVE_TRANSPORT=direct delivers to ${HIVE_QUEEN_URL} over HTTP.`);
+} else if (SWARM_OFF) {
+  // Fully closed deployment: this node (typically a direct-ingest queen)
+  // neither replicates from nor announces to any public or private swarm.
+  console.log('[swarm] Swarm OFF (HIVE_SWARM=off) — no Hyperswarm topics will be joined; ingest/local pipes are the only fragment paths.');
+} else if (SWARM_GATED) {
   console.log('[p2p] Swarm join GATED — node not configured. It will join no topic (not even the public commons) until you declare sources/topic in the web Settings and save (which restarts the node).');
 } else {
   await p2pNode.start();
@@ -330,7 +392,7 @@ if (SWARM_GATED) {
 // glitch". Only matters when a node expects peers — pure-bee in this single-box
 // setup still wants the queen to find it, and the queen always wants peers.
 // Skipped entirely while the swarm is gated (nothing to refresh).
-if (!SWARM_GATED) {
+if (JOINS_SWARM) {
   setInterval(() => {
     if (p2pNode.peerCount === 0) {
       console.log('[p2p] peerCount=0 — refreshing Hyperswarm discovery');
@@ -358,7 +420,7 @@ function summarizeScope(scope?: Record<string, unknown>): string | undefined {
 
 const isPrivateProducer = HAS_LOCAL_STORE && topicsConfig?.mode === 'private';
 let topicsRegistry: TopicsRegistry | null = null;
-if (!SWARM_GATED && !isPrivateProducer) {
+if (JOINS_SWARM && !isPrivateProducer) {
   let myCard: TopicCard | null = null;
   if (HAS_LOCAL_STORE) {
     // Public producer → announce the topic it feeds.
@@ -484,6 +546,29 @@ if (!HIVE_API_KEY) {
   });
   if (queenHasPrivateTopics()) {
     console.warn('   ⚠ PRIVATE queen with NO auth key — /api/query is BLOCKED until you set HIVE_API_KEY (Settings → API auth key).');
+  }
+}
+
+// ── Direct-mode ingest (queen) — POST /internal/ingest ─────────────────────
+// Off by default. HIVE_INGEST_ENABLED=true + HIVE_INGEST_TOKEN + an explicit
+// HIVE_TRUSTED_BEES allowlist turn a queen into an HTTP ingest target for
+// direct-transport bees (docs/direct-mode.md). The route does its own bearer
+// check (separate secret from HIVE_API_KEY) — it is NOT in PROTECTED_PREFIXES.
+const INGEST_ENABLED = (process.env.HIVE_INGEST_ENABLED ?? 'false').toLowerCase() === 'true';
+if (INGEST_ENABLED) {
+  const ingestToken = process.env.HIVE_INGEST_TOKEN?.trim() || null;
+  if (!queenIndex) {
+    console.warn('[ingest] HIVE_INGEST_ENABLED=true ignored — only queen/hive modes own a LanceDB index.');
+  } else if (!ingestToken) {
+    console.error('[ingest] HIVE_INGEST_ENABLED=true requires HIVE_INGEST_TOKEN. Refusing to start with an unauthenticated ingest endpoint.');
+    process.exit(1);
+  } else {
+    const trustedBees = parseTrustedBees(process.env.HIVE_TRUSTED_BEES);
+    if (trustedBees.size === 0) {
+      console.warn('[ingest] HIVE_TRUSTED_BEES is empty — every ingest batch will be rejected with 403 until bees are allowlisted.');
+    }
+    registerIngestRoute(app, queenIndex, { token: ingestToken, trustedBees });
+    console.log(`   Direct ingest ✓ (POST /internal/ingest, ${trustedBees.size} trusted bee(s))`);
   }
 }
 
@@ -653,14 +738,19 @@ app.get('/api/status', async () => {
     api: 'ok',
     version: HIVE_VERSION,
     mode: HIVE_MODE,
+    // v1.x — how this node publishes/receives fragments (docs/direct-mode.md).
+    transport: TRANSPORT_DIRECT ? 'direct' : 'p2p',
+    ingest_enabled: INGEST_ENABLED && !!queenIndex,
+    swarm_enabled: JOINS_SWARM,
     nodeId: identity.nodeId,
     nodeIdShort: identity.nodeId.slice(0, 20),
     embedder_online: true,                   // in-process; either we booted or we didn't
     indexed,
     // v0.8.4 — bee/hive nodes also report how many fragments they've signed
-    // locally (the Hypercore size). Distinct from `indexed` (LanceDB count on
-    // the queen) so a bee dashboard can show a meaningful number.
-    local_fragments: HAS_LOCAL_STORE ? knowledgeStore.localFragmentCount : 0,
+    // locally (the Hypercore size; delivered-batch inventory in direct mode).
+    // Distinct from `indexed` (LanceDB count on the queen) so a bee dashboard
+    // can show a meaningful number.
+    local_fragments: HAS_LOCAL_STORE ? (directTransport ?? knowledgeStore).localFragmentCount : 0,
     model: queenIndex ? EMBEDDING_MODEL : null,
     backend: queenIndex ? 'lancedb' : null,
     schema_version: SCHEMA_VERSION,
@@ -916,7 +1006,7 @@ const runLoop = async () => {
             runAutonomousExtraction(
               topicObjective,
               { maxFragments: fragsPerTopic, maxMinutes: topicMaxMin },
-              knowledgeStore,
+              directTransport ?? knowledgeStore,
               (frag) => logEvent('fragment', `[${claim.topicId.split('/').pop()}] "${frag.title ?? frag.id}"`),
               (ok) => { llmHealthy = ok; },
             ),
@@ -943,7 +1033,7 @@ const runLoop = async () => {
       // Include the cache-hit count, the error count and the cumulative
       // locally-signed total so the dashboard activity log actually tells the
       // operator what happened.
-      const localTotal = HAS_LOCAL_STORE ? knowledgeStore.localFragmentCount : 0;
+      const localTotal = HAS_LOCAL_STORE ? (directTransport ?? knowledgeStore).localFragmentCount : 0;
       const parts: string[] = [`${totalIndexed} new`];
       if (cycleSkippedFresh > 0) parts.push(`${cycleSkippedFresh} already fresh`);
       if (cycleErrors > 0) parts.push(`${cycleErrors} errors`);
@@ -1208,7 +1298,11 @@ try {
   console.log(`   Mode  → ${HIVE_MODE.toUpperCase()}`);
   console.log(`   API  → http://127.0.0.1:${PORT}/api/status`);
   console.log(`   UI   → http://127.0.0.1:${PORT}/`);
-  console.log(`   Peers → Hyperswarm discovery (no HTTP bootstrap since v0.6.4)`);
+  if (TRANSPORT_DIRECT) {
+    console.log(`   Queen → ${HIVE_QUEEN_URL} (HIVE_TRANSPORT=direct — no Hyperswarm)`);
+  } else {
+    console.log(`   Peers → Hyperswarm discovery (no HTTP bootstrap since v0.6.4)`);
+  }
   if (HAS_QUERY_API) {
     const provider = process.env.LLM_PROVIDER ?? 'gemini';
     console.log(`   LLM  → ${provider} ${isLLMConfigured() ? '✓' : '(NOT SET)'}`);
