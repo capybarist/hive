@@ -3,7 +3,7 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased — Direct mode (branch `direct-mode`, target v1.2)
+## v1.1.0 — Direct mode (bee → queen HTTP ingest)
 
 An alternative transport for centralized / enterprise deployments
 ([`docs/direct-mode.md`](docs/direct-mode.md)). **Additive** — `HIVE_TRANSPORT`
