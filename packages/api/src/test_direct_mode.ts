@@ -245,6 +245,31 @@ async function main(): Promise<void> {
     await app.close();
   }
 
+  // ── 4. Outage behavior: circuit breaker + bounded buffer ────────────────
+  console.log('\n[4] queen outage: circuit breaker + buffer cap');
+  {
+    const t = new DirectTransport({
+      queenUrl: 'http://127.0.0.1:1',          // nothing listens here
+      token: 'x', beeId: 'bee-test', dataDir: tmp('cb'),
+      maxBatch: 2, maxAttempts: 1, requestTimeoutMs: 500,
+      circuitCooldownMs: 60_000, maxBuffered: 3,
+    });
+    await t.ready();
+    await t.save(buildFragment(beeIdentity, 'cb-1', 'one'));
+    let threw = false;
+    const t0 = Date.now();
+    try { await t.save(buildFragment(beeIdentity, 'cb-2', 'two')); } catch { threw = true; }
+    ok(threw, 'batch-full save against a dead queen throws once (delivery failed)');
+    // Circuit is now open: further saves must buffer instantly, no retry burst.
+    const t1 = Date.now();
+    await t.save(buildFragment(beeIdentity, 'cb-3', 'three'));
+    await t.save(buildFragment(beeIdentity, 'cb-4', 'four'));   // hits maxBuffered → dropped
+    ok(Date.now() - t1 < 200, `circuit open: saves buffer instantly, no network attempts (${Date.now() - t1}ms)`);
+    await t.flush();                                            // circuit open → keeps buffer, no throw
+    ok(t.localFragmentCount === 0, 'nothing falsely recorded as delivered during the outage');
+    ok(Date.now() - t0 < 5_000, `whole outage sequence stayed cheap (${Date.now() - t0}ms — no per-save backoff ladders)`);
+  }
+
   console.log(`\n══ direct-mode suite: ${pass} passed, ${fail} failed ══`);
   if (fail > 0) process.exit(1);
 }

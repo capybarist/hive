@@ -1,6 +1,6 @@
 {
   "name": "@hive/api",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "HIVE query API — semantic search + Gemini synthesis",
   "type": "module",
   "scripts": {

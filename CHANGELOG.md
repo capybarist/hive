@@ -3,6 +3,20 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.1.1 — direct transport: outage circuit breaker
+
+Fix for sustained queen outages in direct mode (found live in the local
+sandbox): every `save()` re-ran the full 5-attempt backoff ladder (~15 s per
+fragment) against a dead queen, and the buffer grew unbounded.
+
+- After a batch exhausts its retries the transport opens a **circuit**
+  (default 60 s, `circuitCooldownMs`): saves buffer instantly with no network
+  attempts; the next cycle's flush retries delivery.
+- **Bounded buffer** (default 5 000, `maxBuffered`): beyond it, new fragments
+  are dropped with a warning — never recorded as delivered, so the TTL check
+  re-extracts them once the queen recovers. Recovery logs how many were
+  dropped.
+
 ## v1.1.0 — Direct mode (bee → queen HTTP ingest)
 
 An alternative transport for centralized / enterprise deployments

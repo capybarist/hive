@@ -40,6 +40,15 @@ export interface DirectTransportOptions {
   maxAttempts?: number;
   /** Per-request timeout in ms. */
   requestTimeoutMs?: number;
+  /** After a batch exhausts its attempts, don't try the network again for this
+   *  long — saves just buffer. Prevents the retry storm where EVERY save()
+   *  during a queen outage burns a full backoff ladder (~15s/fragment). */
+  circuitCooldownMs?: number;
+  /** Max fragments held while the queen is unreachable. Beyond it, new
+   *  fragments are dropped with a warning — they are NOT recorded as
+   *  delivered, so the TTL check lets the extractor re-produce them after the
+   *  queen recovers. Bounds memory during long outages. */
+  maxBuffered?: number;
 }
 
 interface InventoryEntry { extracted_at: string; content_hash: string; }
@@ -62,9 +71,15 @@ export class DirectTransport implements FragmentSink {
   private readonly maxAttempts: number;
   private readonly requestTimeoutMs: number;
 
+  private readonly circuitCooldownMs: number;
+  private readonly maxBuffered: number;
+
   private buffer: FragmentV08[] = [];
   private delivered = new Map<string, InventoryEntry>();
   private loaded = false;
+  /** Circuit breaker: while Date.now() < this, skip network attempts. */
+  private circuitOpenUntil = 0;
+  private droppedWhileDown = 0;
 
   constructor(opts: DirectTransportOptions) {
     this.ingestUrl = `${opts.queenUrl.replace(/\/+$/, '')}/internal/ingest`;
@@ -75,6 +90,8 @@ export class DirectTransport implements FragmentSink {
     this.maxBatch = Math.min(opts.maxBatch ?? 500, 500);
     this.maxAttempts = opts.maxAttempts ?? 5;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+    this.circuitCooldownMs = opts.circuitCooldownMs ?? 60_000;
+    this.maxBuffered = opts.maxBuffered ?? 5_000;
   }
 
   async ready(): Promise<void> {
@@ -101,15 +118,34 @@ export class DirectTransport implements FragmentSink {
 
   async save(frag: FragmentV08): Promise<void> {
     await this.ready();
+    if (this.buffer.length >= this.maxBuffered) {
+      // Not recorded in the inventory → isFresh() stays false → the extractor
+      // re-produces this unit after the queen recovers. Log once per outage.
+      if (this.droppedWhileDown === 0) {
+        console.warn(`[direct] buffer full (${this.maxBuffered}) — dropping new fragments until delivery recovers; they will be re-extracted later`);
+      }
+      this.droppedWhileDown++;
+      return;
+    }
     this.buffer.push(frag);
-    if (this.buffer.length >= this.maxBatch) await this.deliverBuffer();
+    if (this.buffer.length >= this.maxBatch && !this.circuitOpen()) {
+      await this.deliverBuffer();
+    }
   }
 
-  /** Deliver everything still buffered. Called at the end of each cycle. */
+  /** Deliver everything still buffered. Called at the end of each cycle.
+   *  While the circuit is open (queen unreachable, cooldown running) it keeps
+   *  the buffer and returns — the next cycle's flush retries. */
   async flush(): Promise<void> {
     await this.ready();
+    if (this.circuitOpen()) {
+      console.warn(`[direct] circuit open (${Math.ceil((this.circuitOpenUntil - Date.now()) / 1000)}s left) — keeping ${this.buffer.length} fragment(s) buffered for the next cycle`);
+      return;
+    }
     while (this.buffer.length > 0) await this.deliverBuffer();
   }
+
+  private circuitOpen(): boolean { return Date.now() < this.circuitOpenUntil; }
 
   private async deliverBuffer(): Promise<void> {
     const batch = this.buffer.slice(0, this.maxBatch);
@@ -133,6 +169,11 @@ export class DirectTransport implements FragmentSink {
           this.buffer = this.buffer.slice(batch.length);
           for (const f of batch) this.delivered.set(f.id, { extracted_at: f.extracted_at, content_hash: f.content_hash });
           await this.persistInventory();
+          this.circuitOpenUntil = 0;
+          if (this.droppedWhileDown > 0) {
+            console.warn(`[direct] delivery recovered — ${this.droppedWhileDown} fragment(s) were dropped during the outage and will be re-extracted`);
+            this.droppedWhileDown = 0;
+          }
           console.log(`[direct] delivered batch of ${batch.length} → upserted=${out.upserted ?? '?'} unchanged=${out.unchanged ?? '?'}`);
           return;
         }
@@ -154,8 +195,11 @@ export class DirectTransport implements FragmentSink {
         await sleep(backoff);
       }
     }
-    // Batch stays buffered: deterministic ids make the eventual re-delivery harmless.
-    throw new Error(`direct delivery failed after ${this.maxAttempts} attempts (bee_id=${this.beeId}, size=${batch.length}): ${(lastErr as any)?.message ?? lastErr}`);
+    // Batch stays buffered: deterministic ids make the eventual re-delivery
+    // harmless. Open the circuit so subsequent save()s buffer cheaply instead
+    // of each burning a full backoff ladder against a queen that's down.
+    this.circuitOpenUntil = Date.now() + this.circuitCooldownMs;
+    throw new Error(`direct delivery failed after ${this.maxAttempts} attempts (bee_id=${this.beeId}, size=${batch.length}): ${(lastErr as any)?.message ?? lastErr} — circuit open for ${Math.round(this.circuitCooldownMs / 1000)}s`);
   }
 
   private async persistInventory(): Promise<void> {
