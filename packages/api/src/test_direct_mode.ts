@@ -245,6 +245,28 @@ async function main(): Promise<void> {
     await app.close();
   }
 
+  // ── 3b. v1.2: promoted meta columns (HIVE_META_COLUMNS) ─────────────────
+  console.log('\n[3b] promoted meta columns');
+  {
+    const dir = tmp('metacols');
+    const qi = new QueenIndex(dir, undefined, { metaColumns: ['celex', 'article'] });
+    await qi.ready();
+    const batch = [
+      buildFragment(beeIdentity, 'law-1', 'Article six body.', { celex: '32024R1689', article: '6', anchor: 'x' }),
+      buildFragment(beeIdentity, 'law-2', 'Article seven body.', { celex: '32024R1689', article: '7' }),
+      buildFragment(beeIdentity, 'law-3', 'No meta at all.'),
+    ];
+    const res = await qi.ingestBatch(batch, beeIdentity.publicKeyHex);
+    ok(res.ok === true, 'ingest with meta columns succeeds');
+    const lancedb = await import('@lancedb/lancedb');
+    const t = await (await lancedb.connect(dir)).openTable('fragments');
+    ok(await t.countRows(`meta_celex = '32024R1689'`) === 3 - 1, `meta_celex is a filterable column (got ${await t.countRows(`meta_celex = '32024R1689'`)})`);
+    ok(await t.countRows(`meta_article = '6'`) === 1, 'meta_article filter hits exactly the right provision');
+    ok(await t.countRows(`meta_celex = ''`) === 1, 'fragments without that meta key carry the empty default');
+    const row = (await t.query().where(`meta_article = '6'`).select(['id', 'meta']).toArray())[0]!;
+    ok(row.id === 'law-1' && String(row.meta).includes('"anchor":"x"'), 'full meta JSON still stored verbatim alongside the promoted columns');
+  }
+
   // ── 4. Outage behavior: circuit breaker + bounded buffer ────────────────
   console.log('\n[4] queen outage: circuit breaker + buffer cap');
   {

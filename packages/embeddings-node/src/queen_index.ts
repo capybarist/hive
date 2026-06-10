@@ -19,9 +19,14 @@ export interface QueenQueryResult { hits: QueenSearchHit[]; has_hive_data: boole
 export class QueenIndex {
   private idx: VectorIndex;
   private dropped = { model: 0, signature: 0, dim: 0 };
+  /** v1.2 — meta keys promoted to filterable `meta_<key>` LanceDB columns
+   *  (HIVE_META_COLUMNS). Closed-product queens use this to make domain
+   *  metadata (e.g. legal anchors) queryable without forking the schema. */
+  private metaColumns: string[];
 
-  constructor(dir: string, idx?: VectorIndex) {
+  constructor(dir: string, idx?: VectorIndex, opts: { metaColumns?: string[] } = {}) {
     this.idx = idx ?? new LanceVectorIndex(dir);
+    this.metaColumns = opts.metaColumns ?? [];
   }
 
   async ready(): Promise<void> { await this.idx.ready(); }
@@ -61,7 +66,16 @@ export class QueenIndex {
   }
 
   private toRecord(f: FragmentV08): IndexRecord {
+    let extra: Record<string, string> | undefined;
+    if (this.metaColumns.length > 0) {
+      extra = {};
+      for (const k of this.metaColumns) {
+        const v = f.meta?.[k];
+        extra[`meta_${k}`] = v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+      }
+    }
     return {
+      ...(extra ? { extra } : {}),
       id: f.id,
       vector: Array.from(decodeVector(f.vector, EMBEDDING_DIM)),
       text: f.text,

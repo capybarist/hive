@@ -17,6 +17,10 @@ export interface IndexRecord {
   status: string;
   /** JSON-serialized FragmentV08.meta ('' when absent). Stored + returned verbatim. */
   meta?: string;
+  /** v1.2 — promoted meta columns (HIVE_META_COLUMNS): selected meta keys
+   *  lifted into real, filterable LanceDB columns, named `meta_<key>`. Every
+   *  record in a batch carries the same key set ('' for absent values). */
+  extra?: Record<string, string>;
 }
 
 export interface SearchHit {

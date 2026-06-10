@@ -3,6 +3,22 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.0 — closed-product queens: promoted meta columns + contextualized embeddings
+
+The two features the first direct-mode product (Acquis) needed; both generic.
+
+- **`HIVE_META_COLUMNS=k1,k2,…`** (queen): promotes those `FragmentV08.meta`
+  keys to real, filterable `meta_<k>` LanceDB columns at ingest. Domain
+  deployments (legal anchors, document validity, …) get queryable metadata
+  without forking the fragment schema; the full `meta` JSON is still stored
+  verbatim. Pre-existing tables without the columns keep working (promoted
+  values dropped with a one-time warning).
+- **`VerbatimFragment.embedText`** (adapters): what to EMBED when it should
+  differ from the stored verbatim text — e.g. anchor-contextualized
+  ("AI Act, Article 6(1)(a): …"), which dramatically improves retrieval for
+  citation-shaped queries. Stored/signed `text` stays verbatim; applies when
+  the unit survives chunking as a single chunk.
+
 ## v1.1.1 — direct transport: outage circuit breaker
 
 Fix for sustained queen outages in direct mode (found live in the local

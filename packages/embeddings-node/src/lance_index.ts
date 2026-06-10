@@ -30,6 +30,12 @@ export class LanceVectorIndex implements VectorIndex {
    *  on-disk schema, so we strip `meta` for them (logged once). */
   private hasMetaCol = true;
   private warnedNoMeta = false;
+  /** Column names present on disk — promoted meta columns (v1.2) not in an
+   *  older table's schema are stripped from writes (logged once). Null until
+   *  the table exists; a table created by us includes whatever the first
+   *  batch carries. */
+  private diskCols: Set<string> | null = null;
+  private warnedExtra = new Set<string>();
   constructor(private dir: string) {}
 
   async ready(): Promise<void> {
@@ -39,6 +45,7 @@ export class LanceVectorIndex implements VectorIndex {
       this.table = await this.db.openTable(TABLE);
       const schema = await this.table.schema();
       this.hasMetaCol = schema.fields.some((f: { name: string }) => f.name === 'meta');
+      this.diskCols = new Set(schema.fields.map((f: { name: string }) => f.name));
       // Load id → content_hash for dedup + unchanged detection.
       const rows = await this.table.query().select(['id', 'content_hash']).toArray();
       for (const r of rows) this.known.set(r.id as string, (r.content_hash as string) ?? '');
@@ -51,18 +58,26 @@ export class LanceVectorIndex implements VectorIndex {
   has(id: string): boolean { return this.known.has(id); }
 
   /** Normalize records to the on-disk schema: meta is always a string column
-   *  on tables that have it, and absent on tables that don't. */
+   *  on tables that have it, and absent on tables that don't; promoted meta
+   *  columns (v1.2, `extra`) ride along on tables whose schema carries them
+   *  (always true for tables we create) and are stripped otherwise. */
   private toRows(records: IndexRecord[]): Record<string, unknown>[] {
     return records.map((r) => {
-      const { meta, ...rest } = r;
-      if (!this.hasMetaCol) {
-        if (meta && !this.warnedNoMeta) {
-          this.warnedNoMeta = true;
-          console.warn(`[lance] dropping fragment meta: table '${TABLE}' predates the meta column (recreate the index to keep it)`);
-        }
-        return rest as unknown as Record<string, unknown>;
+      const { meta, extra, ...rest } = r;
+      const row: Record<string, unknown> = { ...rest };
+      if (this.hasMetaCol) row.meta = meta ?? '';
+      else if (meta && !this.warnedNoMeta) {
+        this.warnedNoMeta = true;
+        console.warn(`[lance] dropping fragment meta: table '${TABLE}' predates the meta column (recreate the index to keep it)`);
       }
-      return { ...rest, meta: meta ?? '' } as Record<string, unknown>;
+      for (const [k, v] of Object.entries(extra ?? {})) {
+        if (this.diskCols === null || this.diskCols.has(k)) { row[k] = v; continue; }
+        if (!this.warnedExtra.has(k)) {
+          this.warnedExtra.add(k);
+          console.warn(`[lance] dropping promoted meta column '${k}': table '${TABLE}' predates it (recreate the index to keep it)`);
+        }
+      }
+      return row;
     });
   }
 
@@ -73,6 +88,7 @@ export class LanceVectorIndex implements VectorIndex {
     const data = this.toRows(fresh);
     if (!this.table) {
       this.table = await this.db.createTable(TABLE, data);
+      this.diskCols = new Set(Object.keys(data[0]!));
     } else {
       await this.table.add(data);
     }
@@ -93,6 +109,7 @@ export class LanceVectorIndex implements VectorIndex {
       const data = this.toRows(changed);
       if (!this.table) {
         this.table = await this.db.createTable(TABLE, data);
+        this.diskCols = new Set(Object.keys(data[0]!));
       } else {
         await this.table
           .mergeInsert('id')

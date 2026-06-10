@@ -51,6 +51,12 @@ export interface VerbatimFragment {
   /** v1.x — extensible structured metadata (FragmentV08.meta). Carried into
    *  the signed fragment verbatim; core never interprets it. */
   meta?: Record<string, unknown>;
+  /** v1.2 — what to EMBED for this unit, when it should differ from the
+   *  stored text (e.g. anchor-contextualized: "AI Act, Article 6(1)(a): …").
+   *  The stored/signed `text` stays verbatim; only the vector input changes.
+   *  Applies when the unit survives chunking as a single chunk — re-split
+   *  units fall back to per-chunk text. */
+  embedText?: string;
 }
 
 /**

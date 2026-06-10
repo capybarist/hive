@@ -238,7 +238,12 @@ peerRegistry.register(identity.nodeId, identity.publicKeyHex);
 
 // In-process v0.8 vector index. ONLY the queen/hive role owns one — bees are
 // producers that ship signed vectors over P2P, not consumers.
-const queenIndex: QueenIndex | null = HAS_QUEEN_INDEX ? new QueenIndex(INDEX_DIR) : null;
+// v1.2 — HIVE_META_COLUMNS=k1,k2,… promotes those FragmentV08.meta keys to
+// real, filterable `meta_<k>` LanceDB columns at ingest time (closed-product
+// queens make domain metadata queryable without forking the fragment schema).
+const META_COLUMNS = (process.env.HIVE_META_COLUMNS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+const queenIndex: QueenIndex | null = HAS_QUEEN_INDEX ? new QueenIndex(INDEX_DIR, undefined, { metaColumns: META_COLUMNS }) : null;
+if (queenIndex && META_COLUMNS.length > 0) console.log(`   Meta columns ✓ (${META_COLUMNS.map(c => `meta_${c}`).join(', ')})`);
 if (queenIndex) {
   await queenIndex.ready();
   console.log(`   QueenIndex ready ✓ (LanceDB @ ${INDEX_DIR}, model=${EMBEDDING_MODEL})`);

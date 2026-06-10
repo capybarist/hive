@@ -104,7 +104,10 @@ async function buildAndSaveV08(
   let saved = 0;
   for (const ch of chunks) {
     const chunkId = chunks.length > 1 ? `${vf.id}_c${ch.chunk_index}` : vf.id;
-    const vec = await embedPassage(ch.text);
+    // v1.2 — adapters may supply anchor-contextualized embedding input
+    // (vf.embedText) while the stored text stays verbatim. Only safe while
+    // the unit is a single chunk; split units embed their own chunk text.
+    const vec = await embedPassage(chunks.length === 1 ? (vf.embedText ?? ch.text) : ch.text);
     const vecB64 = encodeVector(vec);
     const input: FragmentV08Input = {
       id: chunkId,
