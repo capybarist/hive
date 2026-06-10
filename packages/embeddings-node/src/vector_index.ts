@@ -15,6 +15,8 @@ export interface IndexRecord {
   node_id: string;
   content_hash: string;
   status: string;
+  /** JSON-serialized FragmentV08.meta ('' when absent). Stored + returned verbatim. */
+  meta?: string;
 }
 
 export interface SearchHit {
@@ -27,6 +29,8 @@ export interface SearchHit {
   source_type: string;
   lang: string;
   node_id: string;
+  /** Parsed FragmentV08.meta, when the fragment carried one. */
+  meta?: Record<string, unknown>;
 }
 
 export interface SearchFilters {
@@ -40,6 +44,11 @@ export interface VectorIndex {
   ready(): Promise<void>;
   /** Upsert; skips ids already present (fragments are immutable). Returns # newly added. */
   upsertBatch(records: IndexRecord[]): Promise<number>;
+  /** Direct-mode ingest upsert: update-on-match, insert-on-miss (LanceDB
+   *  mergeInsert). Records whose stored content_hash already matches are
+   *  skipped and counted as `unchanged` — re-ingesting an identical batch is
+   *  a no-op by construction (the direct-mode idempotency invariant). */
+  mergeUpsertBatch(records: IndexRecord[]): Promise<{ upserted: number; unchanged: number }>;
   search(vector: number[], k: number, filters?: SearchFilters): Promise<SearchHit[]>;
   has(id: string): boolean;
   count(): Promise<number>;

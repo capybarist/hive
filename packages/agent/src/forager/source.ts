@@ -48,6 +48,9 @@ export interface VerbatimFragment {
   confidence: number;
   /** Populated for arXiv papers; used by downstream filters. */
   arxiv_id?: string;
+  /** v1.x — extensible structured metadata (FragmentV08.meta). Carried into
+   *  the signed fragment verbatim; core never interprets it. */
+  meta?: Record<string, unknown>;
 }
 
 /**
@@ -65,7 +68,10 @@ export type ForagerKind =
   /** seed(query/terms) → fetch; no link frontier (PubMed, arXiv, RSS, Web). */
   | 'search'
   /** BFS over a link frontier persisted in CrawlQueue (Wikipedia, Common Crawl). */
-  | 'crawl';
+  | 'crawl'
+  /** Authoritative registry enumerates every document (CatalogSource):
+   *  sweeps are complete + verifiable, change detection by content_hash. */
+  | 'catalog';
 
 /** How the UI renders a scope field and (de)serialises it to `scope[field]`. */
 export type ScopeInput =
@@ -235,4 +241,46 @@ export interface ForagerSource {
    * override for the partition shapes they emit.
    */
   isInPartition?(url: string, scope: Record<string, unknown> | undefined, partition: string): boolean | Promise<boolean>;
+}
+
+// ── CatalogSource (v1.x — direct mode, docs/direct-mode.md §4) ──────────────
+
+/** One document in an authoritative catalog. */
+export interface CatalogEntry {
+  /** Stable identifier within the source (the inventory key). */
+  sourceId: string;
+  url: string;
+  /** ISO date, when the catalog provides it (lets changedSince avoid fetches). */
+  lastModified?: string;
+}
+
+/**
+ * A ForagerSource over a *catalogued* corpus: an authoritative registry can
+ * enumerate every document and report changes — unlike frontier sources
+ * (Wikipedia) that discover documents by following links. This makes
+ * completeness verifiable: after a full sweep, diff(catalog ids, local
+ * inventory ids) must be empty. The sweep loop lives in catalog_sweep.ts.
+ *
+ * Naming note: the spec sketches `fetch(entry) → RawDocument`, but
+ * ForagerSource already owns `fetch(url) → FetchResult` with an incompatible
+ * signature, so the per-entry fetch is `fetchEntry` and reuses FetchResult
+ * (the existing verbatim-fragment envelope) instead of a new RawDocument type.
+ */
+export interface CatalogSource extends ForagerSource {
+  /** Enumerate the complete catalog. */
+  listAll(): AsyncIterable<CatalogEntry>;
+  /** Enumerate entries changed since `date` (incremental sweeps). Err on the
+   *  inclusive side (>=, or a small overlap window): over-reporting is free —
+   *  the sweep's content_hash check skips unchanged docs — while
+   *  under-reporting silently loses updates. */
+  changedSince(date: Date): AsyncIterable<CatalogEntry>;
+  /** Fetch one catalogued document as verbatim fragments. */
+  fetchEntry(entry: CatalogEntry): Promise<FetchResult>;
+}
+
+export function isCatalogSource(s: ForagerSource): s is CatalogSource {
+  const c = s as Partial<CatalogSource>;
+  return typeof c.listAll === 'function'
+    && typeof c.changedSince === 'function'
+    && typeof c.fetchEntry === 'function';
 }

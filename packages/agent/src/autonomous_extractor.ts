@@ -22,7 +22,10 @@ import { CrawlQueue } from './crawl_queue.js';
 import { wikipediaSource } from './forager/wikipedia_source.js';
 import { CommonCrawlSource } from './forager/common_crawl_source.js';
 import { getForager, describeForager } from './forager/registry.js';
+import { isCatalogSource } from './forager/source.js';
 import type { VerbatimFragment, ForagerDescriptor } from './forager/source.js';
+import type { FragmentSink } from './fragment_sink.js';
+import { CatalogInventory, runCatalogSweep } from './catalog_sweep.js';
 import { promises as fs } from 'node:fs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -81,7 +84,7 @@ function identifiersFor(vf: VerbatimFragment): Record<string, string> | undefine
 async function buildAndSaveV08(
   vf: VerbatimFragment,
   adapterId: string,
-  store: KnowledgeStore,
+  store: FragmentSink,
   identity: NodeIdentity,
   partition: string | undefined,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
@@ -122,6 +125,7 @@ async function buildAndSaveV08(
       ttl_seconds: ttlSec,
       partition,
       confidence: vf.confidence,
+      meta: vf.meta,
     };
     const signed = buildSignedFragmentV08(input, vecB64, identity);
     await store.save(signed);
@@ -136,7 +140,7 @@ async function buildAndSaveV08(
 // embed pass entirely. Checks vf.id and the first-chunk id since the agent
 // may have chunked the section last time.
 async function isFresh(
-  store: KnowledgeStore,
+  store: FragmentSink,
   vf: VerbatimFragment,
   ttlSec: number,
 ): Promise<boolean> {
@@ -154,7 +158,10 @@ async function isFresh(
 export async function runAutonomousExtraction(
   objective: string,
   budgetConfig: Partial<BudgetConfig> = {},
-  existingStore?: KnowledgeStore,
+  // Where signed fragments are published: a KnowledgeStore (p2p Hyperbee
+  // append, the default) or a DirectTransport (HTTP delivery to a queen) —
+  // both satisfy FragmentSink. When omitted, a local KnowledgeStore is opened.
+  existingStore?: FragmentSink,
   onIndexed?: (frag: { id: string; title?: string; source: string }) => void,
   // Kept in the signature for backwards-compat with api_server.ts callers;
   // v0.8 has no LLM in the extractor loop, so we always report ok.
@@ -164,8 +171,8 @@ export async function runAutonomousExtraction(
 
   const budget = new BudgetController({ ...DEFAULT_BUDGET, ...budgetConfig });
 
-  let store: KnowledgeStore;
-  let ownStore = false;
+  let store: FragmentSink;
+  let ownStore: KnowledgeStore | null = null;
   let identity: NodeIdentity;
   if (existingStore) {
     store = existingStore;
@@ -175,9 +182,9 @@ export async function runAutonomousExtraction(
     identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
   } else {
     identity = loadOrCreateIdentity(resolve(DATA_DIR, 'identity'));
-    store = new KnowledgeStore(DATA_DIR, identity);
-    await store.ready();
-    ownStore = true;
+    ownStore = new KnowledgeStore(DATA_DIR, identity);
+    await ownStore.ready();
+    store = ownStore;
   }
 
   // Warm the e5 ONNX model once per cycle. After the first cycle the pipeline
@@ -373,6 +380,37 @@ export async function runAutonomousExtraction(
     }
   };
 
+  // CatalogSource sweep (v1.x — direct mode §4). The catalog's content_hash
+  // inventory is the change detector here, so the TTL freshness skip does NOT
+  // apply: a changed document must re-embed even if its TTL hasn't lapsed.
+  const runCatalog = async (decl: DeclaredSource): Promise<void> => {
+    const forager = getForager(decl.id);
+    if (!forager || !isCatalogSource(forager)) {
+      console.warn(`  [${decl.id}] declared as catalog but the registered forager doesn't implement CatalogSource — skipping`);
+      return;
+    }
+    const inventory = new CatalogInventory(DATA_DIR, decl.id);
+    await inventory.load();
+    const summary = await runCatalogSweep(
+      forager,
+      inventory,
+      async (vf) => {
+        try {
+          const n = await buildAndSaveV08(vf, forager.id, store, identity, decl.partition, onIndexed);
+          budget.recordFragments(n);
+          fragmentsIndexed += n;
+          if (n > 0) recordActivity(forager.id, vf);
+        } catch (e: any) {
+          console.warn(`[v0.8] Build/save failed for ${vf.id}: ${e?.message ?? e}`);
+          errors++;
+        }
+      },
+      { budgetExhausted: () => budget.exhausted().yes },
+    );
+    skippedFresh += summary.unchanged;
+    errors += summary.errors;
+  };
+
   // Legacy: a bee with NO published manifest could infer arxiv/rss from the
   // objective keywords. Preserve that by augmenting the declared list.
   const effectiveSources: DeclaredSource[] = [...declaredSources];
@@ -392,7 +430,20 @@ export async function runAutonomousExtraction(
     const desc = descFor(decl.id);
     if (!desc) { console.warn(`[manifest] Unknown source '${decl.id}' — no forager registered; skipping`); continue; }
     if (desc.kind === 'crawl') await runFrontierCrawl(decl);
+    else if (desc.kind === 'catalog') await runCatalog(decl);
     else await runSearchSource(decl, desc);
+  }
+
+  // Direct transport buffers deliveries — push out whatever this cycle left
+  // pending before reporting totals. A failed flush counts as cycle errors;
+  // deterministic ids make the eventual re-delivery harmless.
+  if (store.flush) {
+    try {
+      await store.flush();
+    } catch (e: any) {
+      console.warn(`[transport] flush failed: ${e?.message ?? e}`);
+      errors++;
+    }
   }
 
   // Read the Hypercore-resident total so the runLoop log carries "I signed X
@@ -412,7 +463,7 @@ export async function runAutonomousExtraction(
 
   await crawlQueue.flush();
   await flushActivity();
-  if (ownStore) await store.close();
+  if (ownStore) await ownStore.close();
   return { fragmentsIndexed, skippedFresh, errors, totalLocal, summary: finalSummary, budget: budget.summary() };
 }
 
