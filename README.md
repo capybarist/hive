@@ -261,6 +261,13 @@ HIVE_INGEST_TOKEN=<same shared secret>
 HIVE_TRUSTED_BEES=<bee_id>:<ed25519 pubkey>[,...]
 ```
 
+Try it locally in one command — boots a wired queen+bee pair (the script does
+the allowlist handshake for you) and tails both logs until Ctrl+C:
+
+```bash
+bash direct.sh        # queen :8090 (ingest ✓) + bee :8080 (HIVE_TRANSPORT=direct)
+```
+
 Full contract, retry/idempotency semantics and a docker-compose example:
 [`docs/direct-mode.md`](docs/direct-mode.md).
 

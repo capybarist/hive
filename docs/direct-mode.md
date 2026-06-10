@@ -150,6 +150,35 @@ descriptor; the extractor then runs a **sweep** instead of a crawl
 CatalogSource works under both transports — it's about *what* to extract;
 direct mode is about *where* it goes.
 
+## Local sandbox in one command
+
+```bash
+bash direct.sh                                   # queen :8090 + direct bee :8080
+HIVE_OBJECTIVE='"Quantum computing"' bash direct.sh   # pick the crawl topic
+bash direct.sh clean                             # wipe the sandbox (~/.hive-direct)
+```
+
+`direct.sh` does the allowlist handshake automatically (pre-creates the bee
+identity and injects `bee_id:pubkey` into the queen's `HIVE_TRUSTED_BEES`),
+generates and persists a shared ingest token, starts both nodes and tails
+their logs; Ctrl+C shuts both down cleanly. It prints a ready-to-paste
+raw-fragment query (`"use_llm": false` — no LLM key needed) filtered by the
+sandbox bee's node id. The manual two-step handshake below is only needed
+when bee and queen live on different machines.
+
+The single-node launchers understand direct mode too — the env vars pass
+straight through:
+
+```bash
+# a direct bee against a remote queen
+HIVE_TRANSPORT=direct HIVE_QUEEN_URL=https://queen.example.com \
+HIVE_INGEST_TOKEN=<secret> bash hive.sh
+
+# a queen accepting direct ingest
+HIVE_INGEST_ENABLED=true HIVE_INGEST_TOKEN=<secret> \
+HIVE_TRUSTED_BEES=<bee_id>:<pubkey> bash queen.sh
+```
+
 ## docker-compose example (one host, one BEE + one QUEEN, no swarm)
 
 ```yaml

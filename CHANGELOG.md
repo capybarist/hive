@@ -31,7 +31,11 @@ defaults to `p2p` and existing nodes are untouched.
   crawling: per-source `content_hash` inventory, unchanged docs skip
   embed+delivery, completeness verifiable after a full sweep
   (`new / changed / unchanged / errors` summaries).
-- `/api/status` now reports `transport` and `ingest_enabled`.
+- `/api/status` now reports `transport` and `ingest_enabled`; the UI mode
+  badge shows `bee · direct` / `queen · ingest`.
+- **`direct.sh`**: one-command local sandbox — boots a wired queen+bee pair
+  with the allowlist handshake done for you. `hive.sh` / `queen.sh` document
+  the pass-through env vars for single-node direct setups.
 - Tests: `npm run test:direct -w @hive/api` (28 asserts, offline); existing
   P2P suites pass untouched.
 

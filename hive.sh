@@ -22,6 +22,12 @@
 #   HIVE_PORT=8081 bash hive.sh          # custom port
 #   BEE_TOPIC_DOMAIN=health bash hive.sh # soft topic preference
 #
+# Direct transport (docs/direct-mode.md) — a bee can deliver over HTTP to one
+# queen instead of joining the P2P swarm (env vars pass straight through):
+#   HIVE_TRANSPORT=direct HIVE_QUEEN_URL=https://queen.example.com \
+#   HIVE_INGEST_TOKEN=<secret> bash hive.sh
+# For a local queen+bee direct pair in ONE command, use `bash direct.sh`.
+#
 # LLM is only required for query/synthesis (queen + hive modes); a producer
 # bee runs with no LLM key at all in v0.6+.
 #   LLM_PROVIDER=gemini|claude|openai|groq|ollama   (default: gemini)
