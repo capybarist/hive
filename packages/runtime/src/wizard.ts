@@ -74,7 +74,14 @@ export async function runWizard(roleArg?: string): Promise<WizardResult> {
   mkdirSync(cache, { recursive: true });
   mkdirSync(cfg,   { recursive: true });
 
-  if (alreadyConfigured()) return loadExisting();
+  if (alreadyConfigured()) {
+    const existing = loadExisting();
+    // v1.2.1 — an explicit role (arg or env) overrides the SAVED role: the
+    // operator typing `hive queen` (or setting HIVE_MODE in compose) means it,
+    // even when a previous run on this volume saved something else.
+    const override = normalizeRole(roleArg) ?? normalizeRole(process.env.HIVE_MODE);
+    return override ? { ...existing, role: override } : existing;
+  }
 
   // First run — pick the role. Priority: explicit arg → HIVE_MODE env →
   // interactive prompt (TTY only) → default `hive`.
@@ -83,9 +90,12 @@ export async function runWizard(roleArg?: string): Promise<WizardResult> {
     normalizeRole(process.env.HIVE_MODE) ??
     (process.stdin.isTTY ? await promptRole() : 'hive');
 
-  // Minimal .env: generated auth key + chosen role. Sources/topic/LLM are set
-  // in the web UI (the node won't extract or answer until configured there).
-  const hiveApiKey = hex(16);
+  // Minimal .env: auth key + chosen role. Sources/topic/LLM are set in the
+  // web UI. An operator-provided HIVE_API_KEY (env) is recorded as-is —
+  // including the EXPLICIT empty string, which means "API open by choice"
+  // (internal deployments behind their own gate); only generate a key when
+  // the operator expressed nothing.
+  const hiveApiKey = process.env.HIVE_API_KEY ?? hex(16);
   const lines = [
     `# HIVE config — generated on first run ${new Date().toISOString()}`,
     `# Configure sources, topic, and LLM provider via the Settings panel in the`,

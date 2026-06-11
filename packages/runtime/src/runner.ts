@@ -14,17 +14,22 @@ import type { WizardResult } from './wizard.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export function runNode(cfg: WizardResult): void {
+  // ENV WINS. Anything the operator set explicitly (docker compose, systemd,
+  // shell) is intent; the wizard's saved/generated config only fills gaps.
+  // Before v1.2.1 these were unconditional overrides, which clobbered
+  // HIVE_DATA_DIR in containers and injected a generated HIVE_API_KEY into
+  // deployments that wanted the API open (e.g. an internal closed queen).
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    HIVE_MODE: cfg.role,
-    HIVE_DATA_DIR: cfg.dataDir,
-    HIVE_API_KEY: cfg.hiveApiKey,
-    HIVE_PUBLIC_DEMO_TOKEN: cfg.hiveApiKey,
+    HIVE_MODE: cfg.role,   // role already resolved as: explicit arg > env > saved config
+    HIVE_DATA_DIR: process.env.HIVE_DATA_DIR ?? cfg.dataDir,
+    HIVE_API_KEY: process.env.HIVE_API_KEY ?? cfg.hiveApiKey,
+    HIVE_PUBLIC_DEMO_TOKEN: process.env.HIVE_PUBLIC_DEMO_TOKEN ?? cfg.hiveApiKey,
   };
-  if (cfg.llmProvider) env.LLM_PROVIDER = cfg.llmProvider;
-  if (cfg.llmApiKey) env.LLM_API_KEY = cfg.llmApiKey;
-  if (cfg.publicTopic) env.HIVE_TOPIC = cfg.publicTopic;
-  if (cfg.privateTopicHex) env.HIVE_TOPIC_HEX = cfg.privateTopicHex;
+  if (cfg.llmProvider && !process.env.LLM_PROVIDER) env.LLM_PROVIDER = cfg.llmProvider;
+  if (cfg.llmApiKey && !process.env.LLM_API_KEY) env.LLM_API_KEY = cfg.llmApiKey;
+  if (cfg.publicTopic && !process.env.HIVE_TOPIC) env.HIVE_TOPIC = cfg.publicTopic;
+  if (cfg.privateTopicHex && !process.env.HIVE_TOPIC_HEX) env.HIVE_TOPIC_HEX = cfg.privateTopicHex;
 
   // Dev-mode: spawn the workspace's api_server via tsx. The bundle step (when
   // shipped) replaces this with the bundled server.js. Until then, this works

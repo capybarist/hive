@@ -3,6 +3,20 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.1 — CLI: operator env always wins over wizard/saved config
+
+Deployment bugs found while containerising the first direct-mode product:
+`hive <role>` (the npm CLI) clobbered explicit operator configuration.
+
+- `HIVE_DATA_DIR`, `HIVE_API_KEY`, `HIVE_PUBLIC_DEMO_TOKEN`, `LLM_*`,
+  `HIVE_TOPIC*` set in the environment (docker compose, systemd, shell) now
+  take precedence over the wizard's generated/saved config — including the
+  EXPLICIT empty `HIVE_API_KEY=` ("API open by choice" for internal queens
+  behind their own gate). Before, the generated key was injected
+  unconditionally and `HIVE_DATA_DIR` was overwritten in containers.
+- An explicit role (`hive queen` arg or `HIVE_MODE` env) now overrides the
+  role saved by a previous run on the same volume.
+
 ## v1.2.0 — closed-product queens: promoted meta columns + contextualized embeddings
 
 The two features the first direct-mode product (Acquis) needed; both generic.
