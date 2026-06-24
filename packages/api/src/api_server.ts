@@ -13,7 +13,7 @@ import {
   type FragmentV08,
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
-import { QueenIndex } from '@hive/embeddings-node';
+import { QueenIndex, rerankerEnabled, warmupReranker } from '@hive/embeddings-node';
 import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers, DirectTransport } from '@hive/agent';
 import { registerIngestRoute, parseTrustedBees } from './ingest.js';
 
@@ -247,6 +247,14 @@ if (queenIndex && META_COLUMNS.length > 0) console.log(`   Meta columns ✓ (${M
 if (queenIndex) {
   await queenIndex.ready();
   console.log(`   QueenIndex ready ✓ (LanceDB @ ${INDEX_DIR}, model=${EMBEDDING_MODEL})`);
+  // Second-stage cross-encoder reranker — OPT-IN via HIVE_RERANK=on (off by
+  // default; it adds RAM/CPU and helps most on homogeneous corpora). Warm it in
+  // the background so the first /api/query isn't slow; never block boot.
+  if (rerankerEnabled()) {
+    warmupReranker()
+      .then(() => console.log('   Reranker ready ✓ (HIVE_RERANK=on, cross-encoder precision stage)'))
+      .catch((e: Error) => console.warn(`   Reranker warmup failed (queries fall back to e5 cosine): ${e.message}`));
+  }
 }
 
 // Helper: upsert a batch of v0.8 fragments into the queen's index, supplying

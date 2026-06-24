@@ -10,3 +10,4 @@ export type { QueenSearchHit, QueenQueryResult } from './queen_index.js';
 export { LanceVectorIndex } from './lance_index.js';
 export type { VectorIndex, IndexRecord, SearchHit, SearchFilters } from './vector_index.js';
 export { RELEVANT_SCORE, meaningfulTokens, meetsKeywordGate, isRelevant } from './retrieval_gate.js';
+export { rerankerEnabled, rerankPool, rerankScores, warmupReranker } from './reranker.js';

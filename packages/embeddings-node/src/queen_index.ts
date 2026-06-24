@@ -12,6 +12,7 @@ import { embedQuery } from './embedder.js';
 import type { IndexRecord, SearchFilters, SearchHit, VectorIndex } from './vector_index.js';
 import { LanceVectorIndex } from './lance_index.js';
 import { isRelevant, meaningfulTokens } from './retrieval_gate.js';
+import { rerankerEnabled, rerankPool, rerankScores } from './reranker.js';
 
 export interface QueenSearchHit extends SearchHit { relevant: boolean; }
 export interface QueenQueryResult { hits: QueenSearchHit[]; has_hive_data: boolean; }
@@ -120,10 +121,27 @@ export class QueenIndex {
   }
 
   /** Query: embed (queen-side, the ONE place the queen embeds), search,
+   *  cross-encoder re-rank the candidates (precision stage over e5's recall),
    *  apply the recalibrated relevance gate per hit, derive has_hive_data. */
   async query(question: string, k = 8, filters?: SearchFilters): Promise<QueenQueryResult> {
     const qVec = Array.from(await embedQuery(question));
-    const hits = await this.idx.search(qVec, k, filters);
+    // Over-fetch a candidate pool, then let the cross-encoder pick the true
+    // top-k. e5's cosine compresses on homogeneous corpora, so the answering
+    // passage can sit several ranks down — the reranker reads (query,passage)
+    // jointly and restores the ordering. Reranking is a precision booster, not
+    // a hard dependency: any failure falls back to e5's cosine order.
+    const useRerank = rerankerEnabled();
+    let hits = await this.idx.search(qVec, useRerank ? rerankPool(k) : k, filters);
+    if (useRerank && hits.length > 1) {
+      try {
+        const rel = await rerankScores(question, hits.map((h) => `${h.title ? `${h.title}. ` : ''}${h.text}`));
+        hits = hits.map((h, i) => ({ h, r: rel[i] ?? -Infinity }))
+          .sort((a, b) => b.r - a.r).map((x) => x.h);
+      } catch (err) {
+        console.warn(`[rerank] falling back to e5 cosine order: ${(err as Error).message}`);
+      }
+      hits = hits.slice(0, k);
+    }
     const tokens = meaningfulTokens(question);
     const marked: QueenSearchHit[] = hits.map((h) => ({
       ...h,

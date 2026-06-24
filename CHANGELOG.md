@@ -3,6 +3,29 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.0 — Optional cross-encoder reranker (second-stage retrieval)
+
+The e5 bi-encoder embeds query and passage independently, so on a homogeneous
+corpus (e.g. one body of legislation) its cosine scores compress into a narrow
+band and the passage that actually ANSWERS a question can rank several places
+down — lexical near-misses can even outrank it. A cross-encoder reads
+`(query, passage)` jointly and scores their true relevance, restoring
+discrimination over the candidates e5 already recalled. Local and free (no LLM,
+no API; runs on CPU via `@huggingface/transformers`, already a dependency for
+e5).
+
+- **`HIVE_RERANK=on`** (default **off**) enables it in `QueenIndex.query()`:
+  over-fetch a candidate pool, re-score with the cross-encoder, truncate to k.
+  Off by default because it loads a ~300-500MB model into the queen's RAM and
+  helps most on homogeneous corpora — generic nodes are unaffected unless they
+  opt in. Any reranker failure falls back to e5's cosine order (never a hard
+  dependency). Warmed at queen boot so the first query isn't slow.
+- **`HIVE_RERANK_MODEL`** (default `Xenova/bge-reranker-base`, multilingual to
+  match e5), **`HIVE_RERANK_DTYPE`** (default `q8`), **`HIVE_RERANK_POOL`**
+  (default 40) tune the stage. Measured on the AI Act: "is the AI Act in
+  force?" lifts Art. 113 from cosine-rank 4 to rank 1; "GDPR fines" lifts
+  Art. 83(4)/(5) (the actual amounts) to ranks 1-2.
+
 ## v1.2.1 — CLI: operator env always wins over wizard/saved config
 
 Deployment bugs found while containerising the first direct-mode product:
