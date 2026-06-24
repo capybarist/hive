@@ -42,7 +42,7 @@ export function rerankPool(k: number): number {
   return Math.max(Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 40, k);
 }
 
-type Tokenizer = (texts: string[], opts: { text_pair: string[]; padding: boolean; truncation: boolean }) => unknown;
+type Tokenizer = (texts: string[], opts: { text_pair: string[]; padding: boolean; truncation: boolean; max_length?: number }) => unknown;
 type SeqModel = (inputs: unknown) => Promise<{ logits: { data: Float32Array; dims: number[] } }>;
 
 let _tok: Tokenizer | null = null;
@@ -64,16 +64,28 @@ async function load(): Promise<void> {
 export async function warmupReranker(): Promise<void> { if (rerankerEnabled()) await load(); }
 
 /** Relevance score per passage (higher = more relevant), aligned to `passages`.
- *  One batched forward pass; the model reads each (query, passage) pair jointly.
- *  bge-reranker emits a single relevance logit per pair — we order by it raw
- *  (sigmoid is monotonic, so it would not change the order). */
+ *  The model reads each (query, passage) pair jointly; bge-reranker emits a
+ *  single relevance logit per pair — we order by it raw (sigmoid is monotonic,
+ *  so it would not change the order).
+ *
+ *  Run in small sub-batches with a capped sequence length: the cross-encoder's
+ *  activation memory scales with batch_size × seq_len, and a single 40×512 pass
+ *  spiked the queen's RSS to ~3 GB and got it OOM-killed on a small box. Scores
+ *  are per-pair independent, so sub-batching is identical in result, only
+ *  bounded in peak memory. HIVE_RERANK_BATCH / HIVE_RERANK_MAXLEN tune it. */
 export async function rerankScores(query: string, passages: string[]): Promise<number[]> {
   if (passages.length === 0) return [];
   await load();
-  const inputs = _tok!(new Array(passages.length).fill(query), { text_pair: passages, padding: true, truncation: true });
-  const { logits } = await _model!(inputs);
-  const cols = logits.dims[1] ?? 1;
+  const batch = Math.max(1, Number(process.env.HIVE_RERANK_BATCH) || 8);
+  const maxLen = Math.max(64, Number(process.env.HIVE_RERANK_MAXLEN) || 320);
   const out: number[] = [];
-  for (let i = 0; i < passages.length; i++) out.push(logits.data[i * cols]!);
+  for (let start = 0; start < passages.length; start += batch) {
+    const chunk = passages.slice(start, start + batch);
+    const inputs = _tok!(new Array(chunk.length).fill(query),
+      { text_pair: chunk, padding: true, truncation: true, max_length: maxLen });
+    const { logits } = await _model!(inputs);
+    const cols = logits.dims[1] ?? 1;
+    for (let i = 0; i < chunk.length; i++) out.push(logits.data[i * cols]!);
+  }
   return out;
 }

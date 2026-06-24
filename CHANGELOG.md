@@ -3,6 +3,15 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.1 — Reranker: bound peak memory (sub-batching + capped length)
+
+A single 40×512 cross-encoder pass spiked the queen's RSS to ~3 GB and got it
+OOM-killed on a small box after a handful of queries. The reranker now scores
+candidates in small sub-batches with a capped sequence length — scores are
+per-pair independent, so the result is identical, only the peak activation
+memory is bounded. Tunable via `HIVE_RERANK_BATCH` (default 8) and
+`HIVE_RERANK_MAXLEN` (default 320). No change for nodes with `HIVE_RERANK` off.
+
 ## v1.3.0 — Optional cross-encoder reranker (second-stage retrieval)
 
 The e5 bi-encoder embeds query and passage independently, so on a homogeneous
