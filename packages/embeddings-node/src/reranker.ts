@@ -42,7 +42,7 @@ export function rerankPool(k: number): number {
   return Math.max(Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 40, k);
 }
 
-type Tokenizer = (texts: string[], opts: { text_pair: string[]; padding: boolean; truncation: boolean; max_length?: number }) => unknown;
+type Tokenizer = (texts: string[], opts: { text_pair: string[]; padding: boolean | 'max_length'; truncation: boolean; max_length?: number }) => unknown;
 type SeqModel = (inputs: unknown) => Promise<{ logits: { data: Float32Array; dims: number[] } }>;
 
 let _tok: Tokenizer | null = null;
@@ -68,11 +68,15 @@ export async function warmupReranker(): Promise<void> { if (rerankerEnabled()) a
  *  single relevance logit per pair — we order by it raw (sigmoid is monotonic,
  *  so it would not change the order).
  *
- *  Run in small sub-batches with a capped sequence length: the cross-encoder's
- *  activation memory scales with batch_size × seq_len, and a single 40×512 pass
- *  spiked the queen's RSS to ~3 GB and got it OOM-killed on a small box. Scores
- *  are per-pair independent, so sub-batching is identical in result, only
- *  bounded in peak memory. HIVE_RERANK_BATCH / HIVE_RERANK_MAXLEN tune it. */
+ *  Run in FIXED-SHAPE sub-batches: every model call gets identical input dims
+ *  [batch, maxLen] — a constant batch size (the final short batch is padded with
+ *  dummy pairs, scored, then dropped) and `padding:'max_length'` for a constant
+ *  sequence length. WHY: ONNX Runtime grows an internal memory arena to fit each
+ *  NEW input shape and never releases it, so the earlier ragged `padding:true`
+ *  (batch and seq-len varied per call) leaked the queen's RSS by ~1 GB/day until
+ *  it OOM-killed the host. One stable shape → one stable arena. Scores are
+ *  per-pair independent, so the result is unchanged. HIVE_RERANK_BATCH /
+ *  HIVE_RERANK_MAXLEN tune the (now fixed) dims. */
 export async function rerankScores(query: string, passages: string[]): Promise<number[]> {
   if (passages.length === 0) return [];
   await load();
@@ -80,12 +84,16 @@ export async function rerankScores(query: string, passages: string[]): Promise<n
   const maxLen = Math.max(64, Number(process.env.HIVE_RERANK_MAXLEN) || 320);
   const out: number[] = [];
   for (let start = 0; start < passages.length; start += batch) {
-    const chunk = passages.slice(start, start + batch);
-    const inputs = _tok!(new Array(chunk.length).fill(query),
-      { text_pair: chunk, padding: true, truncation: true, max_length: maxLen });
+    const slice = passages.slice(start, start + batch);
+    const real = slice.length;
+    // Pad the batch dimension up to a constant `batch` with empty pairs so the
+    // input shape never changes between calls (the dummies are scored and dropped).
+    const chunk = real === batch ? slice : [...slice, ...Array(batch - real).fill('')];
+    const inputs = _tok!(new Array(batch).fill(query),
+      { text_pair: chunk, padding: 'max_length', truncation: true, max_length: maxLen });
     const { logits } = await _model!(inputs);
     const cols = logits.dims[1] ?? 1;
-    for (let i = 0; i < chunk.length; i++) out.push(logits.data[i * cols]!);
+    for (let i = 0; i < real; i++) out.push(logits.data[i * cols]!);
   }
   return out;
 }

@@ -3,6 +3,21 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.2 — Reranker: fixed-shape batches (stop ONNX arena memory growth)
+
+v1.3.1 bounded the reranker's PEAK memory but not its cumulative growth: it still
+used ragged batches (`padding:true`, so batch size and sequence length varied per
+call). ONNX Runtime allocates a fresh internal memory arena for each NEW input
+shape and never frees it, so a busy queen's RSS crept up ~1 GB/day until it
+OOM-killed the host (observed on a 4 GB Acquis box).
+
+Now every model call uses a FIXED input shape `[HIVE_RERANK_BATCH,
+HIVE_RERANK_MAXLEN]`: the final short sub-batch is padded with dummy pairs
+(scored, then dropped) and tokenisation uses `padding:'max_length'`. One stable
+shape → one stable arena → flat RSS. Scores are unchanged (per-pair independent).
+Pairs with the v1.3.1 sub-batching and the operator `mem_limit` recommended for
+the queen container.
+
 ## v1.3.1 — Reranker: bound peak memory (sub-batching + capped length)
 
 A single 40×512 cross-encoder pass spiked the queen's RSS to ~3 GB and got it
