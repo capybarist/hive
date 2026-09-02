@@ -390,6 +390,25 @@ class OllamaProvider implements LLMProvider {
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+/** The model each provider uses when LLM_MODEL is unset.
+ *
+ *  Single source of truth on purpose: this used to be duplicated between the
+ *  factory below and validateLLMKey(), and the copies drifted. Groq retired
+ *  `llama-3.3-70b-versatile` and the health-check copy kept probing it, so
+ *  `llm_ok` reported false forever on a node whose LLM answered fine. */
+export const DEFAULT_MODELS: Record<string, string> = {
+  gemini: 'gemini-2.5-flash',
+  claude: 'claude-sonnet-4-6',
+  openai: 'gpt-4o',
+  groq: 'openai/gpt-oss-20b',
+  ollama: 'qwen2.5:3b',
+};
+
+/** The model a given provider will actually use, honouring LLM_MODEL. */
+export function resolveModel(provider: string, override?: string): string {
+  return (override || process.env.LLM_MODEL || '') || DEFAULT_MODELS[provider] || '';
+}
+
 export function createLLMProvider(): LLMProvider {
   const providerName = process.env.LLM_PROVIDER ?? 'gemini';
   const apiKey = process.env.LLM_API_KEY ?? '';
@@ -400,11 +419,11 @@ export function createLLMProvider(): LLMProvider {
   }
 
   switch (providerName) {
-    case 'gemini':  return new GeminiProvider(apiKey, modelOverride || 'gemini-2.5-flash');
-    case 'claude':  return new ClaudeProvider(apiKey, modelOverride || 'claude-sonnet-4-6');
-    case 'openai':  return new OpenAIProvider(apiKey, modelOverride || 'gpt-4o');
-    case 'groq':    return new GroqProvider(apiKey, modelOverride || 'llama-3.3-70b-versatile');
-    case 'ollama':  return new OllamaProvider(modelOverride || 'qwen2.5:3b');
+    case 'gemini':  return new GeminiProvider(apiKey, resolveModel('gemini', modelOverride));
+    case 'claude':  return new ClaudeProvider(apiKey, resolveModel('claude', modelOverride));
+    case 'openai':  return new OpenAIProvider(apiKey, resolveModel('openai', modelOverride));
+    case 'groq':    return new GroqProvider(apiKey, resolveModel('groq', modelOverride));
+    case 'ollama':  return new OllamaProvider(resolveModel('ollama', modelOverride));
     default:
       throw new Error(`Unknown LLM_PROVIDER: "${providerName}". Valid values: gemini, claude, openai, groq, ollama`);
   }
@@ -418,13 +437,19 @@ export function isLLMConfigured(): boolean {
 
 // Makes the cheapest possible call to verify the key is accepted.
 // Returns null on success, or an error message string on failure.
-export async function validateLLMKey(provider: string, apiKey: string): Promise<string | null> {
+//
+// `model` MUST be the model this node will actually answer with. Probing a
+// different one is how a healthy node reported llm_ok:false for weeks: the
+// probe was pinned to a Groq model that Groq had retired (404 model_not_found)
+// while the configured model answered perfectly.
+export async function validateLLMKey(provider: string, apiKey: string, model?: string): Promise<string | null> {
+  const probeModel = resolveModel(provider, model);
   try {
     let res: Response;
     switch (provider) {
       case 'gemini':
         res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${probeModel}:generateContent?key=${apiKey}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -437,7 +462,7 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
         res = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+          body: JSON.stringify({ model: probeModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
           signal: AbortSignal.timeout(10_000),
         });
         break;
@@ -445,7 +470,7 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
         res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+          body: JSON.stringify({ model: probeModel, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
           signal: AbortSignal.timeout(10_000),
         });
         break;
@@ -453,7 +478,7 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
         res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+          body: JSON.stringify({ model: probeModel, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
           signal: AbortSignal.timeout(10_000),
         });
         break;
@@ -473,6 +498,9 @@ export async function validateLLMKey(provider: string, apiKey: string): Promise<
     const detail = body?.error?.message ?? body?.message ?? `HTTP ${res.status}`;
     if (res.status === 400 && provider === 'gemini' && detail.includes('API key')) return 'Invalid API key';
     if (res.status === 401 || res.status === 403) return `Invalid API key (${res.status})`;
+    // A retired or misspelled model is not a key problem, and saying so saves
+    // the next person the hour it cost us to find out.
+    if (res.status === 404) return `Model "${probeModel}" not available on ${provider} — set LLM_MODEL to one it still serves`;
     // 400 on Gemini with a real key can mean model/quota issues — treat as valid key
     if (res.status === 400) return null;
     return `${provider} API error: ${detail}`;

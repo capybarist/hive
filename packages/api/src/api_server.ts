@@ -970,7 +970,7 @@ if (HAS_EXTRACTOR && !resolvedObjective) {
 // ── LLM health tracking ───────────────────────────────────────────────────
 let llmHealthy: boolean | null = null;
 if (isLLMConfigured()) {
-  validateLLMKey(process.env.LLM_PROVIDER ?? 'gemini', process.env.LLM_API_KEY ?? '')
+  validateLLMKey(process.env.LLM_PROVIDER ?? 'gemini', process.env.LLM_API_KEY ?? '', process.env.LLM_MODEL || undefined)
     .then(err => { llmHealthy = err === null; })
     .catch(() => { llmHealthy = false; });
 }
@@ -1099,7 +1099,11 @@ app.post<{ Body: { provider: string; apiKey: string; model?: string } }>('/api/c
   if (!VALID.includes(provider)) return reply.code(400).send({ error: `Invalid provider. Valid: ${VALID.join(', ')}` });
   if (provider !== 'ollama' && !apiKey?.trim()) return reply.code(400).send({ error: 'apiKey is required' });
 
-  const validationError = await validateLLMKey(provider, provider === 'ollama' ? '' : apiKey.trim());
+  // Validate the model the caller is actually submitting, not a hardcoded one:
+  // otherwise a valid key plus a nonexistent model passes here and fails at the
+  // first real answer. `model` is passed explicitly because process.env.LLM_MODEL
+  // is only updated further down, after validation.
+  const validationError = await validateLLMKey(provider, provider === 'ollama' ? '' : apiKey.trim(), model?.trim() || undefined);
   if (validationError) return reply.code(400).send({ error: `Validation failed: ${validationError}` });
 
   process.env.LLM_PROVIDER = provider;
