@@ -63,3 +63,6 @@ packages/core/test-hypercore.cjs
 packages/core/test_watch.mjs
 
 runDocker.info
+# Credenciales locales — nunca a git
+.secrets/
+*.token

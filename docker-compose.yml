@@ -109,7 +109,17 @@ services:
       - HIVE_AUTOSTART=1
       # Advertised to peers via PeerMeta so they reach us in the docker network.
       - HIVE_API_URL=http://bee-1:8080
-      - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-30000}
+      # Scope is declared explicitly. drift-ok lets the forager follow links out
+      # of the declared scope indefinitely, which is fine for a workstation and
+      # fatal for a long-lived node: it is how the public demo filled a 75 GB
+      # disk twice (2026-06-09, 2026-09-02). exclusive + a named category keeps
+      # the corpus bounded. Override BEE1_* to change shape without editing this.
+      - HIVE_SOURCES=${BEE1_SOURCES:-wikipedia-en}
+      - HIVE_POLICY=${BEE1_POLICY:-exclusive}
+      - HIVE_SCOPE=${BEE1_SCOPE:-}
+      # 10 min, not 30 s: a demo node needs to still be running next year more
+      # than it needs the corpus to grow fast.
+      - HIVE_EXTRACT_INTERVAL_MS=${HIVE_EXTRACT_INTERVAL_MS:-600000}
       - HIVE_EXTRACT_MAX_FRAGMENTS=${HIVE_EXTRACT_MAX_FRAGMENTS:-9}
       - HIVE_EXTRACT_BUDGET_MINUTES=${HIVE_EXTRACT_BUDGET_MINUTES:-20}
     # v0.8.13: no host port mapping — external access is HTTPS-only via Caddy
