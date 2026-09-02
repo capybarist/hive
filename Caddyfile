@@ -44,3 +44,8 @@ bee2.{$CADDY_HOST_IP}.sslip.io {
 http://:80 {
     redir https://queen.{$CADDY_HOST_IP}.sslip.io{uri} 308
 }
+
+# parlor — separate service sharing this box and this Caddy.
+parlor.{$CADDY_HOST_IP}.sslip.io {
+    reverse_proxy parlor:8787
+}

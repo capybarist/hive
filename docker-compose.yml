@@ -86,6 +86,10 @@ services:
   bee-1:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-1
+    # 1g each: the box has 3.7 GB and the queen needs 2 for compaction. Without
+    # this the kernel picks the victim, and oom_score_adj below only orders the
+    # candidates — it does not bound them.
+    mem_limit: 1g
     restart: unless-stopped
     # OOM survival ordering on the 3.7 GB box: the queen's periodic LanceDB
     # compaction briefly spikes RAM; under global memory pressure the kernel
@@ -138,6 +142,10 @@ services:
   bee-2:
     image: ghcr.io/capybarist/hive:latest
     container_name: hive-bee-2
+    # 1g each: the box has 3.7 GB and the queen needs 2 for compaction. Without
+    # this the kernel picks the victim, and oom_score_adj below only orders the
+    # candidates — it does not bound them.
+    mem_limit: 1g
     restart: unless-stopped
     # Sacrificed before the queen under memory pressure — see bee-1 note.
     oom_score_adj: 500
