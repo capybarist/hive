@@ -9,6 +9,7 @@ import { embedPassage, embedQuery } from './embedder.js';
 import { LanceVectorIndex } from './lance_index.js';
 import { EMBEDDING_DIM } from './schema.js';
 import type { IndexRecord } from './vector_index.js';
+import { Bm25, rrf, stem, tokenize } from './lexical.js';
 
 const DIR = './data/v08-test';
 if (existsSync(DIR)) rmSync(DIR, { recursive: true, force: true });
@@ -84,7 +85,35 @@ ok(arxivOnly.every((h) => h.source_type === 'arxiv') && arxivOnly.length === 1, 
 
 const byNode = await idx.countByNode(['node_test', 'nope']);
 ok(byNode.node_test === 4 && byNode.nope === 0, 'countByNode correct');
+
+// Hybrid retrieval: the lexical stage must find word matches e5 may rank low,
+// honour the same filters, and see writes made after it was built.
+const lex = await idx.lexicalSearch('glucose chemical energy', qPhoto, 2);
+ok(lex[0]?.id === 'photo', `lexical: word overlap finds photosynthesis (got ${lex[0]?.id})`);
+ok(lex.every((h) => h.score > -1 && h.score <= 1), 'lexical hits carry a cosine score');
+ok((await idx.lexicalSearch('glucose', qPhoto, 4, { source_type: 'arxiv' })).length === 0, 'lexical: filters apply');
+ok((await idx.lexicalSearch('quokka', qPhoto, 4)).length === 0, 'lexical: no shared term → no hits');
+const quokka = 'The quokka is a small macropod found on Rottnest Island.';
+const qv = await embedPassage(quokka);
+await idx.upsertBatch([{ ...records[0]!, id: 'quokka', text: quokka, vector: Array.from(decodeVector(encodeVector(qv), EMBEDDING_DIM)), content_hash: contentHash(quokka) }]);
+ok((await idx.lexicalSearch('quokka', qPhoto, 4))[0]?.id === 'quokka', 'lexical: rebuilt after a write');
 await idx.close();
+
+console.log('\n[5] lexical stage (BM25 + RRF)');
+{
+  ok(stem('labelled') === stem('labels') && stem('labels') === 'label', `stem: labelled/labels → label (${stem('labelled')})`);
+  ok(stem('processes') === stem('processed'), 'stem: processes ≡ processed');
+  ok(tokenize('The right TO object').join(' ') === 'right object', 'tokenize: lowercase + stopwords');
+  const bm = new Bm25([
+    { id: 'a', text: 'credit score of natural persons' },
+    { id: 'b', text: 'natural persons and their personal data' },
+    { id: 'c', text: 'the weather in London' },
+  ]);
+  const r = bm.search('credit scoring of persons', 3).map((x) => x.id);
+  ok(r[0] === 'a' && !r.includes('c'), `bm25: best overlap first, no-overlap excluded (${r.join(',')})`);
+  const f = [...rrf([['x', 'y'], ['y', 'z']])].sort((p, q) => q[1] - p[1]).map(([id]) => id);
+  ok(f[0] === 'y' && f.length === 3, `rrf: an id in both lists wins (${f.join(',')})`);
+}
 
 console.log(`\n[result] ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

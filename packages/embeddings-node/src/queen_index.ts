@@ -13,6 +13,7 @@ import type { IndexRecord, SearchFilters, SearchHit, VectorIndex } from './vecto
 import { LanceVectorIndex } from './lance_index.js';
 import { isRelevant, meaningfulTokens } from './retrieval_gate.js';
 import { rerankerEnabled, rerankPool, rerankScores } from './reranker.js';
+import { hybridEnabled, lexicalK, rrf } from './lexical.js';
 
 export interface QueenSearchHit extends SearchHit { relevant: boolean; }
 
@@ -127,7 +128,7 @@ export class QueenIndex {
   /** Query: embed (queen-side, the ONE place the queen embeds), search,
    *  cross-encoder re-rank the candidates (precision stage over e5's recall),
    *  apply the recalibrated relevance gate per hit, derive has_hive_data. */
-  async query(question: string, k = 8, filters?: SearchFilters): Promise<QueenQueryResult> {
+  async query(question: string, k = 8, filters?: SearchFilters, opts: { pool?: number } = {}): Promise<QueenQueryResult> {
     // Before embedding: a bad filter is the caller's error and costs nothing.
     for (const key of Object.keys(filters?.meta ?? {})) {
       if (!this.metaColumns.includes(key)) {
@@ -141,7 +142,24 @@ export class QueenIndex {
     // jointly and restores the ordering. Reranking is a precision booster, not
     // a hard dependency: any failure falls back to e5's cosine order.
     const useRerank = rerankerEnabled();
-    let hits = await this.idx.search(qVec, useRerank ? rerankPool(k) : k, filters);
+    // The pool is what the cross-encoder scores, so it IS the latency: a
+    // caller that only needs a few candidates (a per-filter top-up) can ask
+    // for a smaller one. Never below k, never above the configured pool.
+    const pool = useRerank ? Math.max(k, Math.min(rerankPool(k), opts.pool ?? Infinity)) : k;
+    let hits = await this.idx.search(qVec, pool, filters);
+    if (hybridEnabled() && this.idx.lexicalSearch) {
+      // Hybrid: word-overlap candidates fused with the vector ones by rank
+      // (RRF), cut back to the SAME pool — the reranker scores as many pairs
+      // as before, so latency is unchanged; only who gets a seat changes.
+      try {
+        const lexical = await this.idx.lexicalSearch(question, qVec, Math.min(lexicalK(), pool), filters);
+        const fused = rrf([hits.map((h) => h.id), lexical.map((h) => h.id)]);
+        const byId = new Map([...lexical, ...hits].map((h) => [h.id, h]));
+        hits = [...fused].sort((a, b) => b[1] - a[1]).slice(0, pool).map(([id]) => byId.get(id)!);
+      } catch (err) {
+        console.warn(`[hybrid] falling back to vector-only candidates: ${(err as Error).message}`);
+      }
+    }
     if (useRerank && hits.length > 1) {
       try {
         const rel = await rerankScores(question, hits.map((h) => `${h.title ? `${h.title}. ` : ''}${h.text}`));

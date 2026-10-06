@@ -6,6 +6,7 @@
 import * as lancedb from '@lancedb/lancedb';
 import type { IndexRecord, SearchFilters, SearchHit, VectorIndex } from './vector_index.js';
 import { EMBEDDING_DIM } from './schema.js';
+import { Bm25 } from './lexical.js';
 
 const TABLE = 'fragments';
 
@@ -27,6 +28,31 @@ function whereClause(f?: SearchFilters): string | null {
     parts.push(`meta_${key} IN (${values.map((v) => `'${escapeSql(v)}'`).join(', ')})`);
   }
   return parts.length ? parts.join(' AND ') : null;
+}
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i]! * b[i]!; na += a[i]! * a[i]!; nb += b[i]! * b[i]!; }
+  return na && nb ? dot / Math.sqrt(na * nb) : 0;
+}
+
+function toHit(r: Record<string, any>, score: number): SearchHit {
+  let meta: Record<string, unknown> | undefined;
+  if (typeof r.meta === 'string' && r.meta.length > 0) {
+    try { meta = JSON.parse(r.meta); } catch { /* opaque to core — return nothing */ }
+  }
+  return {
+    id: r.id as string,
+    score,
+    text: r.text as string,
+    title: (r.title as string) ?? '',
+    url: (r.url as string) ?? '',
+    source: (r.source as string) ?? '',
+    source_type: (r.source_type as string) ?? '',
+    lang: (r.lang as string) ?? '',
+    node_id: (r.node_id as string) ?? '',
+    ...(meta ? { meta } : {}),
+  };
 }
 
 export class LanceVectorIndex implements VectorIndex {
@@ -101,6 +127,7 @@ export class LanceVectorIndex implements VectorIndex {
       await this.table.add(data);
     }
     for (const r of fresh) this.known.set(r.id, r.content_hash);
+    this.invalidateLexical();
     return fresh.length;
   }
 
@@ -126,6 +153,7 @@ export class LanceVectorIndex implements VectorIndex {
           .execute(data);
       }
       for (const r of changed) this.known.set(r.id, r.content_hash);
+      this.invalidateLexical();
     }
     return { upserted: changed.length, unchanged };
   }
@@ -138,24 +166,61 @@ export class LanceVectorIndex implements VectorIndex {
     const where = whereClause(filters);
     if (where) q = q.where(where);
     const rows = (await q.toArray()) as Record<string, any>[];
-    return rows.map((r: Record<string, any>) => {
-      let meta: Record<string, unknown> | undefined;
-      if (typeof r.meta === 'string' && r.meta.length > 0) {
-        try { meta = JSON.parse(r.meta); } catch { /* opaque to core — return nothing */ }
+    return rows.map((r) => toHit(r, 1 - (r._distance as number)));   // cosine distance → similarity
+  }
+
+  /** BM25 over title + text, built on first use and dropped on every write. */
+  private lexical: Bm25 | null = null;
+  private lexicalBuilding: Promise<Bm25> | null = null;
+
+  private async lexicalIndex(): Promise<Bm25 | null> {
+    if (!this.table) return null;
+    if (this.lexical) return this.lexical;
+    if (!this.lexicalBuilding) {
+      const table = this.table;
+      this.lexicalBuilding = (async () => {
+        const t0 = Date.now();
+        const rows = await table.query().select(['id', 'title', 'text']).toArray();
+        const bm = new Bm25(rows.map((r) => ({ id: String(r.id), text: `${r.title ?? ''} ${r.text ?? ''}` })));
+        console.log(`[lexical] BM25 over ${bm.size} fragments built in ${Date.now() - t0} ms`);
+        return bm;
+      })();
+    }
+    const building = this.lexicalBuilding;
+    const bm = await building;
+    // A write may have invalidated it while it was building: serve this query
+    // with it, but let the next one rebuild.
+    if (this.lexicalBuilding === building) this.lexical = bm;
+    return bm;
+  }
+
+  private invalidateLexical(): void {
+    this.lexical = null;
+    this.lexicalBuilding = null;
+  }
+
+  async lexicalSearch(query: string, vector: number[], k: number, filters?: SearchFilters): Promise<SearchHit[]> {
+    const bm = await this.lexicalIndex();
+    if (!bm || !this.table) return [];
+    const where = whereClause(filters);
+    // BM25 ranks the whole corpus; the filters are applied by LanceDB on the
+    // best candidates. Widen until k survive the filter (or candidates run out).
+    for (let take = Math.max(k * 5, 100); ; take *= 4) {
+      const ranked = bm.search(query, take);
+      if (ranked.length === 0) return [];
+      const idList = ranked.map((r) => `'${escapeSql(r.id)}'`).join(', ');
+      const rows = (await this.table.query()
+        .where(`id IN (${idList})${where ? ` AND (${where})` : ''}`)
+        .limit(ranked.length)
+        .toArray()) as Record<string, any>[];
+      if (rows.length >= k || ranked.length < take) {
+        const order = new Map(ranked.map((r, i) => [r.id, i]));
+        return rows
+          .sort((a, b) => order.get(a.id)! - order.get(b.id)!)
+          .slice(0, k)
+          .map((r) => toHit(r, cosine(vector, Array.from(r.vector as ArrayLike<number>))));
       }
-      return {
-        id: r.id as string,
-        score: 1 - (r._distance as number),   // cosine distance → similarity
-        text: r.text as string,
-        title: (r.title as string) ?? '',
-        url: (r.url as string) ?? '',
-        source: (r.source as string) ?? '',
-        source_type: (r.source_type as string) ?? '',
-        lang: (r.lang as string) ?? '',
-        node_id: (r.node_id as string) ?? '',
-        ...(meta ? { meta } : {}),
-      };
-    });
+    }
   }
 
   async count(): Promise<number> {

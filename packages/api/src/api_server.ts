@@ -603,15 +603,18 @@ app.get('/api/public-bootstrap', async () => ({
 // Queen/hive only. The queen embeds the QUESTION (the one place the queen
 // embeds in v0.8), searches LanceDB, applies the recalibrated retrieval gate,
 // and hands the hits to the LLM grounded-verdict pass.
-if (HAS_QUERY_API && queenIndex) app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown> } }>(
+if (HAS_QUERY_API && queenIndex) app.post<{ Body: { question: string; top_k?: number; use_llm?: boolean; history?: Array<{role: string; content: string}>; filters?: Record<string, unknown>; rerank_pool?: number } }>(
   '/api/query',
   async (req, reply) => {
-    const { question, top_k = 8, use_llm = true, history = [], filters } = req.body;
+    const { question, top_k = 8, use_llm = true, history = [], filters, rerank_pool } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
     let result;
     try {
-      result = await queenIndex.query(question, top_k, filters as any);
+      // rerank_pool: a SMALLER candidate pool for this query (capped by
+      // HIVE_RERANK_POOL) — the cross-encoder's cost is per candidate.
+      const pool = Number.isFinite(rerank_pool) && rerank_pool! > 0 ? Math.floor(rerank_pool!) : undefined;
+      result = await queenIndex.query(question, top_k, filters as any, { pool });
     } catch (err) {
       if (err instanceof QueryFilterError) return reply.code(400).send({ error: err.message });
       throw err;

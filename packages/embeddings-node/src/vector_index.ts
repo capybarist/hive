@@ -63,6 +63,11 @@ export interface VectorIndex {
    *  a no-op by construction (the direct-mode idempotency invariant). */
   mergeUpsertBatch(records: IndexRecord[]): Promise<{ upserted: number; unchanged: number }>;
   search(vector: number[], k: number, filters?: SearchFilters): Promise<SearchHit[]>;
+  /** Hybrid retrieval (HIVE_HYBRID): the k best WORD-OVERLAP matches for the
+   *  query under the same filters, each scored by cosine against `vector` so
+   *  the hit is shaped like a vector hit. Optional: a backend without it makes
+   *  the queen fall back to vector-only retrieval. */
+  lexicalSearch?(query: string, vector: number[], k: number, filters?: SearchFilters): Promise<SearchHit[]>;
   has(id: string): boolean;
   count(): Promise<number>;
   countByNode(nodeIds: string[]): Promise<Record<string, number>>;
