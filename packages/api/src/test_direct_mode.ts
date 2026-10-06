@@ -121,6 +121,15 @@ async function main(): Promise<void> {
     const a = chunkDocument(sections); const b = chunkDocument(sections);
     ok(JSON.stringify(a) === JSON.stringify(b), 'chunkDocument is deterministic (same input → same chunks/ids)');
 
+    // layout-v2: the chunker splits text, it never edits it. layout-v1 split at
+    // every period and re-joined with spaces, storing "4.6." as "4. 6.".
+    const legal = '4.6.The decision of the notified body (OJ L 265, 21.9.2022, p. 1). It shall apply. Point 3.2 applies?Yes.';
+    const one = chunkDocument([{ heading_path: [], text: legal }]);
+    ok(one.length === 1 && one[0]!.text === legal, `short unit stored byte-identical (got ${JSON.stringify(one[0]?.text)})`);
+    const long = Array.from({ length: 60 }, (_, i) => `Point ${i}.${i + 1}. applies from 1.${i % 12 + 1}.2026 onwards.`).join(' ');
+    const many = chunkDocument([{ heading_path: [], text: long }]);
+    ok(many.length > 1 && many.every((c) => long.includes(c.text)), `every chunk of a split unit is a verbatim substring (${many.length} chunks)`);
+
     const f1 = buildFragment(beeIdentity, 'doc-x_c0', 'hello world', { anchor: 'a1' });
     const f2 = buildFragment(beeIdentity, 'doc-x_c0', 'hello world', { anchor: 'a1' });
     ok(f1.id === f2.id && f1.content_hash === f2.content_hash, 'same source unit → same id + content_hash (idempotency invariant)');
@@ -265,6 +274,21 @@ async function main(): Promise<void> {
     ok(await t.countRows(`meta_celex = ''`) === 1, 'fragments without that meta key carry the empty default');
     const row = (await t.query().where(`meta_article = '6'`).select(['id', 'meta']).toArray())[0]!;
     ok(row.id === 'law-1' && String(row.meta).includes('"anchor":"x"'), 'full meta JSON still stored verbatim alongside the promoted columns');
+
+    // v1.4: meta filters apply INSIDE the vector search, before the top-k cut.
+    const vi = new LanceVectorIndex(dir);
+    await vi.ready();
+    const probe = Array.from(fakeEmbed('No meta at all.'));
+    const narrowed = await vi.search(probe, 1, { meta: { article: ['7'] } });
+    ok(narrowed.length === 1 && narrowed[0]!.id === 'law-2', `meta filter narrows before top-k — k=1 still finds the only match (got ${narrowed.map((h) => h.id)})`);
+    const multi = await vi.search(probe, 5, { meta: { article: ['6', '7'] } });
+    ok(multi.length === 2 && multi.every((h) => h.id !== 'law-3'), 'list value → IN (...) over the promoted column');
+    let unknownKey = '';
+    try { await qi.query('anything', 3, { meta: { act_name: 'GDPR' } }); } catch (e) { unknownKey = (e as Error).constructor.name; }
+    ok(unknownKey === 'QueryFilterError', `filtering on a non-promoted key is refused, not ignored (got ${unknownKey || 'no error'})`);
+    let injected = '';
+    try { await vi.search(probe, 1, { meta: { "article = '6' OR 1": 'x' } }); } catch (e) { injected = (e as Error).message; }
+    ok(injected.includes('invalid meta filter key'), 'a meta key that is not a plain identifier never reaches the SQL clause');
   }
 
   // ── 4. Outage behavior: circuit breaker + bounded buffer ────────────────

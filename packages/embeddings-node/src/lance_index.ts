@@ -18,6 +18,14 @@ function whereClause(f?: SearchFilters): string | null {
   if (f.source_type) parts.push(`source_type = '${escapeSql(f.source_type)}'`);
   if (f.node_id) parts.push(`node_id = '${escapeSql(f.node_id)}'`);
   if (f.status) parts.push(`status = '${escapeSql(f.status)}'`);
+  for (const [key, raw] of Object.entries(f.meta ?? {})) {
+    // Column names cannot be bound as values — the key is the one part of the
+    // clause that is not escaped, so it must be a plain identifier.
+    if (!/^[a-z0-9_]+$/.test(key)) throw new Error(`invalid meta filter key '${key}'`);
+    const values = (Array.isArray(raw) ? raw : [raw]).map(String);
+    if (values.length === 0) continue;
+    parts.push(`meta_${key} IN (${values.map((v) => `'${escapeSql(v)}'`).join(', ')})`);
+  }
   return parts.length ? parts.join(' AND ') : null;
 }
 

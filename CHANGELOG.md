@@ -3,6 +3,40 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.0 — Verbatim chunking, meta filters and rerank scores on /api/query
+
+Includes v1.3.2 below, which was never published on its own.
+
+**Chunker `layout-v2` — the chunker no longer edits text.** `layout-v1` split
+sentences at every `.`/`!`/`?` whether or not whitespace followed, then re-joined
+the pieces with spaces. Any unit that went through it gained spaces that were
+never in the source: a numbered point `4.6.` was stored as `4. 6.`, an OJ
+reference `21.9.2022` as `21. 9. 2022`. A sentence now ends only at punctuation
+FOLLOWED by whitespace, and only that whitespace is consumed, so the chunks of a
+unit are exact substrings of its (NFC + collapsed-whitespace) text and a unit
+that fits in one chunk is stored byte-identical. `CHUNKER_VERSION` is now
+`layout-v2`: content hashes of affected units change, so bees re-emit them on
+their next sweep. Bees corroborate only within the same chunker version.
+
+**`/api/query` `filters.meta`** — exact match on promoted meta columns
+(`HIVE_META_COLUMNS`), keyed by the bare meta key, a value or a list:
+
+```json
+{ "question": "deadline to notify an incident", "use_llm": false, "top_k": 8,
+  "filters": { "meta": { "act_name": ["GDPR", "NIS2", "DORA"] } } }
+```
+
+The filter applies inside the vector search, BEFORE the top-k cut, so a narrow
+filter fills k instead of being starved by the global ranking (filtering the
+results afterwards returned nothing for a small source). A key that is not a
+promoted column answers **400** — it is refused, never silently ignored.
+
+**`rerank_score` on each fragment** when the reranker ordered the results
+(`HIVE_RERANK=on`). The results are sorted by it, while `score` stays the e5
+cosine — so a caller can now see the number that actually produced the order,
+and gate relevance on it rather than on a cosine that compresses on a
+homogeneous corpus.
+
 ## v1.3.2 — Reranker: fixed-shape batches (stop ONNX arena memory growth)
 
 v1.3.1 bounded the reranker's PEAK memory but not its cumulative growth: it still

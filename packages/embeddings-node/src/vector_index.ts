@@ -35,6 +35,9 @@ export interface SearchHit {
   node_id: string;
   /** Parsed FragmentV08.meta, when the fragment carried one. */
   meta?: Record<string, unknown>;
+  /** v1.4 — cross-encoder relevance logit when the reranker ordered this hit
+   *  (HIVE_RERANK=on). Results are sorted by it, NOT by `score`. */
+  rerank_score?: number;
 }
 
 export interface SearchFilters {
@@ -42,6 +45,12 @@ export interface SearchFilters {
   source_type?: string;
   node_id?: string;
   status?: string;
+  /** v1.4 — exact match on PROMOTED meta columns (HIVE_META_COLUMNS), keyed by
+   *  the bare meta key: `{ act_name: ['GDPR', 'NIS2'] }` → `meta_act_name IN
+   *  (...)`. Applied before the top-k cut, so a narrow filter still fills k
+   *  instead of being starved by the global ranking. Only keys the queen
+   *  promotes are accepted (QueenIndex validates). */
+  meta?: Record<string, string | string[]>;
 }
 
 export interface VectorIndex {

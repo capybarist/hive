@@ -9,7 +9,7 @@
 export const EMBEDDING_MODEL = 'intfloat/multilingual-e5-base';
 export const EMBEDDING_DIM = 768;
 export const SCHEMA_VERSION = 2;            // 1 = legacy v0.7
-export const CHUNKER_VERSION = 'layout-v1';
+export const CHUNKER_VERSION = 'layout-v2';
 
 export type FragmentStatus = 'current' | 'superseded' | 'historical';
 

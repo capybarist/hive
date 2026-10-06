@@ -14,6 +14,8 @@ export interface RetrievedFragment {
   lang: string;
   node_id: string;
   score: number;
+  /** Cross-encoder logit when the queen reranked (v1.4); the order follows it. */
+  rerank_score?: number;
   relevant: boolean;
 }
 

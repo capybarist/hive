@@ -13,7 +13,7 @@ export const SCHEMA_VERSION = 2; // 1 = legacy v0.7
 
 /** Deterministic chunker version — two bees on the same chunker_version + input
  *  produce identical chunks → identical content_hash → corroboration works. */
-export const CHUNKER_VERSION = 'layout-v1';
+export const CHUNKER_VERSION = 'layout-v2';
 
 export type FragmentStatus = 'current' | 'superseded' | 'historical';
 

@@ -15,6 +15,10 @@ import { isRelevant, meaningfulTokens } from './retrieval_gate.js';
 import { rerankerEnabled, rerankPool, rerankScores } from './reranker.js';
 
 export interface QueenSearchHit extends SearchHit { relevant: boolean; }
+
+/** A caller-supplied filter the index cannot honour — a client error (400),
+ *  never silently dropped: ignoring it would answer outside the asked scope. */
+export class QueryFilterError extends Error {}
 export interface QueenQueryResult { hits: QueenSearchHit[]; has_hive_data: boolean; }
 
 export class QueenIndex {
@@ -124,6 +128,12 @@ export class QueenIndex {
    *  cross-encoder re-rank the candidates (precision stage over e5's recall),
    *  apply the recalibrated relevance gate per hit, derive has_hive_data. */
   async query(question: string, k = 8, filters?: SearchFilters): Promise<QueenQueryResult> {
+    // Before embedding: a bad filter is the caller's error and costs nothing.
+    for (const key of Object.keys(filters?.meta ?? {})) {
+      if (!this.metaColumns.includes(key)) {
+        throw new QueryFilterError(`meta filter '${key}' is not a promoted column (HIVE_META_COLUMNS: ${this.metaColumns.join(', ') || 'none'})`);
+      }
+    }
     const qVec = Array.from(await embedQuery(question));
     // Over-fetch a candidate pool, then let the cross-encoder pick the true
     // top-k. e5's cosine compresses on homogeneous corpora, so the answering
@@ -135,8 +145,10 @@ export class QueenIndex {
     if (useRerank && hits.length > 1) {
       try {
         const rel = await rerankScores(question, hits.map((h) => `${h.title ? `${h.title}. ` : ''}${h.text}`));
+        // The logit travels with the hit: callers that need a relevance gate
+        // can only judge the order they receive by the score that produced it.
         hits = hits.map((h, i) => ({ h, r: rel[i] ?? -Infinity }))
-          .sort((a, b) => b.r - a.r).map((x) => x.h);
+          .sort((a, b) => b.r - a.r).map((x) => ({ ...x.h, rerank_score: x.r }));
       } catch (err) {
         console.warn(`[rerank] falling back to e5 cosine order: ${(err as Error).message}`);
       }

@@ -13,7 +13,7 @@ import {
   type FragmentV08,
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
-import { QueenIndex, rerankerEnabled, warmupReranker } from '@hive/embeddings-node';
+import { QueenIndex, QueryFilterError, rerankerEnabled, warmupReranker } from '@hive/embeddings-node';
 import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers, DirectTransport } from '@hive/agent';
 import { registerIngestRoute, parseTrustedBees } from './ingest.js';
 
@@ -609,7 +609,14 @@ if (HAS_QUERY_API && queenIndex) app.post<{ Body: { question: string; top_k?: nu
     const { question, top_k = 8, use_llm = true, history = [], filters } = req.body;
     if (!question?.trim()) return reply.code(400).send({ error: 'question required' });
 
-    const { hits, has_hive_data } = await queenIndex.query(question, top_k, filters as any);
+    let result;
+    try {
+      result = await queenIndex.query(question, top_k, filters as any);
+    } catch (err) {
+      if (err instanceof QueryFilterError) return reply.code(400).send({ error: err.message });
+      throw err;
+    }
+    const { hits, has_hive_data } = result;
     const fragments: RetrievedFragment[] = hits.map(h => ({
       id: h.id,
       text: h.text,
@@ -620,6 +627,7 @@ if (HAS_QUERY_API && queenIndex) app.post<{ Body: { question: string; top_k?: nu
       lang: h.lang,
       node_id: h.node_id,
       score: h.score,
+      ...(h.rerank_score !== undefined ? { rerank_score: h.rerank_score } : {}),
       relevant: h.relevant,
     }));
 

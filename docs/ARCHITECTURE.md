@@ -57,6 +57,12 @@ client ── POST /api/query ────────────────�
 client ◀──────── { answer, fragments, has_hive_data } ─────────────────┘
 ```
 
+`/api/query` accepts `filters` — `lang`, `source_type`, `node_id`, `status`,
+and (v1.4) `meta: { <promoted key>: value | [values] }` over the
+`HIVE_META_COLUMNS` columns, applied before the top-K cut. With
+`HIVE_RERANK=on` each fragment also carries `rerank_score`, the cross-encoder
+logit the results are ordered by (`score` remains the e5 cosine).
+
 The shift from v0.7: **the queen never embeds passages.** Its per-fragment cost
 is an upsert, not a transformer forward pass, so one queen can aggregate
 hundreds of bees. Model migration becomes a distributed, rolling operation

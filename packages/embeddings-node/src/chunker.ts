@@ -14,11 +14,16 @@ const OVERLAP_SENTENCES = 1; // carry the last sentence into the next chunk for 
 
 // Deterministic sentence split: end punctuation (.!?) + closing quote/paren,
 // followed by whitespace. Keeps the delimiter with the sentence.
+//
+// The whitespace is REQUIRED, and only whitespace is consumed: joining the
+// result with ' ' rebuilds the normalised input exactly, so the chunker never
+// edits text. layout-v1 split at every period, whitespace or not, and the join
+// then inserted spaces that were never in the source — "4.6." was stored as
+// "4. 6." and "21.9.2022" as "21. 9. 2022", in fragments sold as verbatim.
 function splitSentences(text: string): string[] {
   const norm = text.normalize('NFC').replace(/\s+/g, ' ').trim();
   if (!norm) return [];
-  const parts = norm.match(/[^.!?]+(?:[.!?]+["')\]]*|\s*$)/g);
-  return (parts ?? [norm]).map((s) => s.trim()).filter(Boolean);
+  return norm.split(/(?<=[.!?]["')\]]*) /);
 }
 
 /** Chunk one section's text deterministically. */
