@@ -14,15 +14,32 @@
 # changes.
 #
 # Public access points:
-#   https://queen.{$CADDY_HOST_IP}.sslip.io  → queen:8090
+#   https://hive.capybaralabs.tech           → queen:8090   (canonical)
+#   https://bee1.hive.capybaralabs.tech      → bee-1:8080
+#   https://bee2.hive.capybaralabs.tech      → bee-2:8081
+#   https://queen.{$CADDY_HOST_IP}.sslip.io  → queen:8090   (kept for old links)
 #   https://bee1.{$CADDY_HOST_IP}.sslip.io   → bee-1:8080
 #   https://bee2.{$CADDY_HOST_IP}.sslip.io   → bee-2:8081
+#
+# The capybaralabs.tech names are A records at Hostinger pointing to this box.
 #
 # Bare-IP HTTP requests (http://<ip>/) redirect to the HTTPS queen so old
 # bookmarks and dashboards keep working.
 
 {
     email caddy@capybaralabs.tech
+}
+
+hive.capybaralabs.tech {
+    reverse_proxy queen:8090
+}
+
+bee1.hive.capybaralabs.tech {
+    reverse_proxy bee-1:8080
+}
+
+bee2.hive.capybaralabs.tech {
+    reverse_proxy bee-2:8081
 }
 
 queen.{$CADDY_HOST_IP}.sslip.io {
@@ -48,4 +65,14 @@ http://:80 {
 # parlor — separate service sharing this box and this Caddy.
 parlor.{$CADDY_HOST_IP}.sslip.io {
     reverse_proxy parlor:8787
+}
+
+# Reagent Lab API + MCP — separate compose project (capybarist/reagentlab) whose
+# api container joins this Caddy's network as `reagentlab-api`. SSE and MCP
+# need unbuffered responses.
+api.reagentlab.capybaralabs.tech {
+    encode zstd gzip
+    reverse_proxy reagentlab-api:3000 {
+        flush_interval -1
+    }
 }
