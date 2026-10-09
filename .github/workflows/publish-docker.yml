@@ -102,50 +102,21 @@ jobs:
     # Only auto-deploy on push to main, not on workflow_dispatch or releases.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Install SSH key
-        uses: shimataro/ssh-key-action@v2
-        with:
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          known_hosts: unnecessary
-          if_key_exists: replace
-
-      - name: Add server to known_hosts
-        run: ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Sync repo + pull image + recreate stack on server
-        # /opt/hive is a git checkout of the main branch. The CI must run
-        # `git pull` BEFORE `docker compose up -d` so that compose-level
-        # changes (service rename, env vars, profiles, Caddyfile, scripts)
-        # ship together with the image. `--ff-only` refuses to overwrite
-        # local diverging changes — if the server has drifted, the deploy
-        # fails loudly instead of silently. To clean up, SSH and reset
-        # manually, then re-run the workflow.
-        #
-        # `docker image prune -f` is run AFTER the pull (so the new image
-        # has tagged the previous `:latest` as dangling first). Each HIVE
-        # image is ~1-2 GB on disk (post-v0.7.2 slim pass; was ~10 GB
-        # before). Without pruning, every deploy leaves the previous
-        # `:latest` as a dangling layer pile; nine of those filled the
-        # 75 GB Hetzner disk during the v0.7.1 deploy.
-        #
-        # We use `-f` (dangling only), NOT `-af`. `-a` would also remove
-        # tagged-but-unused images like `ollama/ollama:latest` when the
-        # ollama profile is off — annoying to re-pull. Dangling-only is
-        # the right tradeoff: it catches our HIVE image cycle (where each
-        # deploy untags the prior `:latest`) without touching opt-in
-        # images that may legitimately sit idle between profile toggles.
+      - name: deploy-app on the box
+        # Standard Capybara Labs deploy (capybara-infra/README.md). The CI key can
+        # only run `deploy-app <name>`; on the box that is capy-deploy, which does
+        # `git pull --ff-only` in /opt/hive (fails loudly if the box has drifted),
+        # `docker compose pull`, `up -d --remove-orphans` and prunes dangling images
+        # (each HIVE image is 1-2 GB; unpruned ones once filled the 75 GB disk).
+        # The image is public, so no token is passed.
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} '
-            set -e
-            cd /opt/hive
-            git fetch origin main
-            git pull --ff-only origin main
-            docker compose pull
-            docker image prune -f
-            docker compose up -d --remove-orphans
-            sleep 5
-            docker compose ps
-          '
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -t ed25519 "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_deploy "root@$DEPLOY_HOST" deploy-app hive < /dev/null
 
       - name: Verify queen booted
         # /api/public-bootstrap is always public (not gated by the auth hook),
