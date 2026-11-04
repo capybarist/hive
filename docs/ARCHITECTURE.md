@@ -63,6 +63,14 @@ and (v1.4) `meta: { <promoted key>: value | [values] }` over the
 `HIVE_RERANK=on` each fragment also carries `rerank_score`, the cross-encoder
 logit the results are ordered by (`score` remains the e5 cosine).
 
+With `HIVE_CORROBORATION=on` (v1.5) the queen collapses identical texts (same
+`content_hash`) into one hit, the best-scoring copy, and each fragment carries
+`corroboration_count` (distinct bees that signed that text anywhere in the
+index) and `corroboration_score = score × ln(1 + corroboration_count)`, which
+the results are ordered by unless the reranker is also on (then the reranker's
+order wins and the count is informational). The candidate pool is
+`HIVE_CORROBORATION_POOL` (default 40, never below `top_k`).
+
 The shift from v0.7: **the queen never embeds passages.** Its per-fragment cost
 is an upsert, not a transformer forward pass, so one queen can aggregate
 hundreds of bees. Model migration becomes a distributed, rolling operation
@@ -113,8 +121,8 @@ Source-agnostic, signed over text + metadata + **vector**. Full definition in
 - `hash` covers the vector, so a bee cannot ship good text with a garbage
   vector deniably. Re-vectorizing = re-signing.
 
-Queen-side / derived (NOT in the fragment, NOT signed): `corroboration_count`,
-per-query `score`, `expires_at` (= `extracted_at` + `ttl_seconds`).
+Queen-side / derived (NOT in the fragment, NOT signed): `corroboration_count`
+(computed at query time, v1.5), per-query `score`, `expires_at` (= `extracted_at` + `ttl_seconds`).
 
 ---
 

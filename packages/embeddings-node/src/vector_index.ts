@@ -33,11 +33,20 @@ export interface SearchHit {
   source_type: string;
   lang: string;
   node_id: string;
+  /** SHA-256 of the normalized text (schema v2). Identical text from any bee
+   *  hashes identically — the key corroboration counts and dedupes on. */
+  content_hash?: string;
   /** Parsed FragmentV08.meta, when the fragment carried one. */
   meta?: Record<string, unknown>;
   /** v1.4 — cross-encoder relevance logit when the reranker ordered this hit
    *  (HIVE_RERANK=on). Results are sorted by it, NOT by `score`. */
   rerank_score?: number;
+  /** v1.5 — distinct bees (node_ids) that signed this exact text
+   *  (HIVE_CORROBORATION=on). */
+  corroboration_count?: number;
+  /** v1.5 — `score × ln(1 + corroboration_count)`, the order the results
+   *  follow when HIVE_CORROBORATION=on and the reranker is off. */
+  corroboration_score?: number;
 }
 
 export interface SearchFilters {
@@ -64,6 +73,10 @@ export interface VectorIndex {
   mergeUpsertBatch(records: IndexRecord[]): Promise<{ upserted: number; unchanged: number }>;
   search(vector: number[], k: number, filters?: SearchFilters): Promise<SearchHit[]>;
   has(id: string): boolean;
+  /** v1.5 — for each content_hash, how many DISTINCT node_ids signed it,
+   *  across the whole index (agreement is a property of the text, not of the
+   *  query's filters). Hashes absent from the index are absent from the map. */
+  corroborationCounts(hashes: string[]): Promise<Map<string, number>>;
   count(): Promise<number>;
   countByNode(nodeIds: string[]): Promise<Record<string, number>>;
   /** Compact small fragments and prune MVCC versions older than `keepMs`.

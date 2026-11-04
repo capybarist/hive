@@ -236,6 +236,9 @@ services:
       # set, the UI auto-loads it at page open — casual visitors don't see the
       # prompt. Use for public-facing demo queens; leave unset for private ones.
       - HIVE_PUBLIC_DEMO_TOKEN=${HIVE_PUBLIC_DEMO_TOKEN:-}
+      # v1.5: score-by-corroboration on /api/query (dedupe identical texts,
+      # rank by cos × ln(1 + distinct bees that signed them)). Off by default.
+      - HIVE_CORROBORATION=${HIVE_CORROBORATION:-off}
     # v0.8.13: HTTPS-only via Caddy (https://queen.${CADDY_HOST_IP}.sslip.io).
     # No host port mapping — the queen listens on 8090 inside the docker
     # network (Caddy proxies to queen:8090); plain http://<ip>:8090 is gone.

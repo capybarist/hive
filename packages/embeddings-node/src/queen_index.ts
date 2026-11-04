@@ -13,6 +13,7 @@ import type { IndexRecord, SearchFilters, SearchHit, VectorIndex } from './vecto
 import { LanceVectorIndex } from './lance_index.js';
 import { isRelevant, meaningfulTokens } from './retrieval_gate.js';
 import { rerankerEnabled, rerankPool, rerankScores } from './reranker.js';
+import { corroborationEnabled, corroborationPool, dedupeAndAnnotate, sortByCorroboration } from './corroboration.js';
 
 export interface QueenSearchHit extends SearchHit { relevant: boolean; }
 
@@ -125,6 +126,7 @@ export class QueenIndex {
   }
 
   /** Query: embed (queen-side, the ONE place the queen embeds), search,
+   *  optionally dedupe + boost by corroboration (HIVE_CORROBORATION),
    *  cross-encoder re-rank the candidates (precision stage over e5's recall),
    *  apply the recalibrated relevance gate per hit, derive has_hive_data. */
   async query(question: string, k = 8, filters?: SearchFilters): Promise<QueenQueryResult> {
@@ -141,7 +143,25 @@ export class QueenIndex {
     // jointly and restores the ordering. Reranking is a precision booster, not
     // a hard dependency: any failure falls back to e5's cosine order.
     const useRerank = rerankerEnabled();
-    let hits = await this.idx.search(qVec, useRerank ? rerankPool(k) : k, filters);
+    const useCorroboration = corroborationEnabled();
+    const pool = Math.max(useRerank ? rerankPool(k) : k, useCorroboration ? corroborationPool(k) : k);
+    let hits = await this.idx.search(qVec, pool, filters);
+    // Corroboration (HIVE_CORROBORATION=on): collapse identical texts first —
+    // that also spares the reranker scoring the same passage twice — then
+    // annotate each survivor with how many distinct bees signed it.
+    if (useCorroboration && hits.length > 0) {
+      let counts = new Map<string, number>();
+      try {
+        counts = await this.idx.corroborationCounts(hits.map((h) => h.content_hash ?? ''));
+      } catch (err) {
+        console.warn(`[corroboration] count lookup failed, using in-pool signers only: ${(err as Error).message}`);
+      }
+      hits = dedupeAndAnnotate(hits, counts);
+      // With the reranker on, its order wins: a cross-encoder logit can be
+      // negative, so multiplying it by ln(1+n) would invert the boost. The
+      // count still travels with each hit for the caller to weigh.
+      if (!useRerank) hits = sortByCorroboration(hits);
+    }
     if (useRerank && hits.length > 1) {
       try {
         const rel = await rerankScores(question, hits.map((h) => `${h.title ? `${h.title}. ` : ''}${h.text}`));
@@ -152,8 +172,8 @@ export class QueenIndex {
       } catch (err) {
         console.warn(`[rerank] falling back to e5 cosine order: ${(err as Error).message}`);
       }
-      hits = hits.slice(0, k);
     }
+    hits = hits.slice(0, k);
     const tokens = meaningfulTokens(question);
     const marked: QueenSearchHit[] = hits.map((h) => ({
       ...h,
