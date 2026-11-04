@@ -152,7 +152,17 @@ export class RssSource implements ForagerSource {
     if (!res.ok) throw new Error(`RSS HTTP ${res.status} for ${url}`);
     const xml = await res.text();
 
-    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+      // fast-xml-parser counts every standard-entity replacement against a
+      // 1000-expansion budget. Real feeds (e.g. The Guardian) exceed it with
+      // ordinary &lt;/&gt;/&quot; escapes in HTML-laden descriptions, which
+      // made the whole cycle return zero items. Keep the expansion guard,
+      // but give it a budget that fits a normal feed; maxExpandedLength
+      // still caps the decoded payload.
+      processEntities: { enabled: true, maxTotalExpansions: 10_000 },
+    });
     const parsed = parser.parse(xml);
     // RSS 2.0 lives under rss.channel; Atom under feed. Both modelled.
     const channel = parsed?.rss?.channel ?? parsed?.feed ?? {};
