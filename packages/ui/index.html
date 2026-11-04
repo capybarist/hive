@@ -224,6 +224,15 @@
     .welcome-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #312e81 0%, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
     .welcome-sub { font-size: 14px; color: var(--muted); max-width: 380px; line-height: 1.6; }
     .welcome-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px; }
+    /* Live network line under the welcome card: makes it obvious the node is
+       alive (fragment count, bees, last indexed) before anyone types a query. */
+    .welcome-live { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+    .welcome-live:empty { display: none; }
+    .welcome-live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green, #10b981); box-shadow: 0 0 6px var(--green, #10b981); }
+    /* Public-demo visitors (holding only the query-only demo token) don't get
+       the operator controls: Settings and the LLM config modal. */
+    body.visitor .settings-nav-btn { display: none; }
+    body.visitor .llm-config-btn { pointer-events: none; }
     .chip {
       background: var(--surface); border: 1px solid var(--border); color: var(--muted);
       border-radius: 20px; padding: 7px 16px; font-size: 12px; cursor: pointer;
@@ -778,6 +787,7 @@
         <button class="chip" onclick="fillQuestion('Vector databases and semantic search')">Vector search</button>
         <button class="chip" onclick="fillQuestion('LLM alignment and safety research')">AI safety</button>
       </div>
+      <p class="welcome-live" id="welcome-live"></p>
     </div>
 
     <!-- Bee dashboard — producer node, no query UI. Populated by loadCrawl() + loadActivity(). -->
@@ -1138,18 +1148,35 @@ function setHiveToken(t) {
 // authenticated call goes out. Private queens leave the field null and the
 // prompt() path below handles things.
 let _bootstrapPromise = null;
+let PUBLIC_DEMO_TOKEN = null;
 function ensureBootstrap() {
   if (_bootstrapPromise) return _bootstrapPromise;
   _bootstrapPromise = (async () => {
-    if (getHiveToken()) return;
     try {
       const r = await fetch(`${API}/api/public-bootstrap`);
       if (!r.ok) return;
       const boot = await r.json();
-      if (boot?.demoToken && !getHiveToken()) setHiveToken(boot.demoToken);
+      PUBLIC_DEMO_TOKEN = boot?.demoToken ?? null;
+      if (PUBLIC_DEMO_TOKEN && !getHiveToken()) setHiveToken(PUBLIC_DEMO_TOKEN);
     } catch { /* offline or older queen — fall through to prompt */ }
   })();
   return _bootstrapPromise;
+}
+// A visitor is someone whose only credential is the public, query-only demo
+// token. Operators open the UI with ?hive_token=<admin key> (or paste it on the
+// first 401) and get Settings back.
+function isVisitor() {
+  return !!PUBLIC_DEMO_TOKEN && getHiveToken() === PUBLIC_DEMO_TOKEN;
+}
+function timeAgo(iso) {
+  if (!iso) return null;
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} days ago`;
 }
 
 async function apiFetch(input, init = {}) {
@@ -1159,6 +1186,17 @@ async function apiFetch(input, init = {}) {
   if (token) headers.set('Authorization', `Bearer ${token}`);
   const res = await fetch(input, { ...init, headers });
   if (res.status !== 401) return res;
+
+  // A stale token (e.g. the queen rotated its keys since this browser last
+  // visited): if the queen publishes a demo token, fall back to it silently
+  // before bothering the visitor with a prompt.
+  if (PUBLIC_DEMO_TOKEN && token !== PUBLIC_DEMO_TOKEN) {
+    setHiveToken(PUBLIC_DEMO_TOKEN);
+    const h = new Headers(init.headers || {});
+    h.set('Authorization', `Bearer ${PUBLIC_DEMO_TOKEN}`);
+    const retry = await fetch(input, { ...init, headers: h });
+    if (retry.status !== 401) return retry;
+  }
 
   // Auth failed — prompt for token and retry once.
   const entered = window.prompt(
@@ -1307,12 +1345,26 @@ async function checkStatus() {
 
     const dot = document.getElementById('status-dot');
     const txt = document.getElementById('status-text');
-    if (d.embedder_online) { dot.classList.add('on'); txt.textContent = `${d.indexed} indexed`; }
+    if (d.embedder_online) { dot.classList.add('on'); txt.textContent = `${(d.indexed ?? 0).toLocaleString()} indexed`; }
     else { dot.classList.remove('on'); txt.textContent = 'embedder offline'; }
 
     const pc = d.peers ?? 0;
     document.getElementById('peer-text').textContent = `${pc} peer${pc !== 1 ? 's' : ''}`;
     document.getElementById('peer-dot').className = 'dot' + (pc > 0 ? ' peer' : '');
+
+    // Liveness line on the welcome card (queen/hive): total, peers and when the
+    // index last grew. Hidden until the queen reports a count.
+    const live = document.getElementById('welcome-live');
+    if (live && d.indexed > 0) {
+      const ago = timeAgo(d.last_indexed_at);
+      const parts = [
+        `${d.indexed.toLocaleString()} signed fragments`,
+        `${pc} peer${pc !== 1 ? 's' : ''} connected`,
+      ];
+      if (ago) parts.push(`last indexed ${ago}`);
+      live.innerHTML = `<span class="live-dot"></span><span>${parts.join(' · ')}</span>`;
+    }
+    document.body.classList.toggle('visitor', isVisitor());
 
     // Topbar mode badge — visible on queen/aggregator (consumer node makes its role explicit).
     // Bee + hive run without it: bee shows its identity in the welcome card; hive is "the default".

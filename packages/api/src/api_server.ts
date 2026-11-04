@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import staticPlugin from '@fastify/static';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { createHmac } from 'node:crypto';
 import { synthesize, type RetrievedFragment } from './llm_client.js';
 import {
   KnowledgeStore, loadOrCreateIdentity, HiveP2PNode, ClaimRegistry, PeerRegistry,
@@ -257,6 +258,16 @@ if (queenIndex) {
   }
 }
 
+// Liveness signal for dashboards: when this queen last added new fragments to
+// its index, and how many it has added since boot. Public via /api/status and
+// /api/stats so the node UI (and the capybaralabs.tech landing) can show "last
+// fragment indexed N min ago" instead of a static total.
+let lastIndexedAt: number | null = null;
+let indexedSinceBoot = 0;
+function noteIndexed(added: number): void {
+  if (added > 0) { lastIndexedAt = Date.now(); indexedSinceBoot += added; }
+}
+
 // Helper: upsert a batch of v0.8 fragments into the queen's index, supplying
 // pubkeys from the registry so QueenIndex.verifyFragmentV08 has what it needs.
 async function indexFragmentsIntoQueen(batch: FragmentV08[]): Promise<void> {
@@ -268,6 +279,7 @@ async function indexFragmentsIntoQueen(batch: FragmentV08[]): Promise<void> {
   }
   try {
     const res = await queenIndex.upsertFragments(batch, { pubkeyByNode });
+    noteIndexed(res.added);
     if (res.skipped > 0) console.log(`[queen] upsert: +${res.added} added, ${res.skipped} skipped (drop counters: ${JSON.stringify(queenIndex.stats().dropped)})`);
   } catch (e: any) {
     console.warn(`[queen] upsertFragments failed: ${e?.message ?? e}`);
@@ -520,7 +532,19 @@ const HIVE_API_KEY = process.env.HIVE_API_KEY?.trim() || null;
 // Optional: an operator can publish a "demo token" that the UI auto-loads at
 // page open, so casual visitors don't see a prompt for the query box. Leaving
 // it unset means the UI falls back to the manual prompt on the first 401.
-const HIVE_PUBLIC_DEMO_TOKEN = process.env.HIVE_PUBLIC_DEMO_TOKEN?.trim() || null;
+//
+// The demo token is QUERY-ONLY: it opens POST /api/query and nothing else.
+// It must never equal the admin key, because /api/public-bootstrap hands it to
+// anyone. Before v1.4.1 the wizard and POST /api/auth-key wrote the admin key
+// into HIVE_PUBLIC_DEMO_TOKEN, which published the admin key on every public
+// queen that enabled the demo. If we still find them equal, derive a distinct
+// demo token from the key instead (stable across restarts, useless as admin).
+const RAW_DEMO_TOKEN = process.env.HIVE_PUBLIC_DEMO_TOKEN?.trim() || null;
+const DEMO_TOKEN_WAS_ADMIN_KEY = !!RAW_DEMO_TOKEN && RAW_DEMO_TOKEN === HIVE_API_KEY;
+const HIVE_PUBLIC_DEMO_TOKEN = DEMO_TOKEN_WAS_ADMIN_KEY
+  ? createHmac('sha256', HIVE_API_KEY!).update('hive-public-demo-token-v1').digest('hex').slice(0, 32)
+  : RAW_DEMO_TOKEN;
+const DEMO_TOKEN_PREFIXES = ['/api/query'];
 const PROTECTED_PREFIXES = ['/api/query', '/api/config', '/api/claims', '/api/manifest', '/api/topics-config', '/api/restart', '/api/auth-key'];
 
 if (HIVE_API_KEY) {
@@ -530,13 +554,21 @@ if (HIVE_API_KEY) {
     const path = req.url.split('?')[0];
     const isProtected = PROTECTED_PREFIXES.some(p => path === p || path.startsWith(p + '/'));
     if (!isProtected) return;                        // public: status/stats/UI/etc.
-    if (req.headers.authorization !== expected) {
+    if (req.headers.authorization === expected) return;
+    const demoAllowed = HIVE_PUBLIC_DEMO_TOKEN && !queenHasPrivateTopics()
+      && req.headers.authorization === `Bearer ${HIVE_PUBLIC_DEMO_TOKEN}`
+      && DEMO_TOKEN_PREFIXES.some(p => path === p || path.startsWith(p + '/'));
+    if (!demoAllowed) {
       reply.code(401).send({ error: 'unauthorized', hint: 'Send Authorization: Bearer <HIVE_API_KEY>' });
     }
   });
   console.log(`   API auth ✓ (Bearer required on: ${PROTECTED_PREFIXES.join(', ')})`);
   if (HIVE_PUBLIC_DEMO_TOKEN && !queenHasPrivateTopics()) {
-    console.log(`   Public demo-token ✓ (UI auto-prefills the query box via /api/public-bootstrap)`);
+    console.log(`   Public demo-token ✓ (query-only; UI auto-loads it via /api/public-bootstrap)`);
+  }
+  if (DEMO_TOKEN_WAS_ADMIN_KEY) {
+    console.warn('   ⚠ HIVE_PUBLIC_DEMO_TOKEN was set to the admin key (HIVE_API_KEY). Using a derived query-only demo token instead.');
+    console.warn('     If this queen was public, that admin key has been exposed: rotate HIVE_API_KEY.');
   }
 } else {
   console.log(`   API auth ✗ (open — set HIVE_API_KEY to enable)`);
@@ -580,7 +612,7 @@ if (INGEST_ENABLED) {
     if (trustedBees.size === 0) {
       console.warn('[ingest] HIVE_TRUSTED_BEES is empty — every ingest batch will be rejected with 403 until bees are allowlisted.');
     }
-    registerIngestRoute(app, queenIndex, { token: ingestToken, trustedBees });
+    registerIngestRoute(app, queenIndex, { token: ingestToken, trustedBees, onUpserted: noteIndexed });
     console.log(`   Direct ingest ✓ (POST /internal/ingest, ${trustedBees.size} trusted bee(s))`);
   }
 }
@@ -590,8 +622,8 @@ await app.register(staticPlugin, { root: UI_DIR, prefix: '/' });
 // Public bootstrap — what the UI needs BEFORE it can authenticate. Public by
 // default (not in PROTECTED_PREFIXES). Returns the queen version and, if the
 // operator opted in, the demo token for the query box. A bot can read this too
-// — the demo token is a soft gate, not a hard security boundary. Rotate
-// HIVE_API_KEY (and HIVE_PUBLIC_DEMO_TOKEN with it) to kick everyone off.
+// — the demo token is a soft gate that only opens POST /api/query (LLM spend),
+// never the admin endpoints. Rotate HIVE_PUBLIC_DEMO_TOKEN to kick visitors off.
 app.get('/api/public-bootstrap', async () => ({
   version: HIVE_VERSION,
   // Never hand a demo token to anonymous visitors when this queen holds private
@@ -767,6 +799,8 @@ app.get('/api/status', async () => {
     nodeIdShort: identity.nodeId.slice(0, 20),
     embedder_online: true,                   // in-process; either we booted or we didn't
     indexed,
+    last_indexed_at: lastIndexedAt ? new Date(lastIndexedAt).toISOString() : null,
+    indexed_since_boot: indexedSinceBoot,
     // v0.8.4 — bee/hive nodes also report how many fragments they've signed
     // locally (the Hypercore size; delivered-batch inventory in direct mode).
     // Distinct from `indexed` (LanceDB count on the queen) so a bee dashboard
@@ -921,6 +955,8 @@ app.get('/api/stats', async () => {
     fragments: indexed,
     bees: activeBees,
     topics: topicSet.size,
+    last_indexed_at: lastIndexedAt ? new Date(lastIndexedAt).toISOString() : null,
+    indexed_since_boot: indexedSinceBoot,
     // Legacy fields kept for backward compat.
     indexed,
     peers,
@@ -1278,7 +1314,6 @@ app.post<{ Body: { key?: string } }>('/api/auth-key', async (req, reply) => {
   let content = '';
   try { content = await fs.readFile(RUNTIME_ENV_PATH, 'utf8'); } catch { /* first write */ }
   content = upsertEnvLine(content, 'HIVE_API_KEY', newKey);
-  content = upsertEnvLine(content, 'HIVE_PUBLIC_DEMO_TOKEN', newKey);
   await fs.writeFile(RUNTIME_ENV_PATH, content, 'utf8');
   await fs.chmod(RUNTIME_ENV_PATH, 0o600).catch(() => {});
 

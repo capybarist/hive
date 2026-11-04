@@ -23,8 +23,22 @@ jobs:
       - name: Install workspace
         run: npm ci || npm install
 
+      # npm versions are immutable: if this version is already on the
+      # registry (e.g. a release created for a version published earlier),
+      # skip instead of failing the run.
+      - name: Check whether this version is already published
+        id: check
+        working-directory: packages/runtime
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "@capybaralabs/hive@$V" version >/dev/null 2>&1; then
+            echo "@capybaralabs/hive@$V is already on npm — skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # `npm publish` runs the package's prepublishOnly → esbuild bundle.
       - name: Publish @capybaralabs/hive
+        if: steps.check.outputs.skip != 'true'
         working-directory: packages/runtime
         run: npm publish --access public
         env:
