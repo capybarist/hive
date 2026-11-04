@@ -1,6 +1,6 @@
 # HIVE — Roadmap
 
-> Last revised: 2026-11-04, at v1.4.1.
+> Last revised: 2026-11-04, at v1.5.0.
 > Source of truth for "what's next". Update this file when items move between
 > sections. Per-version detail lives in [CHANGELOG](../CHANGELOG.md), which is
 > authoritative on what has shipped.
@@ -12,7 +12,7 @@ the **shape** of the work (what we'd actually build).
 
 ## 0. Where we are
 
-**v1.4.1.** A public demo queen runs at
+**v1.5.0.** A public demo queen runs at
 [hive.capybaralabs.tech](https://hive.capybaralabs.tech) (Hetzner, fed by
 bee-1 Wikipedia and bee-2 news RSS, ~242 k signed fragments). The first
 commercial product on HIVE, [Acquis](https://acquislaw.com), runs a closed,
@@ -32,6 +32,7 @@ Shipped since the previous revision of this file (2026-06-09):
 | v1.3.0–1.3.2 | 2026-06-24/28 | Optional cross-encoder **reranker** (`HIVE_RERANK`), bounded memory |
 | v1.4.0 | 2026-10-06 | Verbatim chunker `layout-v2`, `filters.meta` on `/api/query`, `rerank_score` |
 | v1.4.1 | 2026-11-04 | Query-only demo token (security), `last_indexed_at` liveness, releases from CHANGELOG |
+| v1.5.0 | 2026-11-04 | **Score-by-corroboration** (`HIVE_CORROBORATION`): dedupe identical texts, `corroboration_count`, `cos × ln(1 + n)` ranking |
 
 The three focus items agreed on 2026-06-09 all shipped: npm-loadable external
 connectors (plugin loader), the personal-memory connector v1, and a non-P2P
@@ -41,9 +42,11 @@ centralised mode (direct mode).
 
 ## 0b. Current focus (next 3)
 
-1. **Score-by-corroboration** (§3). `cos_sim × log(1 + corroboration_count)`
-   using the v0.8 `content_hash`. It's the feature that makes "many bees"
-   better than "one crawler", and the schema already supports it.
+1. **Make corroboration visible on the demo.** v1.5.0 ships the score behind
+   `HIVE_CORROBORATION`, but the demo's two bees (Wikipedia, RSS) never sign
+   the same text, so every count is 1. Point a second bee at an overlapping
+   scope and turn the flag on; the UI already marks a source chip with
+   "×N bees" when N > 1.
 2. **Demo that shows the network working.** The public queen is the project's
    shop window: keep it on the latest release, show live activity (done in
    v1.4.1: `last_indexed_at`), and add a swarm view (§4).
@@ -107,11 +110,10 @@ separate from the queen's (v0.9.5), MCP server + Claude Skill (v0.8.x).
 - **One-click self-host** — Umbrel / CasaOS / Pikapods package for a
   private queen with a guided LLM-key step. Adoption vector for
   non-engineers.
-- **Score-by-corroboration** — `cos_sim × log(1 + corroboration_count)`,
-  where `corroboration_count` = number of distinct bees that signed a
-  fragment with the same `content_hash`. Already enabled by the v0.8
-  schema; needs the count to actually be computed at query time. Lights up
-  once multi-bee is in real use.
+- ~~**Score-by-corroboration**~~ — shipped in v1.5.0 behind
+  `HIVE_CORROBORATION=on`. Next step: default it on once a public queen has
+  overlapping bees to validate the ranking on, and consider a scalar index on
+  `content_hash` if the count lookup (~70 ms over 250k rows) grows with the corpus.
 
 ---
 
@@ -160,7 +162,7 @@ Kept here as a graveyard so we don't accidentally bring them back.
 If the user asks "what should I do this week?":
 
 1. Keep the demo on the latest release (merge to `main` deploys it).
-2. Score-by-corroboration (§3).
+2. Overlapping bees on the demo so corroboration shows (§0b).
 3. arXiv cooldown so bee-2 can index papers again (§1).
 
 If the user asks "what would make this a product?":

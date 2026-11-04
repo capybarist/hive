@@ -16,6 +16,10 @@ export interface RetrievedFragment {
   score: number;
   /** Cross-encoder logit when the queen reranked (v1.4); the order follows it. */
   rerank_score?: number;
+  /** Distinct bees that signed this exact text (v1.5, HIVE_CORROBORATION=on). */
+  corroboration_count?: number;
+  /** score × ln(1 + corroboration_count); the order follows it unless reranked. */
+  corroboration_score?: number;
   relevant: boolean;
 }
 

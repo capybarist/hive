@@ -11,3 +11,4 @@ export { LanceVectorIndex } from './lance_index.js';
 export type { VectorIndex, IndexRecord, SearchHit, SearchFilters } from './vector_index.js';
 export { RELEVANT_SCORE, meaningfulTokens, meetsKeywordGate, isRelevant } from './retrieval_gate.js';
 export { rerankerEnabled, rerankPool, rerankScores, warmupReranker } from './reranker.js';
+export { corroborationEnabled, corroborationPool, corroborationScore } from './corroboration.js';

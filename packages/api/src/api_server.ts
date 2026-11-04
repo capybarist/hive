@@ -14,7 +14,7 @@ import {
   type FragmentV08,
 } from '@hive/core';
 import type { PeerMeta, BeeManifest, DeclaredSource, TopicCard } from '@hive/core';
-import { QueenIndex, QueryFilterError, rerankerEnabled, warmupReranker } from '@hive/embeddings-node';
+import { QueenIndex, QueryFilterError, rerankerEnabled, warmupReranker, corroborationEnabled } from '@hive/embeddings-node';
 import { runAutonomousExtraction, validAdapterIds, listDescriptors, loadExternalForagers, DirectTransport } from '@hive/agent';
 import { registerIngestRoute, parseTrustedBees } from './ingest.js';
 
@@ -256,6 +256,8 @@ if (queenIndex) {
       .then(() => console.log('   Reranker ready ✓ (HIVE_RERANK=on, cross-encoder precision stage)'))
       .catch((e: Error) => console.warn(`   Reranker warmup failed (queries fall back to e5 cosine): ${e.message}`));
   }
+  // Score-by-corroboration — OPT-IN via HIVE_CORROBORATION=on (v1.5).
+  if (corroborationEnabled()) console.log('   Corroboration ✓ (HIVE_CORROBORATION=on: dedupe identical texts, rank by cos × ln(1 + bees))');
 }
 
 // Liveness signal for dashboards: when this queen last added new fragments to
@@ -660,6 +662,7 @@ if (HAS_QUERY_API && queenIndex) app.post<{ Body: { question: string; top_k?: nu
       node_id: h.node_id,
       score: h.score,
       ...(h.rerank_score !== undefined ? { rerank_score: h.rerank_score } : {}),
+      ...(h.corroboration_count !== undefined ? { corroboration_count: h.corroboration_count, corroboration_score: h.corroboration_score } : {}),
       relevant: h.relevant,
     }));
 
@@ -810,6 +813,8 @@ app.get('/api/status', async () => {
     backend: queenIndex ? 'lancedb' : null,
     schema_version: SCHEMA_VERSION,
     chunker_version: CHUNKER_VERSION,
+    // v1.5 — /api/query dedupes identical texts and carries corroboration_count.
+    corroboration: !!queenIndex && corroborationEnabled(),
     llm_configured: isLLMConfigured(),
     llm_ok: llmHealthy,
     llm_provider: process.env.LLM_PROVIDER ?? 'gemini',

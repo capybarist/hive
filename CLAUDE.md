@@ -44,7 +44,7 @@ the obligation to update the docs.
 
 ---
 
-## Current state — v1.4.1 (v1.x on top of the v0.8 all-Node core)
+## Current state — v1.5.0 (v1.x on top of the v0.8 all-Node core)
 
 The **v0.8 architecture below is still the engine** (all-Node, producer-side
 vectorization, LanceDB, schema v2) — v0.9 layered productisation on top and v1.x
@@ -64,6 +64,11 @@ What v1.x added (all SHIPPED):
   `/api/query`, `rerank_score`.
 - **v1.4.1**: `HIVE_PUBLIC_DEMO_TOKEN` is query-only (never the admin key);
   `last_indexed_at` / `indexed_since_boot` on `/api/status` + `/api/stats`.
+- **v1.5.0**: score-by-corroboration (`HIVE_CORROBORATION=on`, off by default):
+  `/api/query` collapses identical texts (same `content_hash`) into one hit,
+  counts the distinct bees that signed it (`corroboration_count`) and ranks by
+  `cos × ln(1 + count)` (`corroboration_score`; `score` stays the raw cosine the
+  gate uses). With the reranker on, the reranker's order wins.
 
 Versioning: root and every `packages/*/package.json` carry the same version
 (`/api/status` reads the root one; npm publishes `packages/runtime`). Bump them
@@ -128,8 +133,6 @@ Key files:
 
 ### Open items
 See `docs/ROADMAP.md` §0b for the current focus. Long-standing ones:
-- **Score-by-corroboration**: `cos_sim × log(1 + corroboration_count)` using
-  the v0.8 `content_hash` corroboration signal.
 - **Fragment id hygiene**: the Wikipedia adapter leaks long heading text
   (incl. `_edit_`) into chunk ids — cosmetic, worth slugging tighter.
 - **Distributed model migration** (designed-in, not built): re-embed on bee

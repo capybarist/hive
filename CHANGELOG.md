@@ -3,6 +3,39 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.5.0 — Score-by-corroboration
+
+Several bees can sign the same text: with a shared `chunker_version`,
+identical chunks get the same `content_hash` (schema v2). Until now the queen
+ranked those copies by cosine only, so "several independent bees agree" was
+thrown away, and the copies crowded each other out of the top-k (#2).
+
+- **`HIVE_CORROBORATION=on`** (default **off**) turns it on in
+  `QueenIndex.query()`. Off, `/api/query` is unchanged.
+- **Dedupe:** hits with the same `content_hash` collapse into one result, the
+  copy with the best cosine.
+- **Count:** each fragment carries `corroboration_count`, the number of
+  distinct `node_id`s that signed that text anywhere in the index (not just in
+  the candidate pool, and regardless of the query's `filters`).
+- **Rank:** results are ordered by `corroboration_score = score × ln(1 +
+  corroboration_count)`. `score` stays the raw e5 cosine, because the
+  retrieval gate's `RELEVANT_SCORE` is calibrated on it.
+- **With the reranker on** (`HIVE_RERANK=on`), dedupe and counts still apply
+  (so the cross-encoder never scores the same passage twice), but the
+  reranker's order wins: its logit can be negative, and multiplying it would
+  invert the boost.
+- **`HIVE_CORROBORATION_POOL`** (default 40, never below `top_k`): how many
+  candidates are fetched before dedupe and re-scoring.
+- The `chunker_version` condition needs no extra filter: a `content_hash`
+  match is an identical normalized chunk, which is what sharing a chunker
+  version produces; bees on another chunker cut different boundaries and do
+  not match.
+- Cost: one filtered scan over `content_hash`/`node_id` for the pool's hashes,
+  about 70 ms on a 250k-row index. No extra memory, no schema change.
+- `/api/status` reports `corroboration: true|false`. The node UI marks a source
+  chip with "×N bees" when N > 1. `docker-compose.yml` passes
+  `HIVE_CORROBORATION` through to the queen (default `off`).
+
 ## v1.4.1 — Query-only demo token, liveness signals on the dashboard
 
 **Security: the public demo token no longer grants admin access.** A queen

@@ -153,9 +153,31 @@ export class LanceVectorIndex implements VectorIndex {
         source_type: (r.source_type as string) ?? '',
         lang: (r.lang as string) ?? '',
         node_id: (r.node_id as string) ?? '',
+        content_hash: (r.content_hash as string) ?? '',
         ...(meta ? { meta } : {}),
       };
     });
+  }
+
+  async corroborationCounts(hashes: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const uniq = [...new Set(hashes.filter(Boolean))];
+    if (!this.table || uniq.length === 0) return out;
+    // A filtered scan over two narrow columns, bounded by the candidate pool
+    // (≤ HIVE_CORROBORATION_POOL hashes). Explicit limit: a plain query has a
+    // default row cap in some LanceDB versions, and a popular boilerplate
+    // chunk can legitimately match many rows.
+    const where = `content_hash IN (${uniq.map((h) => `'${escapeSql(h)}'`).join(', ')})`;
+    const rows = await this.table.query().where(where).select(['content_hash', 'node_id']).limit(1_000_000).toArray();
+    const nodes = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const h = r.content_hash as string;
+      let set = nodes.get(h);
+      if (!set) nodes.set(h, (set = new Set()));
+      set.add((r.node_id as string) ?? '');
+    }
+    for (const [h, set] of nodes) out.set(h, set.size);
+    return out;
   }
 
   async count(): Promise<number> {
