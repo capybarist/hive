@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "extract": "npx tsx src/autonomous_extractor.ts"
+    "extract": "npx tsx src/autonomous_extractor.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@hive/core": "*",
