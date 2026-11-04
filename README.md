@@ -9,7 +9,13 @@ open web, **sign every fact** with ed25519, and sync it over Hypercore. LLMs
 query HIVE to get **up-to-date, source-traceable** answers — no central server,
 no black box.
 
-**[Manifesto](./MANIFESTO.md) · [Architecture](./docs/ARCHITECTURE.md) · [Changelog](./CHANGELOG.md)**
+[![npm](https://img.shields.io/npm/v/@capybaralabs/hive?label=npm&color=7c3aed)](https://www.npmjs.com/package/@capybaralabs/hive)
+[![release](https://img.shields.io/github/v/release/capybarist/hive?color=7c3aed)](https://github.com/capybarist/hive/releases)
+[![last commit](https://img.shields.io/github/last-commit/capybarist/hive)](https://github.com/capybarist/hive/commits/main)
+[![live demo](https://img.shields.io/website?url=https%3A%2F%2Fhive.capybaralabs.tech%2Fapi%2Fstatus&label=live%20demo&up_message=online&down_message=offline)](https://hive.capybaralabs.tech)
+[![license](https://img.shields.io/github/license/capybarist/hive)](./LICENSE)
+
+**[Try the live demo](https://hive.capybaralabs.tech) · [Manifesto](./MANIFESTO.md) · [Architecture](./docs/ARCHITECTURE.md) · [Roadmap](./docs/ROADMAP.md) · [Changelog](./CHANGELOG.md)**
 
 </div>
 
@@ -135,6 +141,19 @@ team-knowledge, codebase-context, journalism/OSINT and more) lives in
 **[docs/USE-CASES.md](./docs/USE-CASES.md)** — cite cases by stable ID.
 
 ---
+
+## Try it live
+
+A public queen runs at **[hive.capybaralabs.tech](https://hive.capybaralabs.tech)**,
+fed by two bees (Wikipedia and news RSS). Ask it a question in the browser, or
+point an MCP client at it with
+[`@capybaralabs/hive-mcp`](https://github.com/capybarist/hive-mcp). Its
+read-only endpoints are public, so you can see what it is doing:
+
+```bash
+curl https://hive.capybaralabs.tech/api/stats    # fragments, bees, topics, last_indexed_at
+curl https://hive.capybaralabs.tech/api/status   # version, mode, peers, model
+```
 
 ## Quick start
 

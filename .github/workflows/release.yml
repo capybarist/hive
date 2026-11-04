@@ -1,0 +1,74 @@
+name: GitHub Release from CHANGELOG
+
+# Creates a GitHub Release whose notes are the matching "## vX.Y.Z" section of
+# CHANGELOG.md, so the Releases page never falls behind what we ship.
+#
+# - On a pushed tag vX.Y.Z: releases that tag (normal path for new versions).
+# - Manual dispatch with `tag` (+ optional `target` commit): backfills a past
+#   version, creating the tag at `target` if it doesn't exist yet.
+#
+# Releases created with GITHUB_TOKEN do NOT trigger other workflows, so this
+# never re-runs publish-npm / publish-docker. Publish to npm deliberately by
+# running "Publish npm" (workflow_dispatch) after bumping the version.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v1.4.1'
+        required: true
+      target:
+        description: 'Commit SHA for a new tag (defaults to the dispatched ref)'
+        required: false
+      latest:
+        description: 'Mark as the latest release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Extract notes from CHANGELOG.md
+        id: notes
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          # Section starts at "## vVERSION " and ends before the next "## ".
+          awk -v v="$VERSION" '
+            index($0, "## v" v " ") == 1 || $0 == "## v" v { grab = 1; title = $0; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md > notes.md
+          TITLE=$(grep -m1 -E "^## v${VERSION//./\\.}( |$)" CHANGELOG.md | sed -E 's/^## v[0-9.]+ *(— *)?//')
+          if [ ! -s notes.md ]; then
+            echo "::error::No '## v${VERSION}' section in CHANGELOG.md"
+            exit 1
+          fi
+          echo "title=HIVE ${TAG}${TITLE:+ — $TITLE}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.notes.outputs.tag }}
+          TITLE: ${{ steps.notes.outputs.title }}
+          TARGET: ${{ inputs.target || github.sha }}
+          LATEST: ${{ github.event_name == 'push' || inputs.latest }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating its notes."
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md
+          else
+            gh release create "$TAG" --target "$TARGET" --title "$TITLE" \
+              --notes-file notes.md --latest="$LATEST"
+          fi

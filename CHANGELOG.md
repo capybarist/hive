@@ -3,6 +3,43 @@
 All notable changes to HIVE are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.1 — Query-only demo token, liveness signals on the dashboard
+
+**Security: the public demo token no longer grants admin access.** A queen
+that publishes `HIVE_PUBLIC_DEMO_TOKEN` hands it to every visitor through
+`/api/public-bootstrap`. Until now the only accepted bearer was `HIVE_API_KEY`,
+and both the `npx` wizard and `POST /api/auth-key` wrote the admin key into
+`HIVE_PUBLIC_DEMO_TOKEN`. On a public queen with the demo enabled, that published
+the admin key: anyone could call `/api/config`, `/api/manifest`,
+`/api/topics-config`, `/api/restart` or `/api/auth-key`.
+
+- The demo token is now **query-only**: it opens `POST /api/query` and nothing
+  else. Every other protected endpoint requires `HIVE_API_KEY`.
+- If `HIVE_PUBLIC_DEMO_TOKEN` equals `HIVE_API_KEY` (every node set up by the
+  wizard, or whose key was regenerated from Settings), the queen derives a
+  distinct demo token from the key at boot and logs a warning. Existing
+  deployments get the fix by upgrading, with no config change.
+- `POST /api/auth-key` no longer copies the new key into
+  `HIVE_PUBLIC_DEMO_TOKEN`.
+- **Operators of a public queen with the demo enabled: rotate `HIVE_API_KEY`**
+  after upgrading, since the old one was exposed.
+- The UI treats a browser holding only the demo token as a visitor: Settings
+  and the LLM config modal are hidden. Open the UI with `?hive_token=<admin key>`
+  to get them back. A stale stored token now falls back to the demo token
+  silently instead of prompting.
+
+**Liveness on `/api/status` and `/api/stats`.** New `last_indexed_at` (ISO
+time the queen last added fragments to its index, from replication or direct
+ingest; `null` until it does after boot) and `indexed_since_boot`. The queen
+welcome screen shows a live line: total signed fragments, peers, and "last
+indexed N min ago". The topbar count is now thousands-separated.
+
+**Versions and releases.** Root and workspace `package.json` files are now in
+step with the published npm package (they had stayed at 1.2.1 while npm
+moved to 1.4.0, so `/api/status` reported the wrong version). A new
+`release.yml` workflow creates GitHub Releases from this CHANGELOG, and
+`publish-npm.yml` skips versions that are already on the registry.
+
 ## v1.4.0 — Verbatim chunking, meta filters and rerank scores on /api/query
 
 Includes v1.3.2 below, which was never published on its own.

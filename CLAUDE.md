@@ -44,12 +44,36 @@ the obligation to update the docs.
 
 ---
 
-## Current state — v0.9.5 (productised on the v0.8 all-Node core)
+## Current state — v1.4.1 (v1.x on top of the v0.8 all-Node core)
 
 The **v0.8 architecture below is still the engine** (all-Node, producer-side
-vectorization, LanceDB, schema v2) — v0.9 layered productisation on top without
-changing it. Per-version detail in CHANGELOG; v0.8 cutover runbook in
-[`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
+vectorization, LanceDB, schema v2) — v0.9 layered productisation on top and v1.x
+added transport/retrieval features, without changing it. Per-version detail in
+CHANGELOG; what's next in [`docs/ROADMAP.md`](docs/ROADMAP.md); v0.8 cutover
+runbook in [`docs/V0.8-MIGRATION.md`](docs/V0.8-MIGRATION.md).
+
+What v1.x added (all SHIPPED):
+- **Direct mode** (v1.1): `HIVE_TRANSPORT=direct` bee → queen HTTP ingest
+  (`POST /internal/ingest`, allowlisted pubkeys), `HIVE_SWARM=off` closed queen.
+  Acquis (production) runs on it. See `docs/direct-mode.md`.
+- **Closed-product queen features** (v1.2): `HIVE_META_COLUMNS` promoted meta
+  columns, `embedText` contextualised embedding input.
+- **Reranker** (v1.3): optional cross-encoder (`HIVE_RERANK=on`), fixed-shape
+  batches to keep ONNX memory flat.
+- **v1.4**: chunker `layout-v2` (chunks are exact substrings), `filters.meta` on
+  `/api/query`, `rerank_score`.
+- **v1.4.1**: `HIVE_PUBLIC_DEMO_TOKEN` is query-only (never the admin key);
+  `last_indexed_at` / `indexed_since_boot` on `/api/status` + `/api/stats`.
+
+Versioning: root and every `packages/*/package.json` carry the same version
+(`/api/status` reads the root one; npm publishes `packages/runtime`). Bump them
+together, add the CHANGELOG section, then release: push tag `vX.Y.Z` (the
+`release.yml` workflow builds the GitHub Release from CHANGELOG) and run
+"Publish npm". Merging to `main` deploys the public demo.
+
+The public demo (https://hive.capybaralabs.tech) is a queen + bee-1 (Wikipedia)
++ bee-2 (RSS) on Hetzner; the capybaralabs.tech `/hive` landing reads its
+`/api/stats`, `/api/status` and `/api/crawl`.
 
 What v0.9 added on top of v0.8 (all SHIPPED):
 - **Distribution**: published to npm — `@capybaralabs/hive` (full node via
@@ -102,10 +126,8 @@ Key files:
   routes `/api/query` through it, pipes replicated + local cores into it.
 - `packages/agent/src/autonomous_extractor.ts`: chunk → embed → sign → save.
 
-### Open items (post-v0.8)
-- **Topic-tree cleanup**: `loadTree()` / `topic_tree.json` are still the
-  fallback when no manifest is published. BeeManifest `declared_sources` is the
-  replacement; finish removing the topic-tree path.
+### Open items
+See `docs/ROADMAP.md` §0b for the current focus. Long-standing ones:
 - **Score-by-corroboration**: `cos_sim × log(1 + corroboration_count)` using
   the v0.8 `content_hash` corroboration signal.
 - **Fragment id hygiene**: the Wikipedia adapter leaks long heading text

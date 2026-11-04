@@ -28,6 +28,8 @@ export interface IngestConfig {
   token: string;
   /** bee_id → ed25519 pubkey hex (the HIVE_TRUSTED_BEES allowlist). */
   trustedBees: Map<string, string>;
+  /** Called with the number of fragments upserted by each accepted batch. */
+  onUpserted?: (upserted: number) => void;
 }
 
 /** Parse HIVE_TRUSTED_BEES (`<bee_id>:<pubkey>[,...]`) into the allowlist. */
@@ -96,6 +98,7 @@ export function registerIngestRoute(app: FastifyInstance, queenIndex: QueenIndex
         return reply.code(400).send({ rejected: res.rejected, reason: res.reason });
       }
       // 5.
+      cfg.onUpserted?.(res.upserted);
       if (res.upserted > 0) console.log(`[ingest] bee_id=${bee_id} +${res.upserted} upserted, ${res.unchanged} unchanged`);
       return { upserted: res.upserted, unchanged: res.unchanged };
     } catch (e: any) {
