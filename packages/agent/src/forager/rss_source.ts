@@ -152,7 +152,13 @@ export class RssSource implements ForagerSource {
     if (!res.ok) throw new Error(`RSS HTTP ${res.status} for ${url}`);
     const xml = await res.text();
 
-    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+    // Entity decoding is handled by decodeHtmlEntities below; disabling the
+    // parser's expansion limit keeps feeds with many entities parseable.
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+      processEntities: false,
+    });
     const parsed = parser.parse(xml);
     // RSS 2.0 lives under rss.channel; Atom under feed. Both modelled.
     const channel = parsed?.rss?.channel ?? parsed?.feed ?? {};
