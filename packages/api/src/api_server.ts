@@ -211,7 +211,9 @@ try {
       const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
       if (!m) continue;
       const [, key, value] = m;
-      if (!/^LLM_/.test(key)) continue;     // only LLM_* — anything else stays under host control
+      if (!/^LLM_/.test(key) && key !== 'HIVE_API_KEY') continue;
+      // Explicit host environment values retain precedence over the runtime file.
+      if (key in process.env) continue;
       process.env[key] = value;
       applied++;
     }
