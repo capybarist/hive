@@ -303,7 +303,10 @@ export class WikipediaSource implements ForagerSource {
       const sectionHtml = h2Split[i + 1]!;
       const sectionMeta = topLevel[i];
       if (!sectionMeta) continue;
-      const sTitle = clean(sectionMeta.line ?? '');
+      const sTitle = clean(sectionMeta.line ?? '')
+        .replace(/\s*\[edit\]\s*/gi, ' ')
+        .replace(/^main article:\s*/i, '')
+        .trim();
       if (!sTitle || SKIP_SECTIONS.has(sTitle.toLowerCase())) continue;
       const sSlug = slugify(sTitle);
 
